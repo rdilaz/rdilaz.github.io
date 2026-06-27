@@ -17,7 +17,7 @@ export default function Home() {
           </li>
           <li>
             Spam Shredder - A client-side Chrome extension. 
-            (<Link to="/spam-shredder/privacy" style={{ color: '#646cff' }}>Privacy Policy</Link>)
+            (<a href="/SpamShredder/privacy.html" style={{ color: '#646cff' }}>Privacy Policy</a>)
           </li>
         </ul>
       </div>
