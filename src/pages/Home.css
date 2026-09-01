@@ -1,0 +1,146 @@
+.home-shell {
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: clamp(2.5rem, 7vw, 5rem) clamp(1.25rem, 4vw, 2.5rem) 4rem;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.home-intro {
+  max-width: 720px;
+}
+
+.home-intro h1 {
+  margin-top: 0;
+  margin-bottom: 0.35rem;
+}
+
+.home-role {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.1rem, 2.4vw, 1.35rem);
+  font-weight: 400;
+}
+
+.home-section {
+  margin-top: clamp(2.75rem, 7vw, 4.5rem);
+}
+
+.home-section h3 {
+  margin: 0 0 1rem;
+  color: var(--text-h);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.projects-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.projects-list li {
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+  line-height: 1.55;
+}
+
+.projects-list a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.experiment-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at 82% 18%, var(--accent-bg), transparent 28rem),
+    var(--bg);
+}
+
+.experiment-card__intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 2rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
+}
+
+.experiment-kicker {
+  display: block;
+  margin-bottom: 0.55rem;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.experiment-card h4 {
+  margin: 0;
+  color: var(--text-h);
+  font-size: clamp(1.45rem, 3.4vw, 2.2rem);
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+
+.experiment-description {
+  max-width: 620px;
+  margin: 0.7rem 0 0;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.experiment-toggle {
+  min-height: 46px;
+  padding: 0.72rem 1rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--text-h);
+  font: 650 0.82rem/1 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.experiment-toggle:hover {
+  border-color: var(--accent);
+}
+
+.experiment-toggle:active {
+  transform: translateY(1px);
+}
+
+.experiment-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.experiment-panel {
+  padding: 0 clamp(0.75rem, 2.5vw, 1.25rem) clamp(0.75rem, 2.5vw, 1.25rem);
+}
+
+@media (max-width: 720px) {
+  .experiment-card__intro {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 1.25rem;
+  }
+
+  .experiment-toggle {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .experiment-toggle {
+    transition: none;
+  }
+}
