@@ -8,6 +8,7 @@
     <title>AI Visualizer — See what AI thinks music looks like</title>
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./spend.css" />
+    <link rel="stylesheet" href="./model-guide.css" />
   </head>
   <body>
     <main class="app" id="app">
@@ -38,18 +39,34 @@
         </nav>
       </section>
     </main>
+
     <aside class="drawer" id="modelDrawer" aria-hidden="true" aria-label="Choose a model">
-      <div class="drawer__head"><div><span class="eyebrow">MODELS</span><h2>Choose a mind.</h2><p>Every model gets the same senses and the same blank canvas.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
+      <div class="drawer__head"><div><span class="eyebrow">MODELS</span><h2>Choose a mind.</h2><p>You do not need to understand the whole catalog. Start with one good choice and see what happens.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="connection-card" id="connectionCard"><div><strong id="connectionTitle">Connect OpenRouter</strong><p id="connectionCopy">Authorize a session-only key to dream with hundreds of models.</p></div><button class="pill-button" id="connectOpenRouterButton" type="button">Connect</button></div>
-      <label class="search-box"><span class="sr-only">Search models</span><input id="modelSearch" type="search" placeholder="Search every model…" autocomplete="off" /></label>
-      <div class="model-list" id="modelList" role="listbox" aria-label="Available models"></div>
+
+      <section class="model-guide" aria-labelledby="model-guide-heading">
+        <div class="model-guide__hero">
+          <div><span class="eyebrow">START HERE</span><h3 id="model-guide-heading">Four easy choices.</h3><p>These update automatically from the live catalog. Pick a vibe, not a spreadsheet.</p></div>
+          <button class="model-guide__surprise" id="modelSurpriseButton" type="button">Surprise me ✦</button>
+        </div>
+        <div class="model-guide__grid" id="modelGuidePicks" aria-live="polite"><p class="model-guide__loading">Finding good options…</p></div>
+        <details class="model-guide__why"><summary>Why these picks?</summary><p id="modelGuideWhy">Using current model capability, visual/coding benchmark signals and price.</p></details>
+        <button class="model-guide__browse" id="browseAllModels" type="button" aria-expanded="false">Browse every model <span id="modelGuideCount"></span></button>
+      </section>
+
+      <div class="all-models-panel" id="allModelsPanel">
+        <label class="search-box"><span class="sr-only">Search models</span><input id="modelSearch" type="search" placeholder="Search every model…" autocomplete="off" /></label>
+        <div class="model-list" id="modelList" role="listbox" aria-label="Available models"></div>
+      </div>
     </aside>
+
     <aside class="drawer" id="libraryDrawer" aria-hidden="true" aria-label="Visualizer library">
       <div class="drawer__head"><div><span class="eyebrow">LIBRARY</span><h2>Your favorite dreams.</h2><p>Every successful generation is kept on this device. Heart the ones worth coming back to.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="library-actions"><button class="pill-button" id="battleButton" type="button">⚔ Battle</button><button class="text-button" id="favoritesOnlyButton" type="button" aria-pressed="false">Favorites only</button></div>
       <section class="battle" id="battlePanel" hidden aria-label="Visualizer battle"><div class="battle__head"><span class="eyebrow">BATTLE</span><button class="text-button" id="endBattleButton" type="button">End</button></div><p>Same music. Two dreams. Pick the one with more wow.</p><div class="battle__models"><button id="battleAButton" type="button"></button><span>vs</span><button id="battleBButton" type="button"></button></div><div class="battle__vote"><button class="pill-button" id="voteAButton" type="button">A wins</button><button class="pill-button" id="voteBButton" type="button">B wins</button></div></section>
       <div class="library-list" id="libraryList"></div>
     </aside>
+
     <aside class="drawer drawer--spend" id="spendDrawer" aria-hidden="true" aria-label="Spend protection">
       <div class="drawer__head"><div><span class="eyebrow">SPEND</span><h2>Know before you Dream.</h2><p>Estimates before generation, exact OpenRouter cost after, and caps that stop accidental runaway spend.</p></div><button class="drawer__close" id="closeSpendDrawer" type="button" aria-label="Close">×</button></div>
       <div class="spend-source"><span>Billing source</span><strong id="billingSource">Your OpenRouter credits</strong></div>
@@ -58,10 +75,7 @@
         <div class="spend-stat"><span>This session</span><strong id="sessionSpendSummary">$0.00 / $5.00</strong></div>
         <div class="spend-stat"><span>Today</span><strong id="dailySpendSummary">$0.00 / $10.00</strong></div>
       </div>
-      <section class="spend-panel">
-        <div class="spend-panel__head"><span>OpenRouter key</span><strong id="keyBudgetSummary">Not connected</strong></div>
-        <p id="keyBudgetCopy">Connect OpenRouter to read the key’s provider-enforced limit.</p>
-      </section>
+      <section class="spend-panel"><div class="spend-panel__head"><span>OpenRouter key</span><strong id="keyBudgetSummary">Not connected</strong></div><p id="keyBudgetCopy">Connect OpenRouter to read the key’s provider-enforced limit.</p></section>
       <section class="spend-panel current-cost">
         <h3 id="currentCostModel">Choose a model</h3>
         <span>Typical one-pass</span><strong id="currentCostTypical">—</strong>
@@ -78,10 +92,12 @@
       <section class="spend-panel"><div class="spend-panel__head"><span>Exact session ledger</span><strong>OpenRouter usage.cost</strong></div><div class="spend-ledger" id="spendLedger"></div></section>
       <p class="spend-note">App caps are enforced in this browser by reducing the model output-token ceiling or refusing the request. If OpenRouter reports a key limit above, that limit is provider-enforced and stronger. Account-wide balance is not exposed to this session key. <a href="https://openrouter.ai/activity" target="_blank" rel="noopener noreferrer">Open OpenRouter Activity ↗</a></p>
     </aside>
+
     <aside class="drawer drawer--about" id="aboutDrawer" aria-hidden="true" aria-label="About the visualizer">
       <div class="drawer__head"><div><span class="eyebrow">THE IDEA</span><h2>One blank canvas. Every model.</h2></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v1</code>. Runtime: <code>visualizer-audio-v1</code>. The host provides normalized loudness, six frequency bands, waveform, spectrum, transient/beat information, spectral motion, rough tempo, stereo features, pointer state, and viewport information.</p></details></div>
     </aside>
+
     <div class="drawer-scrim" id="drawerScrim" hidden></div>
     <div class="cost-confirm" id="costConfirmBackdrop" hidden>
       <section class="cost-confirm__card" role="dialog" aria-modal="true" aria-labelledby="costConfirmModel">
@@ -90,6 +106,7 @@
       </section>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
     <script>
       (() => {
         const surface = document.getElementById('uiRevealSurface');
@@ -105,5 +122,6 @@
     </script>
     <script src="./cost-guard.js"></script>
     <script type="module" src="./app.js"></script>
+    <script type="module" src="./model-guide.js"></script>
   </body>
 </html>
