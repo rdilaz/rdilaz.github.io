@@ -25,7 +25,8 @@
     preparing: { progress: 10, step: 0 },
     sent: { progress: 26, step: 1 },
     working: { progress: 38, step: 1 },
-    response: { progress: 62, step: 2 },
+    receiving: { progress: 54, step: 1 },
+    response: { progress: 66, step: 2 },
     repair: { progress: 54, step: 2 },
     checking: { progress: 78, step: 3 },
     opening: { progress: 92, step: 4 },
@@ -44,6 +45,7 @@
     tick: 0,
     userCancelled: false,
     timedOut: false,
+    bodyComplete: false,
   };
 
   function isCompletion(input) {
@@ -97,8 +99,12 @@
       const now = performance.now();
       const elapsed = now - state.startedAt;
       if (els.elapsed) els.elapsed.textContent = elapsedLabel(elapsed);
-      if (!['sent', 'working'].includes(state.phase)) return;
+      if (!['sent', 'working', 'receiving'].includes(state.phase)) return;
       const waiting = now - state.requestStartedAt;
+      if (state.phase === 'receiving') {
+        if (els.live) els.live.textContent = `Response stream open · ${elapsedLabel(waiting)} total request time`;
+        return;
+      }
       if (waiting >= 300000) {
         setPhase('working', {
           title: `${state.modelName} is very slow, but still connected`,
@@ -150,6 +156,7 @@
     state.controller = null;
     state.userCancelled = false;
     state.timedOut = false;
+    state.bodyComplete = false;
     if (els.connection) els.connection.textContent = 'OpenRouter connected';
     if (els.elapsed) els.elapsed.textContent = '0:00';
     setPhase('preparing', {
@@ -169,6 +176,7 @@
     state.controller = controller;
     state.userCancelled = false;
     state.timedOut = false;
+    state.bodyComplete = false;
     if (els.connection) els.connection.textContent = `OpenRouter connected · ${state.modelName}`;
     setPhase(repair ? 'repair' : 'sent', {
       title: repair ? `${state.modelName} is repairing its dream` : `${state.modelName} is generating the visualizer`,
@@ -178,13 +186,24 @@
     startClock();
   }
 
-  function responseStarted(response, repair) {
-    state.controller = null;
+  function responseHeaders(response, repair) {
     const status = response?.status ? `HTTP ${response.status}` : 'response';
+    setPhase('receiving', {
+      title: `${state.modelName} started responding`,
+      detail: repair ? 'OpenRouter started returning the repair. The full repaired visualizer is still arriving.' : 'OpenRouter started returning data. The full visualizer code has not been received yet.',
+      live: `OpenRouter response started ✓ · ${status} · receiving body`,
+    });
+  }
+
+  function responseBodyComplete(repair) {
+    if (state.bodyComplete) return;
+    state.bodyComplete = true;
+    clearRequestTimer();
+    state.controller = null;
     setPhase('response', {
-      title: `${state.modelName} responded`,
-      detail: repair ? 'Repair response arrived. Checking the repaired visualizer now.' : 'The model response arrived. Checking the returned visualizer before anything replaces your screen.',
-      live: `OpenRouter responded ✓ · ${status}`,
+      title: `${state.modelName} response received`,
+      detail: repair ? 'The full repair arrived. Checking the repaired visualizer now.' : 'The full model response arrived. Checking the returned visualizer before anything replaces your screen.',
+      live: 'OpenRouter responded ✓ · full response body received',
     });
     setTimeout(() => {
       if (state.active && state.phase === 'response') {
@@ -195,6 +214,37 @@
         });
       }
     }, 180);
+  }
+
+  function wrapResponseBody(response, repair) {
+    if (!response || response.__dreamBodyTracked) return response;
+    try { Object.defineProperty(response, '__dreamBodyTracked', { value: true }); } catch {}
+
+    for (const method of ['json', 'text', 'arrayBuffer', 'blob', 'formData']) {
+      const original = response[method]?.bind(response);
+      if (!original) continue;
+      try {
+        Object.defineProperty(response, method, {
+          configurable: true,
+          value: async (...args) => {
+            const value = await original(...args);
+            responseBodyComplete(repair);
+            return value;
+          },
+        });
+      } catch {}
+    }
+
+    const originalClone = response.clone?.bind(response);
+    if (originalClone) {
+      try {
+        Object.defineProperty(response, 'clone', {
+          configurable: true,
+          value: () => wrapResponseBody(originalClone(), repair),
+        });
+      } catch {}
+    }
+    return response;
   }
 
   function clearRequestTimer() {
@@ -283,9 +333,8 @@
 
     try {
       const response = await baseFetch(input, { ...init, signal: controller.signal });
-      clearRequestTimer();
-      responseStarted(response, repair);
-      return response;
+      responseHeaders(response, repair);
+      return wrapResponseBody(response, repair);
     } catch (error) {
       clearRequestTimer();
       state.controller = null;
