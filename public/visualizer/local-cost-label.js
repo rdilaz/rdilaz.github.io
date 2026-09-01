@@ -9,11 +9,11 @@
   const isWindows = navigator.userAgentData?.platform === 'Windows' || /Windows/i.test(navigator.userAgent || '');
 
   if (isWindows && labCommand) {
-    labCommand.textContent = '$b="$env:TEMP\\ai-visualizer-model-lab-bridge.mjs"; iwr https://ryo-nd.com/visualizer/model-lab-bridge.mjs -OutFile $b; node $b';
+    labCommand.textContent = '$l="$env:TEMP\\ai-visualizer-model-lab-launcher.mjs"; iwr https://ryo-nd.com/visualizer/model-lab-launcher.mjs -OutFile $l; node $l';
     const intro = labSetup?.querySelector('p');
-    if (intro) intro.textContent = 'Windows: start the Visualizer compatibility bridge below, then press Connect. Keep that PowerShell window open while using subscription models.';
+    if (intro) intro.textContent = 'Windows: run the self-checking Model Lab launcher below, then press Connect. Keep its PowerShell window open only if it starts a new bridge.';
     const note = labSetup?.querySelector('small');
-    if (note) note.innerHTML = 'This uses <strong>opencode run</strong> because the current OpenCode Windows <strong>serve</strong> command can fail with ServeError. The bridge stays on 127.0.0.1 and never reads your ChatGPT/OpenCode credentials directly.';
+    if (note) note.innerHTML = 'The launcher first checks whether Model Lab is already running, then uses <strong>opencode run</strong> if a bridge is needed. It never kills an unknown process or reads your ChatGPT/OpenCode credentials directly.';
   }
 
   const sync = () => {
