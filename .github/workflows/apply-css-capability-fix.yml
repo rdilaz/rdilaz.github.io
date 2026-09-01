@@ -18,13 +18,14 @@ jobs:
       - name: Restore fixes
         id: restore
         run: |
-          if [ ! -f .css-capability-fix.b64 ]; then
+          if ! compgen -G '.css-capability-fix/part-*' > /dev/null; then
             echo "applied=false" >> "$GITHUB_OUTPUT"
+            echo "Split payload already applied; nothing to do."
             exit 0
           fi
-          base64 --decode .css-capability-fix.b64 > /tmp/css-capability-fix.tar.gz
+          cat .css-capability-fix/part-* | base64 --decode > /tmp/css-capability-fix.tar.gz
           tar -xzf /tmp/css-capability-fix.tar.gz
-          rm .css-capability-fix.b64
+          rm -rf .css-capability-fix .css-capability-fix.b64
           echo "applied=true" >> "$GITHUB_OUTPUT"
 
       - name: Verify syntax and static contract
