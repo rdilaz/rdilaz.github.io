@@ -56,6 +56,9 @@ jobs:
       - name: Verify Dream transparency contracts
         run: node --test --test-concurrency=1 tests/dream-transparency.contract.mjs
 
+      - name: Verify one-click debug bundle contract
+        run: node --test --test-concurrency=1 tests/debug-bundle.contract.mjs
+
       - name: Install portfolio dependencies
         run: npm ci
 
