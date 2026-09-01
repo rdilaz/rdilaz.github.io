@@ -13,6 +13,7 @@
       <section class="stage" id="stage" aria-label="AI-generated music visualizer">
         <iframe id="visualizerFrame" class="visualizer-frame" title="Generated audio visualizer" sandbox="allow-scripts" allow="fullscreen" referrerpolicy="no-referrer"></iframe>
         <iframe id="preflightFrame" class="preflight-frame" title="Visualizer preflight sandbox" sandbox="allow-scripts" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
+        <div id="uiRevealSurface" aria-hidden="true" style="position:absolute;inset:0;z-index:10;pointer-events:none;background:transparent"></div>
         <header class="top-chrome chrome" aria-label="Visualizer status">
           <div class="identity">
             <span class="identity__mark">◌</span>
@@ -50,6 +51,19 @@
       <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v1</code>. Runtime: <code>visualizer-audio-v1</code>. The host provides normalized loudness, six frequency bands, waveform, spectrum, transient/beat information, spectral motion, rough tempo, stereo features, pointer state, and viewport information.</p></details></div>
     </aside>
     <div class="drawer-scrim" id="drawerScrim" hidden></div><div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script>
+      (() => {
+        const surface = document.getElementById('uiRevealSurface');
+        const syncRevealSurface = () => {
+          surface.style.pointerEvents = document.body.classList.contains('ui-hidden') ? 'auto' : 'none';
+        };
+        new MutationObserver(syncRevealSurface).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        for (const eventName of ['pointermove', 'pointerdown', 'touchstart']) {
+          surface.addEventListener(eventName, () => document.body.classList.remove('ui-hidden'), { passive: true });
+        }
+        syncRevealSurface();
+      })();
+    </script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>
