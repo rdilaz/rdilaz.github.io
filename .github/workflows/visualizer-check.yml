@@ -7,6 +7,7 @@ on:
       - 'public/visualizer/**'
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
+      - 'scripts/model-lab-bridge-static-check.mjs'
       - '.github/workflows/visualizer-check.yml'
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - 'public/visualizer/**'
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
+      - 'scripts/model-lab-bridge-static-check.mjs'
       - '.github/workflows/visualizer-check.yml'
 
 jobs:
@@ -28,11 +30,13 @@ jobs:
           node-version: 22
       - name: Check visualizer JavaScript syntax
         run: |
-          for file in public/visualizer/*.js scripts/visualizer-static-check.mjs; do
+          for file in public/visualizer/*.js public/visualizer/*.mjs scripts/visualizer-static-check.mjs scripts/model-lab-bridge-static-check.mjs; do
             node --check "$file"
           done
       - name: Verify visualizer safety and fairness contract
         run: node scripts/visualizer-static-check.mjs
+      - name: Verify Windows Model Lab bridge contract
+        run: node scripts/model-lab-bridge-static-check.mjs
       - name: Install portfolio dependencies
         run: npm ci
       - name: Build portfolio with visualizer payload
