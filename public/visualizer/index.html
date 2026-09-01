@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="./styles.css" />
     <link rel="stylesheet" href="./spend.css" />
     <link rel="stylesheet" href="./model-guide.css" />
+    <link rel="stylesheet" href="./dream-status.css" />
   </head>
   <body>
     <main class="app" id="app">
@@ -27,7 +28,27 @@
           </div>
         </header>
         <div class="center-status" id="centerStatus" role="status" aria-live="polite" hidden>
-          <span class="dream-orbit" aria-hidden="true"></span><strong id="centerStatusTitle">Dreaming…</strong><span id="centerStatusDetail"></span>
+          <span class="dream-orbit" aria-hidden="true"></span>
+          <div class="dream-status__head">
+            <div class="dream-status__identity">
+              <span class="dream-status__connection" id="dreamStatusConnection">OpenRouter connected</span>
+              <strong id="centerStatusTitle">Dreaming…</strong>
+            </div>
+            <time class="dream-status__elapsed" id="dreamStatusElapsed">0:00</time>
+          </div>
+          <div class="dream-status__progress" aria-hidden="true"><span class="dream-status__progress-fill" id="dreamStatusProgressFill"></span></div>
+          <div class="dream-status__steps" aria-label="Dream progress">
+            <span class="dream-status__step" data-dream-step>Connected</span>
+            <span class="dream-status__step" data-dream-step>Generating</span>
+            <span class="dream-status__step" data-dream-step>Received</span>
+            <span class="dream-status__step" data-dream-step>Checking</span>
+            <span class="dream-status__step" data-dream-step>Launching</span>
+          </div>
+          <span id="centerStatusDetail"></span>
+          <div class="dream-status__footer">
+            <span class="dream-status__live" id="dreamStatusLive">Preparing request…</span>
+            <button class="dream-status__cancel" id="dreamCancelButton" type="button">Cancel</button>
+          </div>
         </div>
         <nav class="controls chrome" id="controls" aria-label="Visualizer controls">
           <button class="control control--model" id="modelButton" type="button"><span class="control__hint">MODEL</span><strong id="selectedModelName">Choose a model</strong></button>
@@ -120,6 +141,7 @@
         syncRevealSurface();
       })();
     </script>
+    <script src="./dream-status.js"></script>
     <script src="./cost-guard.js"></script>
     <script type="module" src="./app.js"></script>
     <script type="module" src="./model-guide.js"></script>
