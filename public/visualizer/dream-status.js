@@ -44,7 +44,6 @@
     tick: 0,
     userCancelled: false,
     timedOut: false,
-    requestNumber: 0,
   };
 
   function isCompletion(input) {
@@ -156,7 +155,6 @@
     state.controller = controller;
     state.userCancelled = false;
     state.timedOut = false;
-    state.requestNumber += 1;
     if (els.connection) els.connection.textContent = `OpenRouter connected · ${state.modelName}`;
     setPhase(repair ? 'repair' : 'sent', {
       title: repair ? `${state.modelName} is repairing its dream` : `${state.modelName} is generating the visualizer`,
@@ -190,7 +188,7 @@
     state.timeout = 0;
   }
 
-  function resetSoon() {
+  function finishLifecycle({ hide = true, delay = 120 } = {}) {
     clearRequestTimer();
     state.controller = null;
     setTimeout(() => {
@@ -199,8 +197,11 @@
       clearInterval(state.tick);
       state.tick = 0;
       els.center?.classList.remove('dream-active');
-      if (els.center) delete els.center.dataset.dreamPhase;
-    }, 120);
+      if (els.center) {
+        delete els.center.dataset.dreamPhase;
+        if (hide) els.center.hidden = true;
+      }
+    }, delay);
   }
 
   function cancelDream() {
@@ -233,14 +234,17 @@
 
   const hiddenObserver = new MutationObserver(() => {
     if (!state.active || !els.center?.hidden) return;
-    if (els.topStatus?.textContent?.includes('just dreamed')) {
+    const succeeded = els.topStatus?.textContent?.includes('just dreamed');
+    if (succeeded) {
       setPhase('done', {
         title: `${state.modelName} is live`,
         detail: 'Generation, validation and sandbox testing completed successfully.',
         live: 'Dream launched ✓',
       });
+      finishLifecycle({ hide: true, delay: 900 });
+    } else {
+      finishLifecycle({ hide: true, delay: 20 });
     }
-    resetSoon();
   });
   if (els.center) hiddenObserver.observe(els.center, { attributes: true, attributeFilter: ['hidden'] });
 
