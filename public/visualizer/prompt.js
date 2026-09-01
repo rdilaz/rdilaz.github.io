@@ -68,7 +68,7 @@ You have complete artistic freedom. Decide what music looks like.`;
 export const FIXED_RUNTIME_CONTRACT = `RUNTIME CONTRACT — technical reference, not artistic direction:
 - Return exactly one complete self-contained HTML document and nothing else. Do not wrap it in Markdown.
 - The document runs in a sandboxed browser iframe. External network access and external assets are unavailable. Everything required by the result must exist in the returned HTML.
-- You may use any browser-native capability available inside the sandbox. No rendering method, medium, style, composition, dimensionality, or interaction pattern is preferred. Feature-detect optional or newer browser capabilities when needed.
+- You may use any browser-native capability available inside the sandbox. The host does not prefer or recommend any particular implementation or visual approach. Feature-detect optional or newer browser capabilities when needed.
 - Do not access parent/top/opener, cookies, storage, credentials, camera, microphone, geolocation, clipboard, or the network. Do not produce sound.
 - The result must fit arbitrary viewport sizes, remain responsive, and continue to render when audio is absent or silent.
 - The result must respond meaningfully to the read-only music state supplied by window.VIZ. How you interpret that state is entirely up to you.
