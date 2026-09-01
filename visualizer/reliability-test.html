@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Visualizer Reliability Test Harness</title>
+  <link rel="stylesheet" href="./reliability.css">
+  <style>html,body{margin:0;width:100%;height:100%;background:#111;overflow:hidden}iframe{border:0}</style>
+</head>
+<body>
+  <iframe id="fixture" class="preflight-frame" sandbox="allow-scripts" aria-hidden="true"></iframe>
+  <script type="module">
+    import { VisualizerSandbox } from './sandbox.js';
+    import { DreamReliabilityHarness, createSyntheticFrame } from './reliability.js';
+
+    const iframe = document.getElementById('fixture');
+    const sandbox = new VisualizerSandbox(iframe);
+
+    window.runReliabilityFixture = async html => {
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const result = await harness.preflight(html, {
+        viewport: { width: 800, height: 450, dpr: 1 },
+        fastViewport: { width: 640, height: 360, dpr: 1 },
+      });
+      sandbox.clear();
+      return result;
+    };
+
+    window.runWatchdogFixture = async html => {
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const preflight = await harness.preflight(html, {
+        viewport: { width: 800, height: 450, dpr: 1 },
+        fastViewport: { width: 640, height: 360, dpr: 1 },
+      });
+      if (!preflight.passed) {
+        sandbox.clear();
+        return { preflight, watchdog: null };
+      }
+      sandbox.setPresentation('promoting');
+      const started = performance.now();
+      let frameIndex = 0;
+      const timer = setInterval(() => {
+        sandbox.sendFrame(createSyntheticFrame(frameIndex++, performance.now() - started, { width: 800, height: 450, dpr: 1 }));
+      }, 16);
+      const watchdog = await harness.watchdog({ durationMs: 3800 });
+      clearInterval(timer);
+      sandbox.clear();
+      return { preflight, watchdog };
+    };
+
+    window.__reliabilityHarnessReady = true;
+  </script>
+</body>
+</html>

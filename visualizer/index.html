@@ -10,12 +10,13 @@
     <link rel="stylesheet" href="./spend.css" />
     <link rel="stylesheet" href="./model-guide.css" />
     <link rel="stylesheet" href="./dream-status.css" />
+    <link rel="stylesheet" href="./reliability.css" />
   </head>
   <body>
     <main class="app" id="app">
       <section class="stage" id="stage" aria-label="AI-generated music visualizer">
         <iframe id="visualizerFrame" class="visualizer-frame" title="Generated audio visualizer" sandbox="allow-scripts" allow="fullscreen" referrerpolicy="no-referrer"></iframe>
-        <iframe id="preflightFrame" class="preflight-frame" title="Visualizer preflight sandbox" sandbox="allow-scripts" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
+        <iframe id="preflightFrame" class="preflight-frame" title="Visualizer candidate sandbox" sandbox="allow-scripts" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
         <div id="uiRevealSurface" aria-hidden="true" style="position:absolute;inset:0;z-index:10;pointer-events:none;background:transparent"></div>
         <header class="top-chrome chrome" aria-label="Visualizer status">
           <div class="identity">
@@ -23,10 +24,12 @@
             <span class="identity__copy"><strong>See what AI thinks music looks like.</strong><small id="topStatus">Ready</small></span>
           </div>
           <div class="top-actions">
+            <button class="icon-button diagnostics-button" id="diagnosticsButton" type="button" aria-label="Open developer diagnostics" title="Developer diagnostics" hidden>DEV</button>
             <button class="icon-button spend-button" id="spendButton" type="button" aria-label="Open spend protection" title="Spend protection"><span class="spend-button__label">Spent</span><span id="spendButtonValue">$0.00</span></button>
             <button class="icon-button" id="infoButton" type="button" aria-label="About this experiment" title="About">i</button>
           </div>
         </header>
+
         <div class="center-status" id="centerStatus" role="status" aria-live="polite" hidden>
           <span class="dream-orbit" aria-hidden="true"></span>
           <div class="dream-status__head">
@@ -50,6 +53,7 @@
             <button class="dream-status__cancel" id="dreamCancelButton" type="button">Cancel</button>
           </div>
         </div>
+
         <nav class="controls chrome" id="controls" aria-label="Visualizer controls">
           <button class="control control--model" id="modelButton" type="button"><span class="control__hint">MODEL</span><strong id="selectedModelName">Choose a model</strong></button>
           <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model"><span class="control__icon">✦</span><span>Dream</span><small class="dream-cost" id="dreamCost"></small></button>
@@ -116,7 +120,23 @@
 
     <aside class="drawer drawer--about" id="aboutDrawer" aria-hidden="true" aria-label="About the visualizer">
       <div class="drawer__head"><div><span class="eyebrow">THE IDEA</span><h2>One blank canvas. Every model.</h2></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
-      <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v1</code>. Runtime: <code>visualizer-audio-v1</code>. The host provides normalized loudness, six frequency bands, waveform, spectrum, transient/beat information, spectral motion, rough tempo, stereo features, pointer state, and viewport information.</p></details></div>
+      <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v1</code>. Runtime: <code>visualizer-audio-v1</code>. Reliability: <code>dream-reliability-v1</code>. Candidates must prove they boot, render, consume VIZ, survive standardized synthetic music, handle the real viewport, and remain alive through an automatic rollback window. The harness never prescribes an aesthetic or rendering technology.</p></details></div>
+    </aside>
+
+    <aside class="drawer drawer--diagnostics" id="diagnosticsDrawer" aria-hidden="true" aria-label="Developer diagnostics">
+      <div class="drawer__head"><div><span class="eyebrow">DEV MODE</span><h2>Dream diagnostics.</h2><p>Local flight-recorder data for generation, rendering, repairs, promotion, rollback and runtime health. No music, audio arrays or provider credentials are stored.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
+      <div class="diagnostics-toolbar">
+        <button id="copyLatestDiagnostics" type="button">Copy latest JSON</button>
+        <button id="exportDiagnostics" type="button">Export all</button>
+        <button id="copyCurrentHtml" type="button">Copy active HTML</button>
+        <button id="retestCurrent" type="button">Retest active</button>
+        <button id="pickDiagnosticModel" type="button">Pick cheap test model</button>
+        <button id="clearDiagnostics" type="button">Clear diagnostics</button>
+      </div>
+      <div class="diagnostics-summary" id="diagnosticsSummary">Loading diagnostics…</div>
+      <details class="diagnostics-live-panel" open><summary>Live runtime events</summary><pre id="diagnosticsLive">No live diagnostic events yet.</pre></details>
+      <div class="diagnostics-list" id="diagnosticsList"></div>
+      <p class="diagnostics-boundary"><strong>Backdoor:</strong> add <code>?dev=1</code> to the Visualizer URL or press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd>. Use <code>window.VIZ_DEV</code> in DevTools for scripted access. Everything remains on this browser unless you explicitly copy or export it.</p>
     </aside>
 
     <div class="drawer-scrim" id="drawerScrim" hidden></div>
