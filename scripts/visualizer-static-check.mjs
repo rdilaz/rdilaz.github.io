@@ -80,7 +80,7 @@ expect(sandbox.includes("replaceFunction(console, 'error'") && sandbox.includes(
 expect(sandbox.includes("'compileShader'") && sandbox.includes('SHADER_COMPILE_FAILED'), 'Sandbox must capture WebGL shader compiler failures.');
 expect(sandbox.includes("'linkProgram'") && sandbox.includes('PROGRAM_LINK_FAILED'), 'Sandbox must capture WebGL linker failures.');
 expect(sandbox.includes('webglcontextlost') && sandbox.includes('WEBGL_CONTEXT_LOST'), 'Sandbox must capture WebGL context loss.');
-expect(sandbox.includes("type === 'webgpu'") && sandbox.includes('GPUQueue'), 'Sandbox must preserve and observe WebGPU when available.');
+expect(sandbox.includes("'webgpu'") && sandbox.includes('GPUCanvasContext') && sandbox.includes('GPUQueue'), 'Sandbox must preserve and observe WebGPU when available.');
 expect(sandbox.includes('sampleCanvas') && sandbox.includes('inspectDom') && sandbox.includes('visibleProof'), 'Proof-of-life must support canvas plus DOM/SVG/CSS output.');
 expect(sandbox.includes("dominantCanvas.coverage >= 0.45") || sandbox.includes("dominantCanvas && dominantCanvas.coverage >= 0.45"), 'A tiny HUD must not hide failure of a dominant canvas.');
 expect(sandbox.includes("state.mode = 'passive'") && sandbox.includes('intensiveRestores'), 'High-frequency instrumentation must be removed after the rollback window.');
@@ -108,7 +108,7 @@ expect(!app.includes('waveform: sample.waveform') || diagnostics.includes("outpu
 
 // Real regression corpus and browser verification.
 expect(aetheriaFixture.includes('AETHERIA :: Resonant Topology') && aetheriaFixture.includes('gl.compileShader'), 'Real Gemini blank-screen output must remain a regression fixture.');
-expect(workflow.includes('@playwright/test') && workflow.includes('visualizer-reliability.spec.mjs'), 'CI must execute the browser reliability corpus in Chromium.');
+expect(workflow.includes('@playwright/test') && workflow.includes('playwright install --with-deps chromium') && workflow.includes('playwright test --config=playwright.config.mjs'), 'CI must execute the browser reliability corpus in Chromium.');
 const browserTests = await read('tests/visualizer-reliability.spec.mjs');
 expect(browserTests.includes('valid-black-webgl'), 'CI must protect intentionally black but functioning artwork.');
 expect(browserTests.includes('webgl-dom-fallback'), 'CI must protect resilient DOM fallbacks when an advanced renderer fails.');
