@@ -16,21 +16,31 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore implementation
+        id: restore
         run: |
+          if ! compgen -G '.reliability-payload/part-*' > /dev/null; then
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            echo "Payload already applied; nothing to do."
+            exit 0
+          fi
           cat .reliability-payload/part-* | base64 --decode > /tmp/dream-reliability.tar.gz
           tar -xzf /tmp/dream-reliability.tar.gz
+          git checkout -- .github/workflows/visualizer-check.yml
           rm -rf .reliability-payload
-          rm -f .github/workflows/apply-reliability-payload.yml
+          echo "applied=true" >> "$GITHUB_OUTPUT"
 
       - name: Check generated JavaScript syntax
+        if: steps.restore.outputs.applied == 'true'
         run: |
           find public scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 |
             xargs -0 -n1 node --check
 
       - name: Commit implementation
+        if: steps.restore.outputs.applied == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git reset -- .github/workflows
           git commit -m "Implement Dream Reliability Harness v1"
           git push origin HEAD:milestone/dream-reliability-harness-v1
