@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>AETHERIA :: Resonant Topology</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #020205;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  #canvas-container {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+  }
+  #hud {
+    position: absolute;
+    bottom: 24px;
+    left: 28px;
+    pointer-events: none;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 10;
+    transition: opacity 0.8s ease;
+  }
+  .hud-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .hud-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #4ef0c5;
+    box-shadow: 0 0 8px #4ef0c5;
+    animation: pulse 2.5s infinite ease-in-out;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(0.9); opacity: 0.4; }
+    50% { transform: scale(1.3); opacity: 1; }
+  }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+  <canvas id="viz-canvas"></canvas>
+</div>
+<div id="hud">
+  <div class="hud-row">
+    <div class="hud-dot" id="hud-dot"></div>
+    <span id="hud-status">AETHERIA &bull; RESONANCE FIELD</span>
+  </div>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // --- Core Configuration & WebGL Canvas ---
+  const canvas = document.getElementById('viz-canvas');
+  const gl = canvas.getContext('webgl2', {
+    alpha: false,
+    depth: false,
+    stencil: false,
+    antialias: false,
+    powerPreference: 'high-performance',
+    preserveDrawingBuffer: false
+  });
+
+  if (!gl) {
+    document.body.innerHTML = '<p style="padding:20px;color:white;">WebGL 2.0 required for this visualizer.</p>';
+    return;
+  }
+
+  // --- Shaders ---
+  const vsSource = `#version 300 es
+    in vec2 a_position;
+    out vec2 v_uv;
+    void main() {
+      v_uv = a_position * 0.5 + 0.5;
+      gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+  `;
+
+  const fsSource = `#version 300 es
+    precision highp float;
+
+    in vec2 v_uv;
+    out vec4 fragColor;
+
+    uniform vec2 u_resolution;
+    uniform float u_time;
+    uniform float u_audioTime;
+    uniform vec4 u_bands;        // subBass, bass, lowMid, mid
+    uniform vec4 u_bandsHigh;    // highMid, treble, flux, centroid
+    uniform vec4 u_dynamics;     // volume, transient, beat, peak
+    uniform vec4 u_stereo;       // balance, width, tempo, confidence
+    uniform vec4 u_pointer;      // x, y, isDown, active
+    uniform sampler2D u_audioTex;
+
+    // --- Complex Noise & Rotations ---
+    mat2 rot(float a) {
+      float c = cos(a), s = sin(a);
+      return mat2(c, -s, s, c);
+    }
+
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + vec2(45.32, 45.32));
+      return fract(p.x * p.y);
+    }
+
+    float smoothNoise(vec3 p) {
+      vec3 i = floor(p);
+      vec3 f = fract(p);
+      f = f * f * (vec3(3.0) - 2.0 * f);
+      vec2 uv = (i.xy + vec2(37.0, 17.0) * i.z) + f.xy;
+      vec2 rg = vec2(hash(uv), hash(uv + vec2(1.0, 1.0)));
+      return mix(rg.x, rg.y, f.z);
+    }
+
+    // Smooth minimum for organic geometric blending
+    float smin(float a, float b, float k) {
+      float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+      return mix(b, a, h) - k * h * (1.0 - h);
+    }
+
+    // --- Audio Texture Samplers ---
+    float getSpectrum(float x) {
+      return texture(u_audioTex, vec2(clamp(x, 0.005, 0.995), 0.25)).r;
+    }
+
+    float getWaveform(float x) {
+      return texture(u_audioTex, vec2(clamp(x, 0.005, 0.995), 0.75)).r;
+    }
+
+    // --- Resonant Distance Field ---
+    vec2 map(vec3 p) {
+      float subBass = u_bands.x;
+      float bass = u_bands.y;
+      float mid = u_bands.w;
+      float treble = u_bandsHigh.y;
+      float vol = u_dynamics.x;
+      float beat = u_dynamics.z;
+
+      // Global spatial domain warp modulated by audio energy
+      vec3 q = p;
+      float t = u_audioTime * 0.4;
+
+      // Fluid domain twisting
+      q.xz *= rot(sin(q.y * 0.35 + t * 0.5) * (0.6 + bass * 0.8));
+      q.xy *= rot(cos(q.z * 0.25 + t * 0.3) * 0.4);
+
+      // Central Harmonic Gyroid Field
+      float gyroidScale = 1.6 + subBass * 0.7;
+      vec3 gP = q * gyroidScale;
+      float gyroid = abs(dot(sin(gP), cos(gP.zxy))) - (0.35 + mid * 0.45);
+      gyroid = abs(gyroid) - (0.04 + treble * 0.06);
+
+      // Singular Harmonic Core (Breathing Dyson-Relic)
+      float corePulse = sin(u_time * 2.0) * 0.08 + (subBass * 0.4) + (beat * 0.25);
+      float coreRadius = 1.35 + corePulse;
+      float core = length(p) - coreRadius;
+
+      // Radial acoustic waveform displacement along the core
+      float angle = atan(p.z, p.x) / 6.28318530718 + 0.5;
+      float waveSample = getWaveform(angle) * (0.35 + vol * 0.6);
+      core += waveSample * (0.4 + bass * 0.6);
+
+      // Orbital Harmonic Energy Rings (representing spectral bands)
+      vec3 pRing = p;
+      pRing.xz *= rot(u_audioTime * 0.7 + p.y * 0.2);
+      float ring1 = length(vec2(length(pRing.xz) - (2.6 + bass * 0.8), pRing.y)) - (0.05 + treble * 0.12);
+
+      vec3 pRing2 = p;
+      pRing2.yz *= rot(u_audioTime * -0.5);
+      pRing2.xy *= rot(0.785);
+      float ring2 = length(vec2(length(pRing2.xz) - (3.4 + mid * 0.6), pRing2.y)) - (0.04 + subBass * 0.08);
+
+      // Merge surfaces
+      float d = smin(gyroid, core, 0.45);
+      d = smin(d, ring1, 0.3);
+      d = smin(d, ring2, 0.25);
+
+      // Return distance and material ID / acoustic resonance weight
+      float mat = (core < gyroid) ? 1.0 : 2.0;
+      return vec2(d * 0.68, mat);
+    }
+
+    // --- Normal Calculation ---
+    vec3 calcNormal(vec3 p, float d) {
+      vec2 e = vec2(max(d * 0.5, 0.0015), 0.0);
+      return normalize(vec3(
+        map(p + e.xyy).x - map(p - e.xyy).x,
+        map(p + e.yxy).x - map(p - e.yxy).x,
+        map(p + e.yyx).x - map(p - e.yyx).x
+      ));
+    }
+
+    // --- Dynamic Audio-Reactive Palette ---
+    vec3 getCosmicPalette(float t, float centroid, float transient) {
+      vec3 a = vec3(0.5, 0.5, 0.5);
+      vec3 b = vec3(0.5, 0.5, 0.5);
+      vec3 c = vec3(1.0, 1.0, 1.0);
+      vec3 d = vec3(0.1 + centroid * 0.4, 0.33 + transient * 0.2, 0.67);
+      return a + b * cos(6.28318 * (c * t + d));
+    }
+
+    void main() {
+      vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution.xy) / min(u_resolution.x, u_resolution.y);
+
+      // --- Pointer / Interactive Camera Orbit ---
+      vec2 mouse = (u_pointer.xy - 0.5) * 3.14159;
+      if (u_pointer.w < 0.5) {
+        mouse = vec2(sin(u_time * 0.15) * 0.4, cos(u_time * 0.1) * 0.25);
+      }
+
+      // Camera Setup
+      float camDist = 5.6 - u_bands.x * 0.8 + (u_dynamics.y * 0.3);
+      vec3 ro = vec3(sin(mouse.x) * camDist * cos(mouse.y), sin(mouse.y) * camDist + 0.3, cos(mouse.x) * camDist * cos(mouse.y));
+      vec3 ta = vec3(0.0, 0.0, 0.0);
+
+      // Acoustic Transient Camera Vibration
+      ro += (vec3(
+        sin(u_time * 80.0),
+        cos(u_time * 95.0),
+        sin(u_time * 70.0)
+      )) * (u_dynamics.y * 0.035);
+
+      vec3 ww = normalize(ta - ro);
+      vec3 uu = normalize(cross(ww, vec3(0.0, 1.0, 0.0)));
+      vec3 vv = cross(uu, ww);
+
+      // Lens distortion & Relativistic FTL Warp on beats
+      float fov = 1.35 + u_bands.x * 0.25;
+      vec3 rd = normalize(uv.x * uu + uv.y * vv + fov * ww);
+
+      // Gravitational lensing around center
+      float r2 = dot(uv, uv);
+      rd = normalize(rd - 0.15 * vec3(uv * (u_bands.y + u_dynamics.z * 0.5), 0.0) / (r2 + 0.5));
+
+      // --- Volumetric Raymarching ---
+      float t = 0.05;
+      float maxDist = 18.0;
+      vec3 col = vec3(0.0);
+      vec3 glow = vec3(0.0);
+      float hitDist = -1.0;
+      float matId = 0.0;
+
+      float centroid = u_bandsHigh.w;
+      float transient = u_dynamics.y;
+
+      for (int i = 0; i < 90; i++) {
+        vec3 p = ro + rd * t;
+        vec2 res = map(p);
+        float d = res.x;
+
+        // Volumetric Glow accumulation
+        float distFromOrigin = length(p);
+        float spectralCoord = clamp(distFromOrigin / 5.0, 0.0, 1.0);
+        float freqGlow = getSpectrum(spectralCoord);
+
+        vec3 glowColor = getCosmicPalette(distFromOrigin * 0.18 + u_audioTime * 0.1, centroid, transient);
+
+        // Core and filament emissive energy
+        float energyDensity = 0.015 / (abs(d) + 0.038);
+        glow += glowColor * energyDensity * (0.6 + freqGlow * 1.8 + u_bands.x * 1.2);
+
+        if (d < 0.002) {
+          hitDist = t;
+          matId = res.y;
+          break;
+        }
+        if (t > maxDist) break;
+
+        t += max(d * 0.75, 0.018);
+      }
+
+      // --- Surface Shading ---
+      if (hitDist > 0.0) {
+        vec3 p = ro + rd * hitDist;
+        vec3 nor = calcNormal(p, hitDist);
+        vec3 ref = reflect(rd, nor);
+
+        // Dynamic light sources
+        vec3 lightPos1 = vec3(sin(u_audioTime) * 4.0, 3.0, cos(u_audioTime) * 4.0);
+        vec3 lightDir1 = normalize(lightPos1 - p);
+        float diff1 = max(dot(nor, lightDir1), 0.0);
+
+        vec3 lightPos2 = vec3(0.0, 0.0, 0.0);
+        vec3 lightDir2 = normalize(lightPos2 - p);
+        float diff2 = max(dot(nor, lightDir2), 0.0) * (1.5 + u_bands.x * 2.0);
+
+        // Fresnel & Dispersion
+        float fresnel = pow(clamp(1.0 + dot(rd, nor), 0.0, 1.0), 3.5);
+        float spec = pow(max(dot(ref, lightDir1), 0.0), 24.0);
+
+        vec3 basePal = getCosmicPalette(length(p) * 0.2 + u_audioTime * 0.08, centroid, transient);
+        vec3 surfCol = mix(vec3(0.03, 0.02, 0.05), basePal, 0.7);
+
+        col = surfCol * (diff1 * 0.8 + diff2 * 1.2 + 0.15);
+        col += vec3(0.9, 0.95, 1.0) * spec * (0.8 + u_bandsHigh.y * 1.5);
+        col += getCosmicPalette(fresnel + 0.5, centroid, transient) * fresnel * (1.5 + u_bands.y * 1.5);
+
+        // Audio texture micro-detail iridescence
+        float waveMicro = getWaveform(fract(dot(p, vec3(0.3, 0.5, 0.2)) + u_audioTime * 0.2));
+        col += basePal * waveMicro * 0.4;
+      }
+
+      // Merge volumetric glow with background atmosphere
+      col += glow * 0.065;
+
+      // --- Deep Space & Nebula Background ---
+      vec3 spaceCol = vec3(0.015, 0.01, 0.025);
+      float nebula = smoothNoise(rd * 3.5 + vec3(u_time * 0.04));
+      float nebula2 = smoothNoise(rd * 7.0 - vec3(u_time * 0.06));
+      vec3 nebCol1 = getCosmicPalette(nebula * 1.5 + u_audioTime * 0.05, centroid, transient) * 0.25;
+      vec3 nebCol2 = vec3(0.1, 0.4, 0.8) * nebula2 * 0.18 * (1.0 + u_bands.y);
+
+      spaceCol += nebCol1 + nebCol2;
+
+      // Cosmic background star dust
+      float starSpec = pow(hash(floor(rd.xy * 380.0 + rd.z * 190.0)), 32.0) * (0.4 + u_bandsHigh.y * 1.2);
+      spaceCol += vec3(starSpec * 0.8, starSpec * 0.9, starSpec * 1.0);
+
+      // Distance fog blending
+      if (hitDist < 0.0) {
+        col += spaceCol;
+      } else {
+        float fog = 1.0 - exp(-hitDist * 0.12);
+        col = mix(col, spaceCol, fog);
+      }
+
+      // --- Chromatic Aberration on Transients & Screen Periphery ---
+      float distFromCenter = length(uv);
+      float splitAmt = (0.003 + u_dynamics.y * 0.015 + u_bands.x * 0.008) * (distFromCenter * 1.4);
+      vec3 splitCol;
+      splitCol.r = col.r;
+      splitCol.g = mix(col.g, texture(u_audioTex, vec2(v_uv.x + splitAmt, 0.25)).r * 0.3 + col.g, 0.4);
+      splitCol.b = mix(col.b, texture(u_audioTex, vec2(v_uv.x - splitAmt, 0.75)).r * 0.3 + col.b, 0.4);
+      col = mix(col, splitCol, clamp(splitAmt * 40.0, 0.0, 1.0));
+
+      // --- Post-Processing & Cinematic Tone Mapping ---
+      col *= 1.35;
+      vec3 aaces = col * (col + vec3(0.0245786)) - vec3(0.000090537);
+      vec3 baces = col * (vec3(0.983729) * col + vec3(0.4329510)) + vec3(0.238081);
+      col = clamp(aaces / baces, 0.0, 1.0);
+
+      // Subtle Vignette
+      float vignette = 1.0 - smoothstep(0.5, 1.4, distFromCenter);
+      col *= vignette;
+
+      // Dithering to eliminate banding in dark nebula gradients
+      col += (hash(gl_FragCoord.xy + vec2(u_time, u_time * 1.618)) - 0.5) * 0.008;
+
+      fragColor = vec4(col, 1.0);
+    }
+  `;
+
+  // --- Shader Compilation Utility ---
+  function createShader(gl, type, source) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, source);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+      gl.deleteShader(s);
+      return null;
+    }
+    return s;
+  }
+
+  const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+  const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+  if (!vs || !fs) return;
+
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(program));
+    return;
+  }
+
+  // --- Fullscreen Quad Setup ---
+  const quadVAO = gl.createVertexArray();
+  gl.bindVertexArray(quadVAO);
+
+  const quadVBO = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadVBO);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1,
+     1, -1,
+    -1,  1,
+    -1,  1,
+     1, -1,
+     1,  1,
+  ]), gl.STATIC_DRAW);
+
+  const posLoc = gl.getAttribLocation(program, 'a_position');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+  // --- Audio 1D Data Texture ---
+  const audioTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, audioTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  // 512 samples width, 2 rows: Row 0 = Spectrum, Row 1 = Waveform
+  const audioTexData = new Uint8Array(512 * 2);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 512, 2, 0, gl.RED, gl.UNSIGNED_BYTE, audioTexData);
+
+  // --- Uniform Locations ---
+  const uResLoc = gl.getUniformLocation(program, 'u_resolution');
+  const uTimeLoc = gl.getUniformLocation(program, 'u_time');
+  const uAudioTimeLoc = gl.getUniformLocation(program, 'u_audioTime');
+  const uBandsLoc = gl.getUniformLocation(program, 'u_bands');
+  const uBandsHighLoc = gl.getUniformLocation(program, 'u_bandsHigh');
+  const uDynamicsLoc = gl.getUniformLocation(program, 'u_dynamics');
+  const uStereoLoc = gl.getUniformLocation(program, 'u_stereo');
+  const uPointerLoc = gl.getUniformLocation(program, 'u_pointer');
+  const uAudioTexLoc = gl.getUniformLocation(program, 'u_audioTex');
+
+  // --- Responsive Smoothed State ---
+  const state = {
+    volume: 0,
+    subBass: 0,
+    bass: 0,
+    lowMid: 0,
+    mid: 0,
+    highMid: 0,
+    treble: 0,
+    transient: 0,
+    beat: 0,
+    peak: 0,
+    flux: 0,
+    centroid: 0.5,
+    balance: 0,
+    width: 0.5,
+    tempo: 120,
+    confidence: 0,
+    audioAccumTime: 0,
+    pointerX: 0.5,
+    pointerY: 0.5,
+    targetPointerX: 0.5,
+    targetPointerY: 0.5,
+    isDown: 0,
+    active: 0
+  };
+
+  function smooth(current, target, factorUp, factorDown) {
+    const f = target > current ? factorUp : factorDown;
+    return current + (target - current) * f;
+  }
+
+  function updatePointer(x, y, isDown, active) {
+    state.targetPointerX = x / window.innerWidth;
+    state.targetPointerY = 1.0 - (y / window.innerHeight);
+    state.isDown = isDown ? 1 : 0;
+    state.active = active ? 1 : 0;
+  }
+
+  window.addEventListener('pointermove', e => updatePointer(e.clientX, e.clientY, e.buttons > 0, 1));
+  window.addEventListener('pointerdown', e => updatePointer(e.clientX, e.clientY, 1, 1));
+  window.addEventListener('pointerup', e => updatePointer(e.clientX, e.clientY, 0, 1));
+  window.addEventListener('pointerleave', () => { state.active = 0; });
+
+  const hudStatus = document.getElementById('hud-status');
+  const hudDot = document.getElementById('hud-dot');
+
+  let lastFrameTime = performance.now() * 0.001;
+  let wallTime = 0;
+
+  function render(now) {
+    requestAnimationFrame(render);
+
+    const currentTime = now * 0.001;
+    const dt = Math.min(currentTime - lastFrameTime, 0.1);
+    lastFrameTime = currentTime;
+    wallTime += dt;
+
+    let hostFrame = null;
+    if (window.VIZ && window.VIZ.frame) {
+      hostFrame = window.VIZ.frame;
+    }
+
+    if (hostFrame && hostFrame.audio && hostFrame.audio.connected && !hostFrame.audio.silence) {
+      const a = hostFrame.audio;
+      const b = a.bands || {};
+
+      state.volume = smooth(state.volume, a.volume || 0, 0.45, 0.08);
+      state.subBass = smooth(state.subBass, b.subBass || 0, 0.5, 0.06);
+      state.bass = smooth(state.bass, b.bass || 0, 0.5, 0.07);
+      state.lowMid = smooth(state.lowMid, b.lowMid || 0, 0.4, 0.08);
+      state.mid = smooth(state.mid, b.mid || 0, 0.4, 0.08);
+      state.highMid = smooth(state.highMid, b.highMid || 0, 0.4, 0.09);
+      state.treble = smooth(state.treble, b.treble || 0, 0.45, 0.1);
+      state.transient = smooth(state.transient, a.transient || 0, 0.85, 0.15);
+      state.beat = smooth(state.beat, a.beat || 0, 0.7, 0.1);
+      state.peak = smooth(state.peak, a.peak || 0, 0.6, 0.08);
+      state.flux = smooth(state.flux, a.spectralFlux || 0, 0.4, 0.1);
+      state.centroid = smooth(state.centroid, a.spectralCentroid || 0.5, 0.2, 0.05);
+
+      if (a.stereo) {
+        state.balance = smooth(state.balance, a.stereo.balance || 0, 0.2, 0.1);
+        state.width = smooth(state.width, a.stereo.width || 0.5, 0.2, 0.1);
+      }
+      if (a.tempo) {
+        state.tempo = a.tempo;
+        state.confidence = a.tempoConfidence || 0;
+      }
+
+      if (a.spectrum && a.spectrum.length > 0) {
+        const specLen = Math.min(a.spectrum.length, 512);
+        for (let i = 0; i < 512; i++) {
+          const idx = Math.floor((i / 512) * specLen);
+          audioTexData[i] = Math.min(255, Math.floor((a.spectrum[idx] || 0) * 255));
+        }
+      }
+      if (a.waveform && a.waveform.length > 0) {
+        const waveLen = Math.min(a.waveform.length, 512);
+        for (let i = 0; i < 512; i++) {
+          const idx = Math.floor((i / 512) * waveLen);
+          const val = ((a.waveform[idx] || 0) + 1.0) * 0.5;
+          audioTexData[512 + i] = Math.min(255, Math.max(0, Math.floor(val * 255)));
+        }
+      }
+
+      hudStatus.textContent = state.confidence > 0.4
+        ? `AETHERIA • RESONATING @ ${Math.round(state.tempo)} BPM`
+        : `AETHERIA • SPECTRAL FLUX ${(state.flux * 100).toFixed(0)}%`;
+      hudDot.style.background = '#4ef0c5';
+      hudDot.style.boxShadow = '0 0 10px #4ef0c5';
+    } else {
+      const idleWave = Math.sin(wallTime * 0.7) * 0.5 + 0.5;
+      state.volume = smooth(state.volume, 0.15 + idleWave * 0.1, 0.05, 0.05);
+      state.subBass = smooth(state.subBass, 0.2 + Math.sin(wallTime * 0.5) * 0.15, 0.05, 0.05);
+      state.bass = smooth(state.bass, 0.18 + Math.cos(wallTime * 0.6) * 0.12, 0.05, 0.05);
+      state.mid = smooth(state.mid, 0.15 + Math.sin(wallTime * 0.8) * 0.1, 0.05, 0.05);
+      state.treble = smooth(state.treble, 0.12 + Math.sin(wallTime * 1.2) * 0.08, 0.05, 0.05);
+      state.transient = smooth(state.transient, 0, 0.1, 0.1);
+      state.beat = smooth(state.beat, 0, 0.1, 0.1);
+      state.centroid = smooth(state.centroid, 0.45 + Math.sin(wallTime * 0.2) * 0.2, 0.02, 0.02);
+
+      for (let i = 0; i < 512; i++) {
+        const p = i / 512;
+        audioTexData[i] = Math.floor((Math.sin(p * 12.0 + wallTime * 2.0) * 0.5 + 0.5) * 60);
+        audioTexData[512 + i] = Math.floor((Math.sin(p * 6.28 + wallTime) * 0.3 + 0.5) * 255);
+      }
+
+      hudStatus.textContent = `AETHERIA • HARMONIC EQUILIBRIUM`;
+      hudDot.style.background = 'rgba(255,255,255,0.4)';
+      hudDot.style.boxShadow = 'none';
+    }
+
+    const energySpeed = 0.45 + (state.volume * 1.4) + (state.subBass * 1.1) + (state.transient * 0.8);
+    state.audioAccumTime += dt * energySpeed;
+
+    state.pointerX += (state.targetPointerX - state.pointerX) * 0.08;
+    state.pointerY += (state.targetPointerY - state.pointerY) * 0.08;
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
+    const displayWidth = Math.floor(canvas.clientWidth * dpr);
+    const displayHeight = Math.floor(canvas.clientHeight * dpr);
+
+    if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+      canvas.width = displayWidth;
+      canvas.height = displayHeight;
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, audioTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 2, gl.RED, gl.UNSIGNED_BYTE, audioTexData);
+
+    gl.useProgram(program);
+
+    gl.uniform2f(uResLoc, canvas.width, canvas.height);
+    gl.uniform1f(uTimeLoc, wallTime);
+    gl.uniform1f(uAudioTimeLoc, state.audioAccumTime);
+
+    gl.uniform4f(uBandsLoc, state.subBass, state.bass, state.lowMid, state.mid);
+    gl.uniform4f(uBandsHighLoc, state.highMid, state.treble, state.flux, state.centroid);
+    gl.uniform4f(uDynamicsLoc, state.volume, state.transient, state.beat, state.peak);
+    gl.uniform4f(uStereoLoc, state.balance, state.width, state.tempo, state.confidence);
+    gl.uniform4f(uPointerLoc, state.pointerX, state.pointerY, state.isDown, state.active);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, audioTex);
+    gl.uniform1i(uAudioTexLoc, 0);
+
+    gl.bindVertexArray(quadVAO);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  if (window.VIZ && typeof window.VIZ.onFrame === 'function') {
+    window.VIZ.onFrame(() => {});
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

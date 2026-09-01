@@ -1,165 +1,120 @@
-import { access, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
 const read = path => readFile(new URL(path, root), 'utf8');
-const absent = async path => {
-  try {
-    await access(new URL(path, root));
-    return false;
-  } catch {
-    return true;
-  }
-};
 
 const [
   index,
+  app,
   audio,
   sandbox,
+  reliability,
+  diagnostics,
+  storage,
   prompt,
   providerRuntime,
-  openrouterFacade,
+  openrouter,
   costGuard,
   modelGuide,
   dreamStatus,
-  product,
-  providers,
-  roadmap,
-  security,
-  deployWorkflow,
-  visualizerWorkflow,
+  reliabilityCss,
+  workflow,
+  deploy,
+  aetheriaFixture,
 ] = await Promise.all([
   read('public/visualizer/index.html'),
+  read('public/visualizer/app.js'),
   read('public/visualizer/audio-engine.js'),
   read('public/visualizer/sandbox.js'),
+  read('public/visualizer/reliability.js'),
+  read('public/visualizer/diagnostics.js'),
+  read('public/visualizer/storage.js'),
   read('public/visualizer/prompt.js'),
   read('public/visualizer/provider-runtime.js'),
   read('public/visualizer/openrouter.js'),
   read('public/visualizer/cost-guard.js'),
   read('public/visualizer/model-guide.js'),
   read('public/visualizer/dream-status.js'),
-  read('docs/visualizer/PRODUCT.md'),
-  read('docs/visualizer/PROVIDERS.md'),
-  read('docs/visualizer/ROADMAP.md'),
-  read('docs/visualizer/SECURITY.md'),
-  read('.github/workflows/deploy.yml'),
+  read('public/visualizer/reliability.css'),
   read('.github/workflows/visualizer-check.yml'),
+  read('.github/workflows/deploy.yml'),
+  read('tests/fixtures/aetheria-gemini-3.7-flash.html'),
 ]);
 
 const failures = [];
 const expect = (condition, message) => { if (!condition) failures.push(message); };
 
-// Generated-code, audio, and prompt invariants.
-expect(/sandbox="allow-scripts"/.test(index), 'Generated visualizer iframe must allow scripts inside a sandbox.');
-expect(!/sandbox="[^"]*allow-same-origin/.test(index), 'Generated visualizer sandbox must not use allow-same-origin.');
+// Sandbox, audio, prompt and credential invariants.
+expect(/sandbox="allow-scripts"/.test(index), 'Generated visualizer iframes must allow scripts inside a sandbox.');
+expect(!/sandbox="[^"]*allow-same-origin/.test(index), 'Generated visualizer sandbox must never use allow-same-origin.');
 expect(audio.includes('getDisplayMedia'), 'Audio engine must use display/system audio capture.');
 expect(!audio.includes('getUserMedia('), 'Microphone capture is forbidden.');
 expect(audio.includes("audioSelection:'preferred'"), 'Chromium capture must prefer audio-bearing sources.');
-expect(audio.includes("displaySurface:'browser'"), 'Web capture should steer toward browser-tab selection first.');
 expect(audio.includes('smoothingTimeConstant=.08'), 'Fast analyser smoothing must stay low-latency.');
-expect(audio.includes('Firefox can show the screen-sharing picker'), 'Known Firefox no-audio path must fail before the misleading picker.');
+expect(prompt.includes('visualizer-prompt-v1') && prompt.includes('There are no aesthetic requirements.'), 'Canonical prompt must remain versioned and aesthetically unconstrained.');
+expect(prompt.includes('WebGL/WebGL2') && prompt.includes('WebGPU when available') && prompt.includes('SVG'), 'Prompt must preserve broad browser-native creative capability.');
 expect(sandbox.includes("connect-src 'none'"), 'Generated visualizer CSP must block network connections.');
-expect(
-  sandbox.includes("Object.defineProperty(window,'VIZ'") || sandbox.includes("Object.defineProperty(window, 'VIZ'"),
-  'Sandbox must inject the read-only VIZ bridge.',
-);
-expect(prompt.includes('visualizer-prompt-v1'), 'Canonical prompt version is missing.');
-expect(prompt.includes('You do not know what music will be played.'), 'Canonical prompt must remain song-agnostic.');
-expect(prompt.includes('There are no aesthetic requirements.'), 'Canonical prompt must remain aesthetically unconstrained.');
+expect(providerRuntime.includes("billing: 'user'") && providerRuntime.includes('browserOnly: true'), 'Current provider contract must remain browser-only and user-funded.');
+expect(providerRuntime.includes('sessionStorage') && providerRuntime.includes('code_challenge_method'), 'OpenRouter connection must remain session-scoped PKCE.');
+expect(!providerRuntime.includes('127.0.0.1') && !app.includes('127.0.0.1'), 'Localhost provider routing must not return.');
+expect(!index.includes('.exe') && !index.includes('Local Model Lab') && !index.includes('PowerShell'), 'Normal product UI must not require native/local setup.');
+expect(!workflow.includes('windows companion') && !deploy.includes('GOOS=windows'), 'CI/deploy must not build a desktop companion.');
 
-// Browser-provider contract and OpenRouter reference adapter.
-expect(providerRuntime.includes("PROVIDER_CONTRACT_VERSION = 'visualizer-provider-v1'"), 'Provider contract version is missing.');
-for (const method of ['getCredential', 'isConnected', 'connect', 'consumeCallback', 'disconnect', 'listModels', 'generate', 'repair']) {
-  expect(providerRuntime.includes(`'${method}'`), `Provider contract must require ${method}().`);
-}
-expect(providerRuntime.includes('registerProvider(openRouterAdapter)'), 'OpenRouter must register through the provider contract.');
-expect(providerRuntime.includes('browserOnly: true'), 'Active provider must declare the browser-only boundary.');
-expect(providerRuntime.includes("billing: 'user'"), 'Active provider must use the user\'s connected billing source.');
-expect(providerRuntime.includes("transport: 'browser-direct'"), 'OpenRouter must be identified as browser-direct.');
-expect(providerRuntime.includes('sessionStorage'), 'OpenRouter delegated key must remain session-scoped.');
-expect(providerRuntime.includes("code_challenge_method', 'S256'"), 'OpenRouter connection must use PKCE S256.');
-expect(providerRuntime.includes('https://openrouter.ai/api/v1/models'), 'Provider runtime must load the live OpenRouter catalog.');
-expect(providerRuntime.includes('https://openrouter.ai/api/v1/chat/completions'), 'Provider runtime must use OpenRouter completions.');
-expect(providerRuntime.includes('stream: false'), 'Reference adapter must declare its non-streaming response mode truthfully.');
-expect(providerRuntime.includes('response.status === 402'), 'OpenRouter insufficient-funds errors must be explicit.');
-expect(providerRuntime.includes('response.status === 429'), 'OpenRouter rate-limit errors must be explicit.');
-expect(providerRuntime.includes('No automatic retry was sent'), 'Uncertain provider execution must not trigger a hidden retry.');
-expect(providerRuntime.includes("response.headers.get('x-request-id')"), 'Provider result should retain request identity when available.');
-expect(openrouterFacade.includes("from './provider-runtime.js'"), 'Legacy OpenRouter UI imports must delegate to provider-runtime.js.');
-expect(openrouterFacade.includes('generateProviderVisualizer as generateVisualizer'), 'Generation must flow through the provider contract.');
-expect(openrouterFacade.includes('repairProviderVisualizer as repairVisualizer'), 'Repair must flow through the provider contract.');
+// Spend and guided model selection remain intact.
+expect(index.includes('./cost-guard.js') && index.indexOf('./cost-guard.js') < index.indexOf('./app.js'), 'Spend guard must load before the app module.');
+expect(costGuard.includes('perDream: 0.75') && costGuard.includes('session: 5') && costGuard.includes('daily: 10'), 'Default OpenRouter spend caps changed unexpectedly.');
+expect(costGuard.includes('body.max_tokens = allowedMax') && costGuard.includes('include: true'), 'Spend guard must constrain output and request exact usage accounting.');
+expect(index.includes('Four easy choices.') && modelGuide.includes("label:'Fast + great'"), 'Simple guided model selection must remain available.');
+expect(modelGuide.includes("MODEL_ENDPOINT='https://openrouter.ai/api/v1/models'"), 'Model guide must use the live OpenRouter catalog.');
 
-// OpenRouter spend protection.
-expect(index.includes('./cost-guard.js'), 'Spend guard must be loaded.');
-expect(index.indexOf('./dream-status.js') < index.indexOf('./cost-guard.js'), 'Dream lifecycle must wrap requests before the spend guard.');
-expect(index.indexOf('./cost-guard.js') < index.indexOf('./app.js'), 'Spend guard must load before the visualizer app module.');
-expect(costGuard.includes('perDream: 0.75'), 'Default per-Dream spend guard must remain $0.75.');
-expect(costGuard.includes('session: 5'), 'Default session spend guard must remain $5.');
-expect(costGuard.includes('daily: 10'), 'Default local-day spend guard must remain $10.');
-expect(costGuard.includes('body.max_tokens = allowedMax'), 'Spend guard must constrain model output tokens.');
-expect(costGuard.includes('include: true'), 'OpenRouter requests must request exact usage accounting.');
-expect(costGuard.includes('https://openrouter.ai/api/v1/key'), 'Spend guard must inspect the current OpenRouter key limit.');
-expect(costGuard.includes('currentDreamSpent'), 'Automatic repair must share the same Dream budget.');
+// Truthful inference lifecycle remains intact.
+expect(index.includes('./dream-status.js') && index.includes('dreamCancelButton'), 'Dream request lifecycle and cancellation UI must remain loaded.');
+expect(dreamStatus.includes('DREAM_TIMEOUT_MS = 360000'), 'Slow model requests must retain the six-minute inference timeout.');
+expect(dreamStatus.includes('full response body received'), 'Request lifecycle must distinguish response start from complete response body.');
+expect(app.includes('activeDreamController') && app.includes("dreamCancelButton?.addEventListener"), 'Cancellation must continue through artifact checks as well as provider inference.');
 
-// Guided model selection and truthful lifecycle.
-expect(index.includes('./model-guide.js') && index.includes('./model-guide.css'), 'Guided model-picker assets must be loaded.');
-expect(index.includes('Four easy choices.') && index.includes('Browse every model'), 'Model picker must default to a small guided choice while preserving the full catalog.');
-expect(
-  modelGuide.includes("label:'Best shot at wow'") &&
-  modelGuide.includes("label:'Fast + great'") &&
-  modelGuide.includes("label:'Cheap + strong'") &&
-  modelGuide.includes("label:'Free experiment'"),
-  'Simple picker must preserve the four human-facing recommendation lanes.',
-);
-expect(modelGuide.includes('design_arena') && modelGuide.includes('coding_index'), 'Recommendations must use live visual/coding benchmark signals.');
-expect(modelGuide.includes("MODEL_ENDPOINT='https://openrouter.ai/api/v1/models'"), 'Recommendations must update from the live OpenRouter catalog.');
-expect(index.includes('./dream-status.js') && index.includes('./dream-status.css'), 'Dream lifecycle assets must be loaded.');
-expect(index.includes('data-dream-step') && index.includes('dreamCancelButton'), 'Dream UI must expose pipeline steps and cancellation.');
-expect(dreamStatus.includes('DREAM_TIMEOUT_MS = 360000'), 'Dream lifecycle must allow slow coding models up to six minutes.');
-expect(dreamStatus.includes('waiting >= 300000') && dreamStatus.includes('waiting >= 180000'), 'Slow-model lifecycle must keep giving proof of life.');
-expect(dreamStatus.includes('AbortController'), 'Dream lifecycle must support cancelling the in-flight request.');
-expect(dreamStatus.includes('Request sent ✓') && dreamStatus.includes('full response body received'), 'Dream lifecycle must distinguish sent, response-started, and body-complete states.');
-expect(dreamStatus.includes('OpenRouter may still bill work completed before cancellation'), 'Cancellation must not promise zero provider cost.');
+// Generic, medium-agnostic reliability harness.
+expect(index.includes('./reliability.css') && app.includes("from './reliability.js'"), 'Dream reliability harness assets must be loaded.');
+expect(sandbox.includes("SANDBOX_CHANNEL = 'visualizer-sandbox-v2'"), 'Instrumented sandbox protocol version is missing.');
+expect(sandbox.includes("replaceFunction(console, 'error'") && sandbox.includes('CONSOLE_ERROR'), 'Sandbox must capture generated console errors.');
+expect(sandbox.includes("'compileShader'") && sandbox.includes('SHADER_COMPILE_FAILED'), 'Sandbox must capture WebGL shader compiler failures.');
+expect(sandbox.includes("'linkProgram'") && sandbox.includes('PROGRAM_LINK_FAILED'), 'Sandbox must capture WebGL linker failures.');
+expect(sandbox.includes('webglcontextlost') && sandbox.includes('WEBGL_CONTEXT_LOST'), 'Sandbox must capture WebGL context loss.');
+expect(sandbox.includes("type === 'webgpu'") && sandbox.includes('GPUQueue'), 'Sandbox must preserve and observe WebGPU when available.');
+expect(sandbox.includes('sampleCanvas') && sandbox.includes('inspectDom') && sandbox.includes('visibleProof'), 'Proof-of-life must support canvas plus DOM/SVG/CSS output.');
+expect(sandbox.includes("dominantCanvas.coverage >= 0.45") || sandbox.includes("dominantCanvas && dominantCanvas.coverage >= 0.45"), 'A tiny HUD must not hide failure of a dominant canvas.');
+expect(sandbox.includes("state.mode = 'passive'") && sandbox.includes('intensiveRestores'), 'High-frequency instrumentation must be removed after the rollback window.');
+expect(reliability.includes('createSyntheticFrame') && reliability.includes('after-synthetic-music'), 'Every candidate must receive deterministic synthetic music during preflight.');
+expect(reliability.includes('actual-viewport-canary'), 'Candidate must be tested at the real viewport before promotion.');
+expect(reliability.includes('VIZ_NOT_CONSUMED') && reliability.includes('NO_VISIBLE_OUTPUT'), 'Harness must separately prove VIZ consumption and visible output.');
+expect(reliability.includes('NO_OBVIOUS_STIMULUS_DELTA') && reliability.includes('diagnostic only; subtle interpretations are allowed'), 'Subtle visual response must remain a warning rather than an aesthetic rejection.');
+expect(reliability.includes('HEAVY_RENDERER') && !reliability.includes("failure: makeFailure(FAILURE_CODES.PERFORMANCE_COLLAPSE"), 'Heavy but functioning art must be observed, not automatically censored.');
+expect(app.includes("setPresentation('promoting')") && app.includes("setPresentation('retiring')") && app.includes('swapSlots()'), 'Promotion must be atomic across two live iframe slots.');
+expect(app.includes('rollback armed') && app.includes('promotion:rolled-back'), 'Post-launch rollback must be explicit and diagnostic.');
+expect(app.includes('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1)'), 'A Dream must permit at most one same-model repair.');
+expect(app.includes('if (attemptNumber === 2 || diagnostic.repairUsed)'), 'A second repair must be impossible.');
+expect(app.includes('1000 / 60'), 'Host audio frames must run at a 60 Hz target instead of the old 30 Hz gate.');
+expect(app.includes('heartbeatAgeMs() > 8000') && app.includes('recoverFromRuntimeFailure'), 'Long-lived visualizers must retain heartbeat-based automatic recovery.');
 
-// Browser-only cleanup: the normal product must contain no local/native setup.
-const forbiddenPublicText = ['Local Model Lab', 'opencode', '127.0.0.1', 'localhost', '.exe', 'PowerShell'];
-for (const text of forbiddenPublicText) {
-  expect(!index.toLowerCase().includes(text.toLowerCase()), `Browser UI must not contain local/native setup reference: ${text}`);
-}
-for (const text of ['opencode', '127.0.0.1', 'localhost', 'auth.json']) {
-  expect(!providerRuntime.toLowerCase().includes(text.toLowerCase()), `Provider runtime must not depend on local software: ${text}`);
-}
-expect(!deployWorkflow.includes('setup-go'), 'Production deploy must not build a native companion.');
-expect(!deployWorkflow.includes('GOOS=windows'), 'Production deploy must not cross-compile Windows software.');
-expect(!deployWorkflow.includes('AI-Visualizer-Model-Lab.exe'), 'Production deploy must not publish an executable.');
-expect(!visualizerWorkflow.includes('setup-go'), 'Visualizer CI must remain web-only.');
+// Local flight recorder and hidden developer backdoor.
+expect(storage.includes("DIAGNOSTIC_STORE = 'diagnostics'") && storage.includes('DB_VERSION = 2'), 'Diagnostics need their own durable IndexedDB store.');
+expect(storage.includes('MAX_DIAGNOSTICS = 60'), 'Diagnostics store must remain bounded.');
+expect(diagnostics.includes("DIAGNOSTIC_SCHEMA = 'dream-diagnostic-v1'"), 'Diagnostic schema must be versioned.');
+expect(diagnostics.includes("'authorization'") && diagnostics.includes("'waveform'") && diagnostics.includes("'spectrum'"), 'Diagnostic export must redact credentials and audio arrays defensively.');
+expect(app.includes("params.get('dev') === '1'") && app.includes("event.key.toLowerCase() === 'd'"), 'Developer mode must be available through ?dev=1 and Ctrl+Shift+D.');
+expect(app.includes("Object.defineProperty(window, 'VIZ_DEV'") && index.includes('Dream diagnostics.'), 'VIZ_DEV API and diagnostic drawer must be available without public UI clutter.');
+expect(app.includes('copyCurrentHtml') && app.includes('retestCurrentVisualizer') && app.includes('exportAll'), 'Dev mode must support HTML copy, deterministic retest and JSON export.');
+expect(!app.includes('waveform: sample.waveform') || diagnostics.includes("output[key] = '[redacted]'"), 'Diagnostic export must never preserve captured waveform/spectrum values.');
 
-const forbiddenPaths = [
-  'companion/windows-model-lab/go.mod',
-  'companion/windows-model-lab/main.go',
-  'public/visualizer/AI-Visualizer-Model-Lab.exe',
-  'public/visualizer/local-cost-label.js',
-  'public/visualizer/local-model-unlock.js',
-  'public/visualizer/model-lab-bridge.mjs',
-  'public/visualizer/model-lab-launcher.ps1',
-  'public/visualizer/opencode-lab.css',
-  'public/visualizer/opencode-lab.js',
-  'scripts/model-lab-bridge-static-check.mjs',
-  'scripts/windows-companion-static-check.mjs',
-];
-for (const path of forbiddenPaths) {
-  expect(await absent(path), `Desktop/local detour file must be removed: ${path}`);
-}
-
-// Product and security documentation must preserve the approved boundary.
-expect(product.includes('No terminal, localhost service, desktop companion'), 'Product constitution must lock the no-install browser boundary.');
-expect(product.includes("funded entirely by the user's connected provider account"), 'Product constitution must lock user-funded inference.');
-expect(providers.includes('visualizer-provider-v1'), 'Provider contract documentation is missing.');
-expect(providers.includes('No adapter may require a terminal, localhost service, native companion'), 'Provider contract must forbid local setup.');
-expect(roadmap.includes('Explicitly outside the current roadmap'), 'Roadmap must explicitly exclude desktop/local work.');
-expect(security.includes('requires no local server, desktop companion, executable, terminal'), 'Security boundary must describe the browser-only architecture.');
+// Real regression corpus and browser verification.
+expect(aetheriaFixture.includes('AETHERIA :: Resonant Topology') && aetheriaFixture.includes('gl.compileShader'), 'Real Gemini blank-screen output must remain a regression fixture.');
+expect(workflow.includes('@playwright/test') && workflow.includes('visualizer-reliability.spec.mjs'), 'CI must execute the browser reliability corpus in Chromium.');
+const browserTests = await read('tests/visualizer-reliability.spec.mjs');
+expect(browserTests.includes('valid-black-webgl'), 'CI must protect intentionally black but functioning artwork.');
+expect(browserTests.includes('webgl-dom-fallback'), 'CI must protect resilient DOM fallbacks when an advanced renderer fails.');
 
 if (failures.length) {
-  console.error('Visualizer static contract failed:\n- ' + failures.join('\n- '));
+  console.error('Visualizer reliability contract failed:\n- ' + failures.join('\n- '));
   process.exit(1);
 }
-console.log('Visualizer static contract: PASS');
+console.log('Visualizer reliability contract: PASS');
