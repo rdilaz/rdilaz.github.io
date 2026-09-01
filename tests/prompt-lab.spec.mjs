@@ -74,7 +74,7 @@ test('neutral default removes spectacle and renderer priming while preserving th
   }
   expect(neutralText).toContain('complete artistic freedom');
   expect(neutralText).toContain('any browser-native capability available inside the sandbox');
-  expect(neutralText).toContain('No rendering method, medium, style, composition, dimensionality, or interaction pattern is preferred.');
+  expect(neutralText).toContain('The host does not prefer or recommend any particular implementation or visual approach.');
   expect(FIXED_RUNTIME_CONTRACT).toContain('window.VIZ');
 
   const baseline = promptPreset('baseline-v1');
