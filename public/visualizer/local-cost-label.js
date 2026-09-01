@@ -1,19 +1,33 @@
 (() => {
   'use strict';
+
   const selectedName = document.getElementById('selectedModelName');
   const billing = document.getElementById('billingSource');
   const keySummary = document.getElementById('keyBudgetSummary');
   const keyCopy = document.getElementById('keyBudgetCopy');
-  const labCommand = document.getElementById('modelLabCommand');
   const labSetup = document.getElementById('modelLabSetup');
+  const labCommand = document.getElementById('modelLabCommand');
   const isWindows = navigator.userAgentData?.platform === 'Windows' || /Windows/i.test(navigator.userAgent || '');
 
-  if (isWindows && labCommand) {
-    labCommand.textContent = '$b="$env:TEMP\\ai-visualizer-model-lab-bridge.mjs"; iwr https://ryo-nd.com/visualizer/model-lab-bridge.mjs -OutFile $b; node $b';
-    const intro = labSetup?.querySelector('p');
-    if (intro) intro.textContent = 'Windows: start the Visualizer compatibility bridge below, then press Connect. Keep that PowerShell window open while using subscription models.';
-    const note = labSetup?.querySelector('small');
-    if (note) note.innerHTML = 'This uses <strong>opencode run</strong> because the current OpenCode Windows <strong>serve</strong> command can fail with ServeError. The bridge stays on 127.0.0.1 and never reads your ChatGPT/OpenCode credentials directly.';
+  if (isWindows && labSetup) {
+    const intro = labSetup.querySelector('p');
+    if (intro) intro.textContent = 'Use your ChatGPT and OpenCode Go subscriptions with one small Windows companion. Download it once, open it, and Model Lab connects automatically.';
+
+    const row = labSetup.querySelector('.model-lab__command-row');
+    if (row) {
+      const download = document.createElement('a');
+      download.className = 'model-lab__companion-download';
+      download.href = './AI-Visualizer-Model-Lab.exe';
+      download.download = 'AI-Visualizer-Model-Lab.exe';
+      download.textContent = 'Download Windows companion';
+      download.setAttribute('aria-label', 'Download AI Visualizer Model Lab Windows companion');
+      row.replaceChildren(download);
+    }
+
+    const note = labSetup.querySelector('small');
+    if (note) note.innerHTML = 'No PowerShell, ports, or terminal window. OpenCode credentials stay on this computer. This early companion is unsigned, so Windows may show a one-time SmartScreen warning.';
+
+    if (labCommand) labCommand.hidden = true;
   }
 
   const sync = () => {
@@ -26,6 +40,7 @@
       billing.textContent = 'Your OpenRouter credits';
     }
   };
+
   if (selectedName) new MutationObserver(sync).observe(selectedName, { childList: true, characterData: true, subtree: true });
   window.addEventListener('storage', sync);
   setInterval(sync, 1500);
