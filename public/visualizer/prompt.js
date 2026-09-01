@@ -116,7 +116,7 @@ export const PROMPT_PRESETS = Object.freeze([
 
 const NEW_SYSTEM_MESSAGE = 'Return exactly one complete self-contained HTML document that satisfies the supplied creative brief and runtime contract. Do not add commentary or Markdown.';
 const LEGACY_SYSTEM_MESSAGE = 'You are the sole artist and engineer of a real-time music visualizer. Follow the user brief exactly. Return only the requested self-contained HTML document.';
-const REPAIR_SYSTEM_MESSAGE = 'Repair the previous HTML only enough to satisfy the supplied runtime failure while preserving its existing artistic concept. Return exactly one complete self-contained HTML document and no Markdown.';
+const REPAIR_SYSTEM_MESSAGE = 'Repair the visualizer only enough to satisfy the supplied runtime failure while preserving its existing artistic concept. Return exactly one complete self-contained HTML document and no Markdown.';
 
 function storageOrNull(storage) {
   if (storage) return storage;
@@ -253,10 +253,18 @@ export function buildRepairMessages(originalOutput, problem, profile = loadPromp
   ];
 }
 
+function mountPromptLabAfterHostReady() {
+  const mount = () => {
+    setTimeout(() => {
+      void import('./prompt-lab.js')
+        .then(module => module.mountPromptLab?.())
+        .catch(error => console.warn('Prompt Lab could not be initialized:', error));
+    }, 0);
+  };
+  if (document.readyState === 'complete') mount();
+  else window.addEventListener('load', mount, { once: true });
+}
+
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  queueMicrotask(() => {
-    void import('./prompt-lab.js')
-      .then(module => module.mountPromptLab?.())
-      .catch(error => console.warn('Prompt Lab could not be initialized:', error));
-  });
+  mountPromptLabAfterHostReady();
 }
