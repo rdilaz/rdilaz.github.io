@@ -3,7 +3,7 @@
 
   const OPENROUTER_KEY_STORAGE = 'ai-visualizer.openrouter.key';
   const COMPLETION_RE = /^https:\/\/openrouter\.ai\/api\/v1\/chat\/completions(?:\?|$)/;
-  const DREAM_TIMEOUT_MS = 180000;
+  const DREAM_TIMEOUT_MS = 360000;
   const baseFetch = window.fetch.bind(window);
 
   const els = {
@@ -99,7 +99,21 @@
       if (els.elapsed) els.elapsed.textContent = elapsedLabel(elapsed);
       if (!['sent', 'working'].includes(state.phase)) return;
       const waiting = now - state.requestStartedAt;
-      if (waiting >= 90000) {
+      if (waiting >= 300000) {
+        setPhase('working', {
+          title: `${state.modelName} is very slow, but still connected`,
+          detail: 'The request is still open after five minutes. Some large coding models can take this long; you can keep waiting or cancel without replacing your current visualizer.',
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
+          progress: 47,
+        });
+      } else if (waiting >= 180000) {
+        setPhase('working', {
+          title: `${state.modelName} is still generating`,
+          detail: 'Three minutes is slow, but not automatically a failure for a large visual-coding response. The request is still open.',
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
+          progress: 46,
+        });
+      } else if (waiting >= 90000) {
         setPhase('working', {
           title: `${state.modelName} is still working`,
           detail: 'The request is still open. This is unusually slow, but it has not been declared stuck.',
@@ -277,7 +291,7 @@
       state.controller = null;
       if (state.timedOut) {
         if (els.live) els.live.textContent = 'Timed out · request stopped';
-        throw new Error('Dream timed out after 3 minutes. Your previous visualizer is still safe; try again or choose a faster model.');
+        throw new Error('Dream timed out after 6 minutes. Your previous visualizer is still safe; try again or choose a faster model.');
       }
       if (state.userCancelled || controller.signal.aborted) {
         if (els.live) els.live.textContent = 'Cancelled · previous visualizer preserved';
