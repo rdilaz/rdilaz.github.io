@@ -21,7 +21,10 @@ const clampNumber = (value, fallback, min, max) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
 };
-const todayKey = () => new Date().toISOString().slice(0, 10);
+const todayKey = () => {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
 const readJson = (storage, key, fallback) => {
   try { return JSON.parse(storage.getItem(key)) ?? fallback; } catch { return fallback; }
 };
@@ -119,7 +122,9 @@ function estimateFor(modelId, messages = null, requestedMaxTokens = 14000) {
 }
 
 function availableBudget() {
-  const providerRemaining = Number.isFinite(Number(keyInfo?.limit_remaining)) ? Math.max(0, Number(keyInfo.limit_remaining)) : Infinity;
+  const providerRemaining = keyInfo?.limit_remaining != null && Number.isFinite(Number(keyInfo.limit_remaining))
+    ? Math.max(0, Number(keyInfo.limit_remaining))
+    : Infinity;
   return Math.max(0, Math.min(
     settings.perDream - currentDreamSpent,
     settings.session - sessionSpent,
@@ -229,22 +234,22 @@ function render() {
   if (els.dailySpendSummary) els.dailySpendSummary.textContent = `${money(daily.spent)} / ${money(settings.daily)}`;
   if (els.keyBudgetSummary) {
     if (!lastKey) els.keyBudgetSummary.textContent = 'Not connected';
-    else if (Number.isFinite(Number(keyInfo?.limit_remaining))) els.keyBudgetSummary.textContent = `${money(keyInfo.limit_remaining)} remaining`;
+    else if (keyInfo?.limit_remaining != null && Number.isFinite(Number(keyInfo.limit_remaining))) els.keyBudgetSummary.textContent = `${money(keyInfo.limit_remaining)} remaining`;
     else els.keyBudgetSummary.textContent = 'No provider-side key cap';
   }
   if (els.keyBudgetCopy) {
     if (!lastKey) els.keyBudgetCopy.textContent = 'Connect OpenRouter to read the key’s provider-enforced limit.';
-    else if (Number.isFinite(Number(keyInfo?.limit))) els.keyBudgetCopy.textContent = `${money(keyInfo.usage)} used of a ${money(keyInfo.limit)} OpenRouter key limit${keyInfo.limit_reset ? ` · resets ${keyInfo.limit_reset}` : ''}.`;
+    else if (keyInfo?.limit != null && Number.isFinite(Number(keyInfo.limit))) els.keyBudgetCopy.textContent = `${money(keyInfo.usage)} used of a ${money(keyInfo.limit)} OpenRouter key limit${keyInfo.limit_reset ? ` · resets ${keyInfo.limit_reset}` : ''}.`;
     else els.keyBudgetCopy.textContent = 'This OpenRouter key reports no hard provider limit. The Visualizer app caps below still apply in this browser.';
   }
   const modelName = modelCatalog.get(currentModelId())?.name || els.selectedModelName?.textContent || 'Choose a model';
   if (els.currentCostModel) els.currentCostModel.textContent = modelName;
   if (els.currentCostTypical) els.currentCostTypical.textContent = estimate.known ? (estimate.free ? 'Free' : `~${money(estimate.typical)} typical`) : 'Pricing unavailable';
-  if (els.currentCostCeiling) els.currentCostCeiling.textContent = estimate.known ? (estimate.free ? '$0 hard ceiling' : `${money(Math.min(settings.perDream, estimate.ceiling))} request ceiling`) : `${money(settings.perDream)} app cap`;
+  if (els.currentCostCeiling) els.currentCostCeiling.textContent = estimate.known ? (estimate.free ? '$0 request ceiling' : `${money(Math.min(settings.perDream, estimate.ceiling))} request ceiling`) : `${money(settings.perDream)} app cap`;
   if (els.currentCostRates) els.currentCostRates.textContent = estimate.pricing ? `${formatRate(estimate.pricing.input)} in · ${formatRate(estimate.pricing.output)} out` : 'Waiting for OpenRouter model pricing.';
   if (els.dreamCost) {
     els.dreamCost.textContent = !currentModelId() ? '' : estimate.known ? (estimate.free ? 'free' : `~${money(estimate.typical)}`) : 'cost ?';
-    els.dreamCost.title = estimate.known && !estimate.free ? `Typical estimate ${money(estimate.typical)} · hard Dream cap ${money(settings.perDream)} including repair` : '';
+    els.dreamCost.title = estimate.known && !estimate.free ? `Typical estimate ${money(estimate.typical)} · Dream app cap ${money(settings.perDream)} including repair` : '';
   }
   if (els.perDreamInput) els.perDreamInput.value = settings.perDream.toFixed(2);
   if (els.sessionCapInput) els.sessionCapInput.value = settings.session.toFixed(2);
@@ -281,10 +286,10 @@ function saveSettingsFromUi() {
 }
 
 function askCostConfirmation({ modelName, typical, ceiling, cap }) {
-  if (!els.confirmBackdrop) return Promise.resolve(window.confirm(`${modelName}\nTypical estimate: ${money(typical)}\nHard Dream cap: ${money(cap)}\n\nContinue?`));
+  if (!els.confirmBackdrop) return Promise.resolve(window.confirm(`${modelName}\nTypical estimate: ${money(typical)}\nDream app cap: ${money(cap)}\n\nContinue?`));
   els.confirmModel.textContent = modelName;
   els.confirmEstimate.textContent = `Typical one-pass estimate ${money(typical)} · current request ceiling ${money(ceiling)}.`;
-  els.confirmCap.textContent = `This Dream cannot intentionally exceed the ${money(cap)} app budget, including repair.`;
+  els.confirmCap.textContent = `The Visualizer will constrain this Dream to the ${money(cap)} browser-side budget, including any automatic repair.`;
   els.confirmBackdrop.hidden = false;
   return new Promise(resolve => {
     const finish = value => {
@@ -343,6 +348,10 @@ async function guardedCompletion(input, init) {
     const minimumCost = pricingEstimate.inputCost + MIN_VISUALIZER_OUTPUT_TOKENS * pricingEstimate.pricing.output;
     if (remaining - reserve >= minimumCost) callBudget = remaining - reserve;
   }
+  if (!pricingEstimate.free && pricingEstimate.inputCost > callBudget * SAFETY_FACTOR) {
+    notice(`The prompt alone would exceed the remaining ${money(callBudget)} budget for this Dream. Raise the cap or choose another model.`, 7500);
+    throw new Error(`Current spend cap is too low for the input cost of ${pricingEstimate.pricing.name}.`);
+  }
   let allowedMax = originalMax;
   if (!pricingEstimate.free && pricingEstimate.pricing.output > 0) {
     allowedMax = Math.floor((callBudget * SAFETY_FACTOR - pricingEstimate.inputCost) / pricingEstimate.pricing.output);
@@ -363,13 +372,14 @@ async function guardedCompletion(input, init) {
   const nextInit = { ...init, body: JSON.stringify(body) };
   const response = await nativeFetch(input, nextInit);
   if (response.ok) {
-    response.clone().json().then(payload => {
+    try {
+      const payload = await response.clone().json();
       const usage = payload?.usage || null;
       const exact = Number(usage?.cost);
       const fallback = fallbackUsageCost(body, usage);
       const cost = Number.isFinite(exact) ? exact : fallback;
       if (Number.isFinite(cost)) recordCost({ modelId: body.model, cost, usage, repair, estimated: !Number.isFinite(exact) });
-    }).catch(() => {});
+    } catch {}
   }
   return response;
 }
@@ -387,6 +397,9 @@ window.fetch = function spendGuardedFetch(input, init) {
 els.spendButton?.addEventListener('click', openSpendDrawer);
 els.closeSpend?.addEventListener('click', closeSpendDrawer);
 els.drawerScrim?.addEventListener('click', closeSpendDrawer);
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && els.spendDrawer?.classList.contains('is-open')) closeSpendDrawer();
+});
 for (const input of [els.perDreamInput, els.sessionCapInput, els.dailyCapInput, els.confirmAboveInput, els.confirmExpensiveInput]) {
   input?.addEventListener('change', saveSettingsFromUi);
 }
