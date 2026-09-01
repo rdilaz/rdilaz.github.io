@@ -7,34 +7,51 @@ on:
       - 'public/visualizer/**'
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
+      - 'tests/**'
+      - 'playwright.config.mjs'
       - '.github/workflows/visualizer-check.yml'
-      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
       - 'public/visualizer/**'
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
+      - 'tests/**'
+      - 'playwright.config.mjs'
       - '.github/workflows/visualizer-check.yml'
-      - '.github/workflows/deploy.yml'
 
 jobs:
   visualizer-contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
       - name: Check visualizer JavaScript syntax
         run: |
-          find public/visualizer -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -r -n1 node --check
-          node --check scripts/visualizer-static-check.mjs
-      - name: Verify browser provider and visualizer contracts
+          for file in public/visualizer/*.js scripts/visualizer-static-check.mjs tests/*.mjs playwright.config.mjs; do
+            node --check "$file"
+          done
+
+      - name: Verify visualizer safety, freedom, provider and reliability contracts
         run: node scripts/visualizer-static-check.mjs
+
       - name: Install portfolio dependencies
         run: npm ci
+
       - name: Build portfolio with visualizer payload
         run: npm run build
+
+      - name: Install Chromium reliability test runner
+        run: |
+          npm install --no-save --no-package-lock @playwright/test@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Run real-browser Dream reliability corpus
+        run: npx playwright test --config=playwright.config.mjs
