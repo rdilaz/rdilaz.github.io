@@ -16,6 +16,10 @@ export default function Home() {
         <h3 id="projects-heading">Projects</h3>
         <ul className="projects-list">
           <li>
+            <a href="/visualizer/">AI Visualizer</a>
+            {' '}— Pick an AI model and see what it thinks music looks like.
+          </li>
+          <li>
             <a href="https://mcb.ryo-nd.com" target="_blank" rel="noopener noreferrer">
               Most Common Blunder
             </a>
@@ -41,22 +45,11 @@ export default function Home() {
                 disappear into a universe that is being drawn only for this moment.
               </p>
             </div>
-            <button
-              type="button"
-              className="experiment-toggle"
-              aria-expanded={fieldOpen}
-              aria-controls="dream-field-panel"
-              onClick={() => setFieldOpen((open) => !open)}
-            >
+            <button type="button" className="experiment-toggle" aria-expanded={fieldOpen} aria-controls="dream-field-panel" onClick={() => setFieldOpen((open) => !open)}>
               {fieldOpen ? 'Close the field' : 'Enter the field →'}
             </button>
           </div>
-
-          {fieldOpen && (
-            <div className="experiment-panel" id="dream-field-panel">
-              <DreamField />
-            </div>
-          )}
+          {fieldOpen && <div className="experiment-panel" id="dream-field-panel"><DreamField /></div>}
         </div>
       </section>
     </main>

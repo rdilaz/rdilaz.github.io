@@ -1,0 +1,39 @@
+name: Visualizer checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'public/visualizer/**'
+      - 'docs/visualizer/**'
+      - 'scripts/visualizer-static-check.mjs'
+      - '.github/workflows/visualizer-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'public/visualizer/**'
+      - 'docs/visualizer/**'
+      - 'scripts/visualizer-static-check.mjs'
+      - '.github/workflows/visualizer-check.yml'
+
+jobs:
+  visualizer-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check visualizer JavaScript syntax
+        run: |
+          for file in public/visualizer/*.js scripts/visualizer-static-check.mjs; do
+            node --check "$file"
+          done
+      - name: Verify visualizer safety and fairness contract
+        run: node scripts/visualizer-static-check.mjs
+      - name: Install portfolio dependencies
+        run: npm ci
+      - name: Build portfolio with visualizer payload
+        run: npm run build
