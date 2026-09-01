@@ -54,11 +54,14 @@ Future inference-level support must come from verified provider capability metad
 A successful generation or repair returns:
 
 - raw model text;
+- the decoded raw provider response and parsed payload at the trusted browser boundary when tracing is available;
 - extracted complete HTML;
 - resolved model identity;
 - usage accounting when available;
 - request id when available;
 - prompt version and attempt number.
+
+Generation and repair are separate append-only trace attempts. The provider adapter does not claim access to hidden model reasoning: only reasoning fields explicitly returned by the provider and separate reasoning-token accounting may be retained.
 
 The shared host, not the adapter, validates HTML, runs the Dream reliability harness, stores successful generations, and decides whether one bounded repair is needed.
 

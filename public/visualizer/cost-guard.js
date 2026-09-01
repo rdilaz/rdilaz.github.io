@@ -1,3 +1,10 @@
+import {
+  captureFinalRequest,
+  captureRequestDispatched,
+  captureTraceError,
+  traceContextFromInit,
+} from './trace-bridge.js';
+
 const nativeFetch = window.fetch.bind(window);
 
 const OPENROUTER_KEY_STORAGE = 'ai-visualizer.openrouter.key';
@@ -326,7 +333,7 @@ function fallbackUsageCost(body, usage) {
   return pricing.request + promptTokens * pricing.input + completionTokens * pricing.output;
 }
 
-async function guardedCompletion(input, init) {
+async function executeGuardedCompletion(input, init, traceContext) {
   const body = completionBody(init);
   if (!body?.model) return nativeFetch(input, init);
   const repair = isRepairRequest(body);
@@ -369,7 +376,17 @@ async function guardedCompletion(input, init) {
   }
   body.max_tokens = allowedMax;
   body.usage = { ...(typeof body.usage === 'object' ? body.usage : {}), include: true };
-  const nextInit = { ...init, body: JSON.stringify(body) };
+  const serializedBody = JSON.stringify(body);
+  captureFinalRequest(traceContext, {
+    method: init?.method || 'POST',
+    endpoint: 'openrouter.chat.completions',
+    url: typeof input === 'string' ? input : input?.url || '',
+    headers: init?.headers || {},
+    body,
+    serializedBody,
+  });
+  const nextInit = { ...init, body: serializedBody };
+  captureRequestDispatched(traceContext);
   const response = await nativeFetch(input, nextInit);
   if (response.ok) {
     try {
@@ -379,9 +396,21 @@ async function guardedCompletion(input, init) {
       const fallback = fallbackUsageCost(body, usage);
       const cost = Number.isFinite(exact) ? exact : fallback;
       if (Number.isFinite(cost)) recordCost({ modelId: body.model, cost, usage, repair, estimated: !Number.isFinite(exact) });
-    } catch {}
+    } catch {
+      // Missing usage metadata must not turn a successful provider response into a retry.
+    }
   }
   return response;
+}
+
+async function guardedCompletion(input, init) {
+  const traceContext = traceContextFromInit(init);
+  try {
+    return await executeGuardedCompletion(input, init, traceContext);
+  } catch (error) {
+    captureTraceError(traceContext, error, { stage: 'spend-guard-or-transport' });
+    throw error;
+  }
 }
 
 window.fetch = function spendGuardedFetch(input, init) {

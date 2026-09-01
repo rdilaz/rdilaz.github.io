@@ -21,7 +21,11 @@
         <header class="top-chrome chrome" aria-label="Visualizer status">
           <div class="identity">
             <span class="identity__mark">◌</span>
-            <span class="identity__copy"><strong>See what AI thinks music looks like.</strong><small id="topStatus">Ready</small></span>
+            <span class="identity__copy">
+              <strong>See what AI thinks music looks like.</strong>
+              <span class="identity__truth" id="liveIdentity" role="status" aria-live="polite" aria-label="Live visualizer: Calibration Bloom"><span class="identity__truth-label" aria-hidden="true">LIVE</span><span class="sr-only">Live visualizer:</span><span id="liveIdentityName">Calibration Bloom</span></span>
+              <small id="topStatus">Ready</small>
+            </span>
           </div>
           <div class="top-actions">
             <button class="icon-button diagnostics-button" id="diagnosticsButton" type="button" aria-label="Open developer diagnostics" title="Developer diagnostics" hidden>DEV</button>
@@ -55,7 +59,7 @@
         </div>
 
         <nav class="controls chrome" id="controls" aria-label="Visualizer controls">
-          <button class="control control--model" id="modelButton" type="button"><span class="control__hint">MODEL</span><strong id="selectedModelName">Choose a model</strong></button>
+          <button class="control control--model" id="modelButton" type="button" aria-labelledby="nextModelLabel selectedModelName"><span class="control__hint" id="nextModelLabel">NEXT</span><strong id="selectedModelName" aria-live="polite">Choose a model</strong></button>
           <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model"><span class="control__icon">✦</span><span>Dream</span><small class="dream-cost" id="dreamCost"></small></button>
           <button class="control control--icon" id="favoriteButton" type="button" aria-label="Favorite this visualizer" title="Favorite">♡</button>
           <button class="control control--audio" id="audioButton" type="button"><span class="audio-dot" id="audioDot" aria-hidden="true"></span><span id="audioButtonLabel">Connect audio</span></button>
@@ -130,11 +134,16 @@
         <button id="exportDiagnostics" type="button">Export all</button>
         <button id="copyCurrentHtml" type="button">Copy active HTML</button>
         <button id="retestCurrent" type="button">Retest active</button>
+        <button id="transparencySelfTest" type="button">Load no-cost trace demo</button>
         <button id="pickDiagnosticModel" type="button">Pick cheap test model</button>
         <button id="clearDiagnostics" type="button">Clear diagnostics</button>
       </div>
       <div class="diagnostics-summary" id="diagnosticsSummary">Loading diagnostics…</div>
       <details class="diagnostics-live-panel" open><summary>Live runtime events</summary><pre id="diagnosticsLive">No live diagnostic events yet.</pre></details>
+      <section class="dream-trace-viewer" id="traceViewer" aria-labelledby="traceViewerTitle" hidden>
+        <header class="dream-trace-viewer__head"><div><span class="eyebrow">DREAM TRACE</span><h3 id="traceViewerTitle">Dream trace</h3></div><button id="closeTraceViewer" type="button" aria-label="Close Dream Trace">Close</button></header>
+        <div id="traceViewerContent"></div>
+      </section>
       <div class="diagnostics-list" id="diagnosticsList"></div>
       <p class="diagnostics-boundary"><strong>Backdoor:</strong> add <code>?dev=1</code> to the Visualizer URL or press <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd>. Use <code>window.VIZ_DEV</code> in DevTools for scripted access. Everything remains on this browser unless you explicitly copy or export it.</p>
     </aside>
@@ -161,8 +170,8 @@
         syncRevealSurface();
       })();
     </script>
-    <script src="./dream-status.js"></script>
-    <script src="./cost-guard.js"></script>
+    <script type="module" src="./dream-status.js"></script>
+    <script type="module" src="./cost-guard.js"></script>
     <script type="module" src="./app.js"></script>
     <script type="module" src="./model-guide.js"></script>
   </body>

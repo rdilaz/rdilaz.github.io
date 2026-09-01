@@ -25,6 +25,7 @@ function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('Visualizer storage upgrade is blocked by another open tab.'));
     request.onupgradeneeded = () => {
       const db = request.result;
       createGenerationStore(db);
@@ -60,6 +61,12 @@ class BrowserStore {
   async init() {
     try {
       this.db = await openDatabase();
+      const connection = this.db;
+      connection.onversionchange = () => {
+        connection.close();
+        if (this.db === connection) this.db = null;
+        this.persistent = false;
+      };
     } catch {
       this.persistent = false;
     }
@@ -84,9 +91,10 @@ class BrowserStore {
   }
 
   async list() {
-    if (!this.db) return [...this.memory.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    const newestFirst = (a, b) => (b.createdAt || 0) - (a.createdAt || 0) || String(b.id || '').localeCompare(String(a.id || ''));
+    if (!this.db) return [...this.memory.values()].sort(newestFirst);
     const values = await requestResult(this.db.transaction(this.storeName, 'readonly').objectStore(this.storeName).getAll());
-    return values.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return values.sort(newestFirst);
   }
 
   async remove(id) {
@@ -153,7 +161,7 @@ export class DiagnosticStore extends BrowserStore {
 
   async list(limit = MAX_DIAGNOSTICS) {
     const values = await super.list();
-    return values.slice(0, Math.max(1, limit));
+    return values.slice(0, Math.max(0, Number(limit) || 0));
   }
 
   async latest() {

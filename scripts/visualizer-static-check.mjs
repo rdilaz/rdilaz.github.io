@@ -6,6 +6,10 @@ const read = path => readFile(new URL(path, root), 'utf8');
 const [
   index,
   app,
+  liveIdentity,
+  dreamTrace,
+  traceBridge,
+  traceViewer,
   audio,
   sandbox,
   reliability,
@@ -20,10 +24,17 @@ const [
   reliabilityCss,
   workflow,
   deploy,
+  development,
+  transparencyContract,
+  transparencyBrowser,
   aetheriaFixture,
 ] = await Promise.all([
   read('public/visualizer/index.html'),
   read('public/visualizer/app.js'),
+  read('public/visualizer/live-identity.js'),
+  read('public/visualizer/dream-trace.js'),
+  read('public/visualizer/trace-bridge.js'),
+  read('public/visualizer/trace-viewer.js'),
   read('public/visualizer/audio-engine.js'),
   read('public/visualizer/sandbox.js'),
   read('public/visualizer/reliability.js'),
@@ -38,6 +49,9 @@ const [
   read('public/visualizer/reliability.css'),
   read('.github/workflows/visualizer-check.yml'),
   read('.github/workflows/deploy.yml'),
+  read('docs/visualizer/DEVELOPMENT.md'),
+  read('tests/dream-transparency.contract.mjs'),
+  read('tests/dream-transparency.spec.mjs'),
   read('tests/fixtures/aetheria-gemini-3.7-flash.html'),
 ]);
 
@@ -104,11 +118,38 @@ expect(app.includes('heartbeatAgeMs() > 8000') && app.includes('recoverFromRunti
 expect(storage.includes("DIAGNOSTIC_STORE = 'diagnostics'") && storage.includes('DB_VERSION = 2'), 'Diagnostics need their own durable IndexedDB store.');
 expect(storage.includes('MAX_DIAGNOSTICS = 60'), 'Diagnostics store must remain bounded.');
 expect(diagnostics.includes("DIAGNOSTIC_SCHEMA = 'dream-diagnostic-v1'"), 'Diagnostic schema must be versioned.');
-expect(diagnostics.includes("'authorization'") && diagnostics.includes("'waveform'") && diagnostics.includes("'spectrum'"), 'Diagnostic export must redact credentials and audio arrays defensively.');
+expect(diagnostics.includes('sanitizeTraceValue') && dreamTrace.includes('authorization') && dreamTrace.includes('waveform') && dreamTrace.includes('spectrum'), 'Diagnostic export must redact credentials and audio arrays defensively.');
 expect(app.includes("params.get('dev') === '1'") && app.includes("event.key.toLowerCase() === 'd'"), 'Developer mode must be available through ?dev=1 and Ctrl+Shift+D.');
 expect(app.includes("Object.defineProperty(window, 'VIZ_DEV'") && index.includes('Dream diagnostics.'), 'VIZ_DEV API and diagnostic drawer must be available without public UI clutter.');
 expect(app.includes('copyCurrentHtml') && app.includes('retestCurrentVisualizer') && app.includes('exportAll'), 'Dev mode must support HTML copy, deterministic retest and JSON export.');
-expect(!app.includes('waveform: sample.waveform') || diagnostics.includes("output[key] = '[redacted]'"), 'Diagnostic export must never preserve captured waveform/spectrum values.');
+expect(!app.includes('waveform: sample.waveform') || dreamTrace.includes("REDACTED = '[redacted]'"), 'Diagnostic export must never preserve captured waveform/spectrum values.');
+
+// Dream Transparency v1: independent identity, exact request boundary and inert local traces.
+expect(index.includes('id="liveIdentityName"') && index.includes('id="nextModelLabel">NEXT<'), 'Normal UI must expose separate LIVE and NEXT identities.');
+expect(liveIdentity.includes('Calibration Bloom') && liveIdentity.includes('Choose a model'), 'Identity state must begin with truthful built-in LIVE and empty NEXT values.');
+expect(liveIdentity.includes('stage') && liveIdentity.includes('commit') && liveIdentity.includes('candidate'), 'LIVE promotion must be an explicit staged identity transition.');
+expect(!/function updateAudioState[\s\S]{0,500}liveIdentityName/.test(app), 'Audio state must never write the persistent LIVE identity.');
+expect(app.includes('deletingGeneration') && app.includes('before deleting a saved visualizer'), 'Library deletion must not overlap candidate generation or promotion.');
+expect(app.includes('fallbackGeneration?.id === generation.id'), 'Deleting a rollback target must prevent the deleted Dream from being resurrected.');
+expect(dreamTrace.includes("DREAM_TRACE_SCHEMA = 'dream-trace-v1'") || dreamTrace.includes('DREAM_TRACE_SCHEMA = "dream-trace-v1"'), 'Dream trace schema must be explicitly versioned.');
+expect(dreamTrace.includes('Not captured by this app version.'), 'Legacy missing request data must be labeled without reconstruction.');
+expect(dreamTrace.includes('Reasoning not exposed by provider.') && dreamTrace.includes('Reasoning text not exposed by provider.'), 'Reasoning absence and token-only accounting must be distinguished truthfully.');
+expect(dreamTrace.includes('reasoning_details') && dreamTrace.includes('reasoning_tokens'), 'Provider-exposed reasoning fields and reasoning accounting must be preserved separately.');
+expect(dreamTrace.includes('rawBody') && dreamTrace.includes('rawOutput') && dreamTrace.includes('extractedHtml'), 'Raw provider body, model output and extracted HTML must remain distinct.');
+expect(dreamTrace.includes('recordDreamTraceRollback') && dreamTrace.includes('runtime:rolled-back'), 'Late runtime rollback must remain durable trace aftercare.');
+expect(traceBridge.includes('Symbol') && traceBridge.includes('Map') && traceBridge.includes('correlation'), 'Provider attempts need per-request correlation rather than a global latest request.');
+expect(traceBridge.includes('stripTraceContext') && traceBridge.includes('authorization'), 'Trace metadata must be removed before native fetch and authorization values sanitized.');
+const maxTokenMutation = costGuard.indexOf('body.max_tokens = allowedMax');
+const finalRequestCapture = costGuard.indexOf('captureFinalRequest(traceContext');
+expect(maxTokenMutation >= 0 && finalRequestCapture > maxTokenMutation, 'Final request capture must occur after spend-guard max_tokens mutation.');
+expect(providerRuntime.includes('rawBodyText') && providerRuntime.includes('response.text()'), 'Provider runtime must retain the exact decoded response body before parsing.');
+expect(dreamStatus.includes('dreamTimeoutError') && app.includes("error?.code || 'PROVIDER_OR_PIPELINE_FAILURE'"), 'Response-body timeout must not be mislabeled as user cancellation.');
+expect(!traceViewer.includes('.innerHTML') && !traceViewer.includes('srcdoc') && traceViewer.includes('.textContent'), 'Trace viewer must render provider output and HTML as inert text only.');
+expect(index.includes('id="traceViewer"') && index.includes('id="transparencySelfTest"'), 'Developer mode must include the hidden Trace viewer and no-cost fixture action.');
+expect(app.includes('runTransparencySelfTest') && app.includes('latestTrace') && app.includes('identity()'), 'VIZ_DEV must expose identity, traces and the no-cost transparency self-test.');
+expect(development.includes('npm.cmd run dev') && development.includes('LIVE') && development.includes('NEXT') && development.includes('runTransparencySelfTest'), 'VS Code development guide must document setup and Dream Transparency operation.');
+expect(workflow.includes('node --test --test-concurrency=1 tests/dream-transparency.contract.mjs'), 'CI must execute the pure Dream Transparency contract.');
+expect(transparencyContract.includes('DREAM_TRACE_SCHEMA') && transparencyBrowser.includes('runTransparencySelfTest'), 'Deterministic trace contract and real-host browser coverage must remain present.');
 
 // Real regression corpus and browser verification.
 expect(aetheriaFixture.includes('AETHERIA :: Resonant Topology') && aetheriaFixture.includes('gl.compileShader'), 'Real Gemini blank-screen output must remain a regression fixture.');

@@ -9,7 +9,11 @@ on:
       - 'scripts/visualizer-static-check.mjs'
       - 'tests/**'
       - 'playwright.config.mjs'
+      - 'vite.config.js'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/visualizer-check.yml'
+      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
@@ -18,7 +22,11 @@ on:
       - 'scripts/visualizer-static-check.mjs'
       - 'tests/**'
       - 'playwright.config.mjs'
+      - 'vite.config.js'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/visualizer-check.yml'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   visualizer-contract:
@@ -45,6 +53,9 @@ jobs:
       - name: Verify live Dream model eligibility contract
         run: node tests/model-eligibility.spec.mjs
 
+      - name: Verify Dream transparency contracts
+        run: node --test --test-concurrency=1 tests/dream-transparency.contract.mjs
+
       - name: Install portfolio dependencies
         run: npm ci
 
@@ -56,5 +67,5 @@ jobs:
           npm install --no-save --no-package-lock @playwright/test@1.55.0
           npx playwright install --with-deps chromium
 
-      - name: Run real-browser Dream reliability corpus
+      - name: Run real-browser Dream reliability and transparency corpus
         run: npx playwright test --config=playwright.config.mjs

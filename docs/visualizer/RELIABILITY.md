@@ -91,7 +91,7 @@ Heavy but functioning rendering is normally a warning (`HEAVY_RENDERER`), not an
 
 ## Local diagnostics and developer mode
 
-Every attempt—including safe failures—gets a bounded local IndexedDB record under `dream-diagnostic-v1`. Records include provider/model/request identity when available, timings, token/cost metadata, generated HTML, static checks, renderer evidence, repair history, promotion/watchdog status, failure code, and rollback reason.
+Every attempt—including safe failures—gets a bounded local IndexedDB record under `dream-diagnostic-v1`. New records carry a nested `dream-trace-v1` conversation and attempt history containing the exact sanitized application-boundary request/response evidence when captured, while legacy records remain readable and explicitly label fields that older app versions did not capture. Records include provider/model/request identity when available, timings, token/cost metadata, generated HTML, static checks, renderer evidence, repair history, promotion/watchdog status, failure code, and rollback reason.
 
 Developer mode is intentionally hidden from normal users:
 
@@ -99,7 +99,7 @@ Developer mode is intentionally hidden from normal users:
 - or press `Ctrl+Shift+D`;
 - or call `window.VIZ_DEV.enable()` in DevTools.
 
-`window.VIZ_DEV` can list/export diagnostics, copy the latest record, copy active HTML, report runtime state, and deterministically retest the active visualizer. Export is explicit and local-only by default.
+`window.VIZ_DEV` can list/export diagnostics and traces, copy exact captured messages/output/HTML, report LIVE versus NEXT identity, run a no-cost transparency fixture, and deterministically retest stored HTML. Export is explicit, recursively redacted, and local-only by default.
 
 ## Regression corpus
 
