@@ -1,43 +1,39 @@
 # Visualizer Roadmap
 
-The roadmap is ordered around usable browser experiences, not infrastructure phases.
+The roadmap is ordered around usable miracles rather than infrastructure phases.
 
-## Browser Provider Reset v1 — CURRENT
+## Browser Provider Reset v1 — COMPLETE
 
-Remove the desktop/local detour completely; lock the normal experience to browser-only and user-funded provider connections; establish `visualizer-provider-v1`; keep OpenRouter as the sole reference adapter; preserve the canonical prompt, audio runtime, sandbox, saves, battles, spend controls, and truthful Dream lifecycle.
+Browser-only, user-funded model access is the hard product boundary. OpenRouter is the reference provider. Localhost, terminal, desktop-helper, extension, and companion-executable paths are removed.
 
-## V0.1 — OpenRouter live acceptance
+## Dream Reliability Harness v1 — CURRENT
 
-Prove the entire real flow repeatedly in Chrome/Edge: connect, catalog, Dream, response-body progress, validation, bounded repair, launch, exact usage accounting, cancellation, reconnect, insufficient-balance handling, rate-limit handling, and recovery without replacing the current visualizer on failure.
+Transactional dual-sandbox promotion; generated-console capture; WebGL compiler/link/context diagnostics; medium-agnostic visible-output proof; deterministic synthetic VIZ stimulation; actual-viewport canary; one concrete same-model repair; reversible launch watchdog; long-lived heartbeat recovery; local diagnostic flight recorder; hidden `?dev=1` / `Ctrl+Shift+D` / `window.VIZ_DEV` tools; real Chromium regression corpus including the Gemini AETHERIA failure.
 
-## V0.2 — Music and rendering performance
+## Browser acceptance and latency
 
-Display-rate host frames; latency profiling; generated-visualizer FPS/long-frame monitoring; bounded optimization/repair for janky output; capture-ended recovery; real Chrome/Edge/macOS/Windows audio-source matrix; graceful unsupported-browser guidance.
+Repeated real Chrome/Edge Windows/macOS acceptance using a fast inexpensive model first. Verify successful generation, repair, rollback, saved reopening, audio responsiveness, 60 Hz host delivery, fullscreen stability, capture-ended recovery, and heavy-renderer behavior.
 
-## V0.3 — Inference-level comparison
+## Generation reliability expansion
 
-Add a provider-neutral capability model for reasoning/inference controls. Where a supported API exposes levels such as low, medium, high, or xhigh, show them as explicit variants while preserving the same prompt and audio contract. Never invent levels a provider does not expose.
+Streaming provider proof-of-life without running partial HTML; richer provider request identity; bounded output-length adaptation; more real model-output regression fixtures; optional user-visible support bundle that never includes music or credentials.
 
-## V0.4 — Browser provider gateway
+## Multi-provider browser gateway
 
-Add a small hosted gateway only when a provider cannot safely work browser-direct. It may handle OAuth callbacks, encrypted user-owned credentials, CORS, normalized requests, and usage reporting. It must not require local software and must not silently fund inference from a site-owned account.
+Add providers only through supported browser/API authorization. Hosted HTTPS gateways may handle CORS or secret exchange invisibly. User-funded access remains the default. Normalize provider/model/capability/inference-effort metadata without leaking provider infrastructure into the main UI.
 
-## V0.5 — Additional providers
+## Inference-level comparison
 
-Add providers one at a time through `visualizer-provider-v1`, only after their supported authentication and billing model is verified. Keep provider details secondary to the model-selection experience.
+Expose low/medium/high/xhigh or equivalent controls only where the connected API officially supports them. Persist provider, exact model, inference level, prompt version, and health evidence with every Dream. Support same-model/different-effort Battles.
 
-## V0.6 — Gallery polish
+## Gallery and session polish
 
-Instant transitions; collections; recent models; reroll affordance; optional auto-rotation/party mode; better model-vs-model and inference-level Battles.
+Instant transitions, collections, recent models, reroll affordance, optional auto-rotation/party mode, and verified-only battle pools.
 
-## V0.7 — Dedicated product extraction
+## Dedicated product extraction
 
-Choose a final name/domain only after the experience deserves one; extract `/visualizer/` into its own repository without changing behavior; use a dedicated deployment and sandbox origin.
+Choose final name/domain only after the browser experience deserves one. Extract `/visualizer/` into its own repository without changing the accepted creative, security, provider, and reliability contracts.
 
-## V1 — Public ship
+## Public V1
 
-Production domain; hardened authentication/session behavior; cost and abuse controls; durable synced library only if it materially helps; shareable generation links; polished onboarding; public privacy/security/provider documentation.
-
-## Explicitly outside the current roadmap
-
-Desktop applications, native audio wrappers, localhost services, terminal setup, companion executables, browser extensions, and tunneling consumer chat subscriptions through local software.
+Production domain; hardened authentication/session behavior; abuse/cost controls; optional account/library sync only if it materially helps; shareable verified generation links; polished onboarding; public privacy/security/reliability documentation.
