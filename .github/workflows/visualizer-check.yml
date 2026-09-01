@@ -9,6 +9,7 @@ on:
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
       - 'scripts/model-lab-bridge-static-check.mjs'
+      - 'scripts/windows-companion-static-check.mjs'
       - '.github/workflows/visualizer-check.yml'
   push:
     branches: [main]
@@ -18,6 +19,7 @@ on:
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
       - 'scripts/model-lab-bridge-static-check.mjs'
+      - 'scripts/windows-companion-static-check.mjs'
       - '.github/workflows/visualizer-check.yml'
 
 jobs:
@@ -36,13 +38,15 @@ jobs:
           go-version: '1.23.x'
       - name: Check visualizer JavaScript syntax
         run: |
-          for file in public/visualizer/*.js public/visualizer/*.mjs scripts/visualizer-static-check.mjs scripts/model-lab-bridge-static-check.mjs; do
+          for file in public/visualizer/*.js public/visualizer/*.mjs scripts/visualizer-static-check.mjs scripts/model-lab-bridge-static-check.mjs scripts/windows-companion-static-check.mjs; do
             node --check "$file"
           done
       - name: Verify visualizer safety and fairness contract
         run: node scripts/visualizer-static-check.mjs
       - name: Verify Windows Model Lab bridge contract
         run: node scripts/model-lab-bridge-static-check.mjs
+      - name: Verify one-click Windows companion contract
+        run: node scripts/windows-companion-static-check.mjs
       - name: Build Windows companion
         env:
           CGO_ENABLED: 0
