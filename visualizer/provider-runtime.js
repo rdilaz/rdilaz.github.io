@@ -1,5 +1,12 @@
 import { PROMPT_VERSION, buildGenerationMessages, buildRepairMessages } from './prompt.js';
 import { filterLiveDreamModels, liveDreamEligibility, MODEL_ELIGIBILITY_VERSION } from './model-eligibility.js';
+import {
+  attachTraceContext,
+  captureAvailabilityEnd,
+  captureAvailabilityStart,
+  captureProviderResponse,
+  captureTraceError,
+} from './trace-bridge.js';
 
 export const PROVIDER_CONTRACT_VERSION = 'visualizer-provider-v1';
 export const DEFAULT_PROVIDER_ID = 'openrouter';
@@ -197,8 +204,8 @@ function normalizeModel(model) {
   };
 }
 
-async function fetchRawOpenRouterCatalog({ fresh = false } = {}) {
-  const response = await fetch(OPENROUTER_MODELS_URL, fresh ? { cache: 'no-store' } : undefined);
+async function fetchRawOpenRouterCatalog({ fresh = false, signal } = {}) {
+  const response = await fetch(OPENROUTER_MODELS_URL, fresh || signal ? { ...(fresh ? { cache: 'no-store' } : {}), signal } : undefined);
   if (!response.ok) throw new Error('The OpenRouter model catalog could not be loaded. Check your connection and try again.');
   const payload = await response.json();
   return Array.isArray(payload.data) ? payload.data : [];
@@ -220,7 +227,9 @@ async function fetchOpenRouterModels() {
         && Date.now() - parsed.savedAt < 15 * 60 * 1000
         && Array.isArray(parsed.models)
       ) return parsed.models;
-    } catch {}
+    } catch {
+      // A stale or malformed session cache is ignored in favor of the live catalog.
+    }
   }
 
   const rawModels = await fetchRawOpenRouterCatalog();
@@ -248,11 +257,13 @@ function modelEligibilityError(modelId, reason) {
   return error;
 }
 
-async function assertCurrentOpenRouterModel(modelId) {
+async function assertCurrentOpenRouterModel(modelId, { signal, traceContext } = {}) {
+  captureAvailabilityStart(traceContext, { modelId, endpoint: 'openrouter.models' });
   let rawModels;
   try {
-    rawModels = await fetchRawOpenRouterCatalog({ fresh: true });
+    rawModels = await fetchRawOpenRouterCatalog({ fresh: true, signal });
   } catch (error) {
+    captureAvailabilityEnd(traceContext, { modelId, status: 'failed', code: 'MODEL_AVAILABILITY_UNVERIFIED', error });
     const verificationError = new Error('Could not verify that this model is still available for a live Dream. No generation request was sent; try again in a moment.');
     verificationError.code = 'MODEL_AVAILABILITY_UNVERIFIED';
     verificationError.cause = error;
@@ -262,14 +273,18 @@ async function assertCurrentOpenRouterModel(modelId) {
   const raw = rawModels.find(model => model?.id === modelId);
   if (!raw) {
     sessionStorage.removeItem(MODELS_CACHE);
+    captureAvailabilityEnd(traceContext, { modelId, status: 'failed', code: 'NOT_IN_CURRENT_CATALOG' });
     throw modelEligibilityError(modelId, 'NOT_IN_CURRENT_CATALOG');
   }
   const eligibility = liveDreamEligibility(raw);
   if (!eligibility.eligible) {
     sessionStorage.removeItem(MODELS_CACHE);
+    captureAvailabilityEnd(traceContext, { modelId, status: 'failed', code: eligibility.reason });
     throw modelEligibilityError(modelId, eligibility.reason);
   }
-  return normalizeModel(raw);
+  const normalized = normalizeModel(raw);
+  captureAvailabilityEnd(traceContext, { modelId, status: 'succeeded', resolvedModel: normalized.id });
+  return normalized;
 }
 
 function extractText(payload) {
@@ -318,9 +333,11 @@ function openRouterError(response, payload, modelId) {
   return new Error(detail || `OpenRouter model request failed (${response.status}).`);
 }
 
-async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxTokens = 14000 }) {
-  await assertCurrentOpenRouterModel(modelId);
-  const response = await fetch(OPENROUTER_COMPLETIONS_URL, {
+async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxTokens = 14000, signal, traceContext }) {
+  await assertCurrentOpenRouterModel(modelId, { signal, traceContext });
+  let response;
+  try {
+    response = await fetch(OPENROUTER_COMPLETIONS_URL, attachTraceContext({
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -335,13 +352,59 @@ async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxToken
       max_tokens: maxTokens,
       stream: false,
     }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw openRouterError(response, payload, modelId);
+    signal,
+  }, traceContext));
+  } catch (error) {
+    captureTraceError(traceContext, error, { stage: 'provider-fetch' });
+    throw error;
+  }
+
+  let rawBodyText;
+  let payload = {};
+  let parseError = null;
+  try {
+    rawBodyText = await response.text();
+  } catch (error) {
+    captureTraceError(traceContext, error, { stage: 'provider-response-body', status: response.status });
+    throw error;
+  }
+  try {
+    payload = rawBodyText ? JSON.parse(rawBodyText) : {};
+  } catch (error) {
+    parseError = error;
+  }
   const raw = extractText(payload);
-  if (!raw.trim()) throw new Error(`${modelId} returned no visualizer code. Your current visualizer is still safe.`);
+  captureProviderResponse(traceContext, {
+    response,
+    rawBodyText,
+    parsedPayload: payload,
+    parseError,
+    assistantText: raw,
+    finishReason: payload?.choices?.[0]?.finish_reason ?? null,
+    resolvedModel: payload?.model || modelId,
+    requestId: response.headers.get('x-request-id') || payload?.id || null,
+    usage: payload?.usage || null,
+  });
+  if (!response.ok) {
+    const error = parseError
+      ? new Error(`OpenRouter returned HTTP ${response.status} with a non-JSON error response. Your current visualizer is still safe.`)
+      : openRouterError(response, payload, modelId);
+    captureTraceError(traceContext, error, { stage: 'provider-response', status: response.status, payload });
+    throw error;
+  }
+  if (parseError) {
+    const error = new Error('OpenRouter returned a response that was not valid JSON. Your current visualizer is still safe.');
+    captureTraceError(traceContext, error, { stage: 'provider-response-parse' });
+    throw error;
+  }
+  if (!raw.trim()) {
+    const error = new Error(`${modelId} returned no visualizer code. Your current visualizer is still safe.`);
+    captureTraceError(traceContext, error, { stage: 'provider-empty-response' });
+    throw error;
+  }
   return {
     raw,
+    rawBodyText,
     usage: payload.usage || null,
     resolvedModel: payload.model || modelId,
     requestId: response.headers.get('x-request-id') || payload.id || null,
@@ -349,23 +412,27 @@ async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxToken
   };
 }
 
-async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCredential() }) {
+async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCredential(), signal, traceContext }) {
   if (!apiKey) throw new Error('Connect OpenRouter before asking a model to Dream.');
   const result = await requestOpenRouterCompletion({
     modelId,
     apiKey,
     messages: buildGenerationMessages(),
+    signal,
+    traceContext,
   });
   return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 1 };
 }
 
-async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential() }) {
+async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential(), signal, traceContext }) {
   if (!apiKey) throw new Error('The OpenRouter connection was lost before repair.');
   const result = await requestOpenRouterCompletion({
     modelId,
     apiKey,
     messages: buildRepairMessages(String(raw || '').slice(0, 180000), problem),
     maxTokens: 14000,
+    signal,
+    traceContext,
   });
   return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 2 };
 }

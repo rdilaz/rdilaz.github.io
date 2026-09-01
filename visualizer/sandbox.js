@@ -947,7 +947,10 @@ export class VisualizerSandbox {
         this.lastHeartbeatAt = performance.now();
         this.lastHeartbeat = message.heartbeat || null;
       }
-      if (message.type === 'diagnostic-event' && message.event) this.events.push(message.event);
+      if (message.type === 'diagnostic-event' && message.event) {
+        this.events.push(message.event);
+        if (this.events.length > 120) this.events.splice(0, this.events.length - 120);
+      }
       if (message.type === 'probe-result') {
         const pending = this.pendingProbes.get(message.probeId);
         if (pending) {
