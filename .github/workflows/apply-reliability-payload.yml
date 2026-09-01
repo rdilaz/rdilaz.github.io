@@ -1,0 +1,36 @@
+name: Apply Dream reliability payload
+
+on:
+  push:
+    branches:
+      - milestone/dream-reliability-harness-v1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Restore implementation
+        run: |
+          cat .reliability-payload/part-* | base64 --decode > /tmp/dream-reliability.tar.gz
+          tar -xzf /tmp/dream-reliability.tar.gz
+          rm -rf .reliability-payload
+          rm -f .github/workflows/apply-reliability-payload.yml
+
+      - name: Check generated JavaScript syntax
+        run: |
+          find public scripts tests -type f \( -name '*.js' -o -name '*.mjs' \) -print0 |
+            xargs -0 -n1 node --check
+
+      - name: Commit implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Implement Dream Reliability Harness v1"
+          git push origin HEAD:milestone/dream-reliability-harness-v1
