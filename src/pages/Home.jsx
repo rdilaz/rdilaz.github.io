@@ -36,9 +36,9 @@ export default function Home() {
               <span className="experiment-kicker">Interactive experiment 001</span>
               <h4>A Field That Dreams Back</h4>
               <p className="experiment-description">
-                A living generative universe written in code. Every orbit is created in real time;
-                your pointer becomes gravity, touch becomes a shockwave, and rebirth gives the field
-                a new set of initial conditions.
+                A living generative universe written in code—no video or pre-rendered animation.
+                Every orbit is created in real time; your pointer becomes gravity, touch becomes a
+                shockwave, and rebirth gives the field a new set of initial conditions.
               </p>
             </div>
             <button
