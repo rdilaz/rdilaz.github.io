@@ -82,6 +82,10 @@ expect(sandbox.includes("'linkProgram'") && sandbox.includes('PROGRAM_LINK_FAILE
 expect(sandbox.includes('webglcontextlost') && sandbox.includes('WEBGL_CONTEXT_LOST'), 'Sandbox must capture WebGL context loss.');
 expect(sandbox.includes("'webgpu'") && sandbox.includes('GPUCanvasContext') && sandbox.includes('GPUQueue'), 'Sandbox must preserve and observe WebGPU when available.');
 expect(sandbox.includes('sampleCanvas') && sandbox.includes('inspectDom') && sandbox.includes('visibleProof'), 'Proof-of-life must support canvas plus DOM/SVG/CSS output.');
+expect(sandbox.includes('collectDomElements') && sandbox.includes('document.documentElement') && sandbox.includes('document.body'), 'CSS-only art on html/body and shadow-root descendants must be observable.');
+expect(sandbox.includes("['::before', '::after']") && sandbox.includes('inspectPseudo'), 'CSS pseudo-element art must remain observable.');
+expect(sandbox.includes('data-visualizer-host-style') && sandbox.includes('background:transparent'), 'The host fallback background must not masquerade as generated artwork.');
+expect(sandbox.includes('dynamicRootSurface') && sandbox.includes('rootSurfaceEverChanged'), 'VIZ-driven flat root-surface art must be accepted only after observable activity.');
 expect(sandbox.includes("dominantCanvas.coverage >= 0.45") || sandbox.includes("dominantCanvas && dominantCanvas.coverage >= 0.45"), 'A tiny HUD must not hide failure of a dominant canvas.');
 expect(sandbox.includes("state.mode = 'passive'") && sandbox.includes('intensiveRestores'), 'High-frequency instrumentation must be removed after the rollback window.');
 expect(reliability.includes('createSyntheticFrame') && reliability.includes('after-synthetic-music'), 'Every candidate must receive deterministic synthetic music during preflight.');
@@ -112,6 +116,7 @@ expect(workflow.includes('@playwright/test') && workflow.includes('playwright in
 const browserTests = await read('tests/visualizer-reliability.spec.mjs');
 expect(browserTests.includes('valid-black-webgl'), 'CI must protect intentionally black but functioning artwork.');
 expect(browserTests.includes('webgl-dom-fallback'), 'CI must protect resilient DOM fallbacks when an advanced renderer fails.');
+expect(browserTests.includes('valid-css-only'), 'CI must protect CSS-only root-surface visualizers.');
 
 if (failures.length) {
   console.error('Visualizer reliability contract failed:\n- ' + failures.join('\n- '));

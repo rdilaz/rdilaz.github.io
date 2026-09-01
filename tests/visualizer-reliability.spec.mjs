@@ -24,6 +24,14 @@ test('DOM/SVG art is accepted without requiring canvas or WebGL', async ({ page 
   expect(result.summary.vizConsumed).toBe(true);
 });
 
+test('CSS-only root and pseudo-capable art is accepted without child elements', async ({ page }) => {
+  const result = await run(page, await fixture('valid-css-only.html'));
+  expect(result.passed).toBe(true);
+  expect(result.summary.visible).toBe(true);
+  const proof = result.stages.find(stage => stage.name === 'viewport-canary').report.visual.dom;
+  expect(proof.rootSurfaceNodes).toBeGreaterThan(0);
+});
+
 test('silent WebGL shader failure is rejected with the compiler diagnostic', async ({ page }) => {
   const result = await run(page, await fixture('broken-webgl.html'));
   expect(result.passed).toBe(false);

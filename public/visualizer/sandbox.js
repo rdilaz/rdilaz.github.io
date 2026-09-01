@@ -61,6 +61,8 @@ function sandboxBootstrap(sessionId) {
     runtimeErrors: [],
     events: [],
     lastActivityAt: performance.now(),
+    lastDomStyleHash: 0,
+    rootSurfaceEverChanged: false,
   };
 
   const listeners = new Set();
@@ -503,38 +505,110 @@ function sandboxBootstrap(sessionId) {
     };
   }
 
+  function collectDomElements(limit = 500) {
+    const elements = [];
+    const queue = document.documentElement ? [document.documentElement] : [];
+    const seen = new Set();
+    let shadowRoots = 0;
+
+    while (queue.length && elements.length < limit) {
+      const element = queue.shift();
+      if (!(element instanceof Element) || seen.has(element)) continue;
+      seen.add(element);
+      elements.push(element);
+      for (const child of element.children || []) queue.push(child);
+      if (element.shadowRoot) {
+        shadowRoots += 1;
+        for (const child of element.shadowRoot.children || []) queue.push(child);
+      }
+    }
+
+    return { elements, shadowRoots };
+  }
+
+  function inspectPseudo(element, pseudo, rect, viewportArea) {
+    let style;
+    try { style = getComputedStyle(element, pseudo); } catch { return null; }
+    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.001) return null;
+    const content = String(style.content || '').trim();
+    const hasContent = content && content !== 'none' && content !== 'normal' && content !== '""' && content !== "''";
+    const hasBackgroundImage = Boolean(style.backgroundImage && style.backgroundImage !== 'none');
+    const hasBackgroundColor = colorHasInk(style.backgroundColor);
+    const hasBorder = ['Top', 'Right', 'Bottom', 'Left'].some(side => Number.parseFloat(style[`border${side}Width`]) > 0 && colorHasInk(style[`border${side}Color`]));
+    const hasEffect = (style.boxShadow && style.boxShadow !== 'none') || (style.filter && style.filter !== 'none');
+    if (!(hasContent || hasBackgroundImage || hasBackgroundColor || hasBorder || hasEffect)) return null;
+    const width = Number.parseFloat(style.width);
+    const height = Number.parseFloat(style.height);
+    const estimatedArea = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+      ? Math.min(viewportArea, width * height)
+      : Math.max(1, rect.width * rect.height);
+    return {
+      coverage: Math.min(1, estimatedArea / viewportArea),
+      content: hasContent ? content.slice(0, 80) : '',
+      style,
+    };
+  }
+
   function inspectDom() {
     const viewportArea = Math.max(1, innerWidth * innerHeight);
     let meaningfulNodes = 0;
+    let substantiveNodes = 0;
+    let rootSurfaceNodes = 0;
+    let pseudoElements = 0;
     let totalCoverage = 0;
     let maxCoverage = 0;
     let textCharacters = 0;
     let svgPrimitives = 0;
     let styleHash = 2166136261;
-    const elements = [...document.body.querySelectorAll('*')].slice(0, 500);
+    const collected = collectDomElements();
 
-    for (const element of elements) {
+    const recordEvidence = ({ element, label, rect, style, text = '', coverage, rootSurface = false, substantive = true }) => {
+      meaningfulNodes += 1;
+      if (rootSurface) rootSurfaceNodes += 1;
+      if (substantive) substantiveNodes += 1;
+      totalCoverage = Math.min(4, totalCoverage + coverage);
+      maxCoverage = Math.max(maxCoverage, coverage);
+      textCharacters += text.length;
+      styleHash = hashStep(styleHash, `${label}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${style.opacity}:${style.transform}:${style.color}:${style.backgroundColor}:${style.backgroundImage}:${style.filter}:${text.slice(0, 80)}`);
+    };
+
+    for (const element of collected.elements) {
       if (element instanceof HTMLCanvasElement) continue;
-      if (['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT'].includes(element.tagName)) continue;
+      if (['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE', 'NOSCRIPT', 'HEAD'].includes(element.tagName)) continue;
       const visible = visibleRect(element);
       if (!visible) continue;
       const { rect, style } = visible;
       const text = (element.childElementCount === 0 ? element.textContent : '').trim();
       const isSvgPrimitive = ['path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon', 'text', 'use'].includes(element.localName);
-      const hasBackground = colorHasInk(style.backgroundColor) || (style.backgroundImage && style.backgroundImage !== 'none');
+      const hasBackgroundImage = Boolean(style.backgroundImage && style.backgroundImage !== 'none');
+      const hasBackgroundColor = colorHasInk(style.backgroundColor);
       const hasBorder = ['Top', 'Right', 'Bottom', 'Left'].some(side => Number.parseFloat(style[`border${side}Width`]) > 0 && colorHasInk(style[`border${side}Color`]));
       const hasEffect = (style.boxShadow && style.boxShadow !== 'none') || (style.filter && style.filter !== 'none');
       const hasSvgPaint = isSvgPrimitive && ((style.fill && style.fill !== 'none' && colorHasInk(style.fill)) || (style.stroke && style.stroke !== 'none' && colorHasInk(style.stroke)));
-      const meaningful = Boolean(text || hasBackground || hasBorder || hasEffect || hasSvgPaint);
-      if (!meaningful) continue;
+      const meaningful = Boolean(text || hasBackgroundImage || hasBackgroundColor || hasBorder || hasEffect || hasSvgPaint);
+      const rootSurface = element === document.documentElement || element === document.body;
+      const substantive = Boolean(text || hasBackgroundImage || hasBorder || hasEffect || hasSvgPaint || !rootSurface);
 
-      const coverage = Math.min(1, Math.max(0, rect.width * rect.height) / viewportArea);
-      meaningfulNodes += 1;
-      totalCoverage = Math.min(4, totalCoverage + coverage);
-      maxCoverage = Math.max(maxCoverage, coverage);
-      textCharacters += text.length;
-      if (hasSvgPaint) svgPrimitives += 1;
-      styleHash = hashStep(styleHash, `${element.tagName}:${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${style.opacity}:${style.transform}:${style.color}:${style.backgroundColor}:${style.filter}:${text.slice(0, 80)}`);
+      if (meaningful) {
+        const coverage = Math.min(1, Math.max(0, rect.width * rect.height) / viewportArea);
+        if (hasSvgPaint) svgPrimitives += 1;
+        recordEvidence({ element, label: element.tagName, rect, style, text, coverage, rootSurface, substantive });
+      }
+
+      for (const pseudo of ['::before', '::after']) {
+        const evidence = inspectPseudo(element, pseudo, rect, viewportArea);
+        if (!evidence) continue;
+        pseudoElements += 1;
+        recordEvidence({
+          element,
+          label: `${element.tagName}${pseudo}`,
+          rect,
+          style: evidence.style,
+          text: evidence.content,
+          coverage: evidence.coverage,
+          substantive: true,
+        });
+      }
     }
 
     let animations = 0;
@@ -542,15 +616,28 @@ function sandboxBootstrap(sessionId) {
       animations = document.getAnimations().filter(animation => animation.playState !== 'finished').length;
     } catch {}
 
+    const rootSurfaceHash = styleHash;
+    if (state.lastDomStyleHash && state.lastDomStyleHash !== rootSurfaceHash && rootSurfaceNodes > 0) {
+      state.rootSurfaceEverChanged = true;
+    }
+    state.lastDomStyleHash = rootSurfaceHash;
+    const dynamicRootSurface = rootSurfaceNodes > 0 && (animations > 0 || state.rootSurfaceEverChanged);
+    const visible = substantiveNodes > 0 || dynamicRootSurface;
+
     return {
       meaningfulNodes,
+      substantiveNodes,
+      rootSurfaceNodes,
+      dynamicRootSurface,
+      pseudoElements,
+      shadowRoots: collected.shadowRoots,
       totalCoverage,
       maxCoverage,
       textCharacters,
       svgPrimitives,
       animations,
       styleHash,
-      visible: meaningfulNodes > 0,
+      visible,
     };
   }
 
@@ -800,7 +887,7 @@ function injectRuntime(html, sessionId) {
     .replace(/<base\b[^>]*>/gi, '')
     .replace(/<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
   const meta = `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP.replaceAll('"', '&quot;')}">`;
-  const baseStyle = '<style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#050506}*{box-sizing:border-box}</style>';
+  const baseStyle = '<style data-visualizer-host-style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}</style>';
   const bridge = bridgeSource(sessionId);
   if (/<head[\s>]/i.test(clean)) return clean.replace(/<head([^>]*)>/i, `<head$1>${meta}${baseStyle}${bridge}`);
   if (/<html[\s>]/i.test(clean)) return clean.replace(/<html([^>]*)>/i, `<html$1><head>${meta}${baseStyle}${bridge}</head>`);
