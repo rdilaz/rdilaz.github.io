@@ -5,22 +5,18 @@ on:
     branches: [main]
     paths:
       - 'public/visualizer/**'
-      - 'companion/windows-model-lab/**'
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
-      - 'scripts/model-lab-bridge-static-check.mjs'
-      - 'scripts/windows-companion-static-check.mjs'
       - '.github/workflows/visualizer-check.yml'
+      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
       - 'public/visualizer/**'
-      - 'companion/windows-model-lab/**'
       - 'docs/visualizer/**'
       - 'scripts/visualizer-static-check.mjs'
-      - 'scripts/model-lab-bridge-static-check.mjs'
-      - 'scripts/windows-companion-static-check.mjs'
       - '.github/workflows/visualizer-check.yml'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   visualizer-contract:
@@ -32,27 +28,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23.x'
       - name: Check visualizer JavaScript syntax
         run: |
-          for file in public/visualizer/*.js public/visualizer/*.mjs scripts/visualizer-static-check.mjs scripts/model-lab-bridge-static-check.mjs scripts/windows-companion-static-check.mjs; do
-            node --check "$file"
-          done
-      - name: Verify visualizer safety and fairness contract
+          find public/visualizer -maxdepth 1 -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | xargs -0 -r -n1 node --check
+          node --check scripts/visualizer-static-check.mjs
+      - name: Verify browser provider and visualizer contracts
         run: node scripts/visualizer-static-check.mjs
-      - name: Verify Windows Model Lab bridge contract
-        run: node scripts/model-lab-bridge-static-check.mjs
-      - name: Verify one-click Windows companion contract
-        run: node scripts/windows-companion-static-check.mjs
-      - name: Build Windows companion
-        env:
-          CGO_ENABLED: 0
-        run: |
-          GOOS=windows GOARCH=amd64 go build -C companion/windows-model-lab -trimpath -ldflags="-H=windowsgui -s -w" -o ../../AI-Visualizer-Model-Lab.exe .
-          test -s AI-Visualizer-Model-Lab.exe
       - name: Install portfolio dependencies
         run: npm ci
       - name: Build portfolio with visualizer payload

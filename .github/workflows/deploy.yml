@@ -30,24 +30,11 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23.x'
-
       - name: Install dependencies
         run: npm ci
 
       - name: Build site
         run: npm run build
-
-      - name: Build Windows Model Lab companion
-        env:
-          CGO_ENABLED: 0
-        run: |
-          mkdir -p dist/visualizer
-          GOOS=windows GOARCH=amd64 go build -C companion/windows-model-lab -trimpath -ldflags="-H=windowsgui -s -w" -o ../../dist/visualizer/AI-Visualizer-Model-Lab.exe .
-          test -s dist/visualizer/AI-Visualizer-Model-Lab.exe
 
       - name: Configure deployment authentication
         if: github.event_name != 'pull_request'

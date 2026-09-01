@@ -39,7 +39,6 @@
     requestStartedAt: 0,
     modelId: '',
     modelName: '',
-    transport: 'OpenRouter',
     phase: 'preparing',
     controller: null,
     timeout: 0,
@@ -57,14 +56,6 @@
   function parseBody(init) {
     if (typeof init?.body !== 'string') return null;
     try { return JSON.parse(init.body); } catch { return null; }
-  }
-
-  function isLocalModel(modelId) {
-    return String(modelId || '').startsWith('local/');
-  }
-
-  function transportFor(modelId) {
-    return isLocalModel(modelId) ? 'OpenCode local' : 'OpenRouter';
   }
 
   function modelLabel(modelId) {
@@ -111,42 +102,42 @@
       if (!['sent', 'working', 'receiving'].includes(state.phase)) return;
       const waiting = now - state.requestStartedAt;
       if (state.phase === 'receiving') {
-        if (els.live) els.live.textContent = `${state.transport} response open · ${elapsedLabel(waiting)} total request time`;
+        if (els.live) els.live.textContent = `Response stream open · ${elapsedLabel(waiting)} total request time`;
         return;
       }
       if (waiting >= 300000) {
         setPhase('working', {
           title: `${state.modelName} is very slow, but still connected`,
           detail: 'The request is still open after five minutes. Some large coding models can take this long; you can keep waiting or cancel without replacing your current visualizer.',
-          live: `${state.transport} request live · ${elapsedLabel(waiting)} waiting on model`,
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
           progress: 47,
         });
       } else if (waiting >= 180000) {
         setPhase('working', {
           title: `${state.modelName} is still generating`,
           detail: 'Three minutes is slow, but not automatically a failure for a large visual-coding response. The request is still open.',
-          live: `${state.transport} request live · ${elapsedLabel(waiting)} waiting on model`,
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
           progress: 46,
         });
       } else if (waiting >= 90000) {
         setPhase('working', {
           title: `${state.modelName} is still working`,
           detail: 'The request is still open. This is unusually slow, but it has not been declared stuck.',
-          live: `${state.transport} request live · ${elapsedLabel(waiting)} waiting on model`,
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
           progress: 44,
         });
       } else if (waiting >= 45000) {
         setPhase('working', {
           title: `${state.modelName} is taking a while`,
           detail: 'Still connected and waiting for the model response. Your current visualizer keeps running.',
-          live: `${state.transport} request live · ${elapsedLabel(waiting)} waiting on model`,
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
           progress: 42,
         });
       } else if (waiting >= 20000) {
         setPhase('working', {
           title: `${state.modelName} is working`,
           detail: 'Still waiting for the model to finish. Nothing has failed; the request remains open.',
-          live: `${state.transport} request live · ${elapsedLabel(waiting)} waiting on model`,
+          live: `Request live · ${elapsedLabel(waiting)} waiting on model`,
           progress: 40,
         });
       }
@@ -156,22 +147,21 @@
   function beginPreparation() {
     const key = sessionStorage.getItem(OPENROUTER_KEY_STORAGE) || '';
     const modelId = localStorage.getItem('ai-visualizer.selected-model') || '';
-    if ((!key && !isLocalModel(modelId)) || !modelId || els.dreamButton?.disabled) return;
+    if (!key || !modelId || els.dreamButton?.disabled) return;
     state.active = true;
     state.startedAt = performance.now();
     state.requestStartedAt = 0;
     state.modelId = modelId;
     state.modelName = modelLabel(modelId);
-    state.transport = transportFor(modelId);
     state.controller = null;
     state.userCancelled = false;
     state.timedOut = false;
     state.bodyComplete = false;
-    if (els.connection) els.connection.textContent = `${state.transport} ready`;
+    if (els.connection) els.connection.textContent = 'OpenRouter connected';
     if (els.elapsed) els.elapsed.textContent = '0:00';
     setPhase('preparing', {
       title: `Preparing ${state.modelName}`,
-      detail: isLocalModel(modelId) ? 'Preparing a local OpenCode subscription request. Your credentials stay on this computer.' : 'Checking your spend guard and preparing the exact OpenRouter request.',
+      detail: 'Checking your spend guard and preparing the exact model request.',
       live: 'Connected ✓ · not sent yet',
     });
     startClock();
@@ -183,15 +173,14 @@
     state.requestStartedAt = performance.now();
     state.modelId = modelId;
     state.modelName = modelLabel(modelId);
-    state.transport = transportFor(modelId);
     state.controller = controller;
     state.userCancelled = false;
     state.timedOut = false;
     state.bodyComplete = false;
-    if (els.connection) els.connection.textContent = `${state.transport} · ${state.modelName}`;
+    if (els.connection) els.connection.textContent = `OpenRouter connected · ${state.modelName}`;
     setPhase(repair ? 'repair' : 'sent', {
       title: repair ? `${state.modelName} is repairing its dream` : `${state.modelName} is generating the visualizer`,
-      detail: repair ? 'The first output needed a fix. A bounded repair request was sent to the same model.' : `Request sent successfully through ${state.transport}. Waiting for the model to return its visualizer code.`,
+      detail: repair ? 'The first output needed a fix. A bounded repair request was sent to the same model.' : 'Request sent successfully. Waiting for the model to return its visualizer code.',
       live: repair ? 'Repair request sent ✓' : 'Request sent ✓ · model working',
     });
     startClock();
@@ -201,8 +190,8 @@
     const status = response?.status ? `HTTP ${response.status}` : 'response';
     setPhase('receiving', {
       title: `${state.modelName} started responding`,
-      detail: repair ? `${state.transport} started returning the repair. The full repaired visualizer is still arriving.` : `${state.transport} started returning data. The full visualizer code has not been received yet.`,
-      live: `${state.transport} response started ✓ · ${status} · receiving body`,
+      detail: repair ? 'OpenRouter started returning the repair. The full repaired visualizer is still arriving.' : 'OpenRouter started returning data. The full visualizer code has not been received yet.',
+      live: `OpenRouter response started ✓ · ${status} · receiving body`,
     });
   }
 
@@ -214,7 +203,7 @@
     setPhase('response', {
       title: `${state.modelName} response received`,
       detail: repair ? 'The full repair arrived. Checking the repaired visualizer now.' : 'The full model response arrived. Checking the returned visualizer before anything replaces your screen.',
-      live: `${state.transport} responded ✓ · full response body received`,
+      live: 'OpenRouter responded ✓ · full response body received',
     });
     setTimeout(() => {
       if (state.active && state.phase === 'response') {
@@ -230,6 +219,7 @@
   function wrapResponseBody(response, repair) {
     if (!response || response.__dreamBodyTracked) return response;
     try { Object.defineProperty(response, '__dreamBodyTracked', { value: true }); } catch {}
+
     for (const method of ['json', 'text', 'arrayBuffer', 'blob', 'formData']) {
       const original = response[method]?.bind(response);
       if (!original) continue;
@@ -244,9 +234,15 @@
         });
       } catch {}
     }
+
     const originalClone = response.clone?.bind(response);
     if (originalClone) {
-      try { Object.defineProperty(response, 'clone', { configurable: true, value: () => wrapResponseBody(originalClone(), repair) }); } catch {}
+      try {
+        Object.defineProperty(response, 'clone', {
+          configurable: true,
+          value: () => wrapResponseBody(originalClone(), repair),
+        });
+      } catch {}
     }
     return response;
   }
@@ -320,15 +316,21 @@
     if (!isCompletion(input)) return baseFetch(input, init);
     const body = parseBody(init);
     if (!body?.model) return baseFetch(input, init);
+
     const repair = String(body?.messages?.[0]?.content || '').startsWith('Repair the visualizer');
     const controller = new AbortController();
     const externalSignal = init?.signal;
     const forwardAbort = () => controller.abort(externalSignal?.reason);
     if (externalSignal?.aborted) forwardAbort();
     else externalSignal?.addEventListener?.('abort', forwardAbort, { once: true });
+
     requestSent(body.model, repair, controller);
     clearRequestTimer();
-    state.timeout = setTimeout(() => { state.timedOut = true; controller.abort(); }, DREAM_TIMEOUT_MS);
+    state.timeout = setTimeout(() => {
+      state.timedOut = true;
+      controller.abort();
+    }, DREAM_TIMEOUT_MS);
+
     try {
       const response = await baseFetch(input, { ...init, signal: controller.signal });
       responseHeaders(response, repair);
@@ -342,8 +344,7 @@
       }
       if (state.userCancelled || controller.signal.aborted) {
         if (els.live) els.live.textContent = 'Cancelled · previous visualizer preserved';
-        const billing = isLocalModel(body.model) ? 'Your subscription provider may still count work completed before cancellation.' : 'OpenRouter may still bill work completed before cancellation.';
-        throw new Error(`Dream cancelled. Your previous visualizer is still running. ${billing}`);
+        throw new Error('Dream cancelled. Your previous visualizer is still running. OpenRouter may still bill work completed before cancellation.');
       }
       if (els.live) els.live.textContent = 'Request failed before a usable response';
       throw error;
