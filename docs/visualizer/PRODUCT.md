@@ -59,8 +59,9 @@ V0 is real only when a user can:
 - receive host audio frames at a 60 Hz target;
 - enter fullscreen;
 - retain verified Dreams locally;
+- distinguish the visualizer currently LIVE from the model selected for the NEXT Dream;
 - favorite, reopen, delete, and battle saved Dreams;
-- access local flight-recorder diagnostics through a hidden developer mode when troubleshooting.
+- inspect versioned local Dream traces through a hidden developer mode when troubleshooting.
 
 ## Deliberately deferred
 

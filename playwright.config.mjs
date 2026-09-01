@@ -1,5 +1,7 @@
 export default {
   testDir: './tests',
+  testMatch: ['**/*.spec.mjs'],
+  testIgnore: ['**/model-eligibility.spec.mjs'],
   timeout: 45000,
   expect: { timeout: 5000 },
   fullyParallel: false,

@@ -1,18 +1,6 @@
-export const DIAGNOSTIC_SCHEMA = 'dream-diagnostic-v1';
+import { createDreamTrace, sanitizeTraceValue } from './dream-trace.js';
 
-const SENSITIVE_KEYS = new Set([
-  'apikey',
-  'api_key',
-  'authorization',
-  'credential',
-  'credentials',
-  'token',
-  'access_token',
-  'refresh_token',
-  'waveform',
-  'spectrum',
-  'audio',
-]);
+export const DIAGNOSTIC_SCHEMA = 'dream-diagnostic-v1';
 
 function environment() {
   return {
@@ -31,11 +19,31 @@ function environment() {
   };
 }
 
-export function createDiagnosticRecord({ model, providerId = 'openrouter', kind = 'generation' } = {}) {
+export function createDiagnosticRecord({
+  model,
+  providerId = 'openrouter',
+  kind = 'generation',
+  liveSnapshot = null,
+  nextSnapshot = null,
+} = {}) {
   const timestamp = Date.now();
+  const id = crypto.randomUUID();
+  const trace = createDreamTrace({
+    id,
+    diagnosticId: id,
+    selectedModel: {
+      id: model?.id || 'unknown/model',
+      name: model?.name || model?.id || 'Unknown model',
+      providerId,
+      upstreamProvider: model?.provider || '',
+    },
+    liveAtStart: liveSnapshot,
+    nextAtStart: nextSnapshot,
+    startedAt: timestamp,
+  });
   return {
     schema: DIAGNOSTIC_SCHEMA,
-    id: crypto.randomUUID(),
+    id,
     createdAt: timestamp,
     updatedAt: timestamp,
     kind,
@@ -63,6 +71,8 @@ export function createDiagnosticRecord({ model, providerId = 'openrouter', kind 
     attempts: [],
     rollback: null,
     generationId: '',
+    truncations: [],
+    trace,
     timeline: [],
     environment: environment(),
   };
@@ -70,7 +80,7 @@ export function createDiagnosticRecord({ model, providerId = 'openrouter', kind 
 
 export function addDiagnosticTimeline(record, stage, detail = {}) {
   const at = Date.now();
-  record.timeline.push({ stage, at, elapsedMs: at - record.createdAt, ...structuredClone(detail) });
+  record.timeline.push({ stage, at, elapsedMs: at - record.createdAt, ...sanitizeTraceValue(detail) });
   record.updatedAt = at;
   return record;
 }
@@ -80,8 +90,21 @@ export function applyProviderResult(record, result, { repaired = false } = {}) {
   record.requestId = result?.requestId || record.requestId || '';
   record.usage = result?.usage || record.usage || null;
   record.outputBytes = new TextEncoder().encode(String(result?.html || '')).byteLength;
-  record.rawOutput = String(result?.raw || '').slice(0, 350000);
-  record.html = String(result?.html || '').slice(0, 350000);
+  const retain = (field, value) => {
+    const text = String(sanitizeTraceValue(String(value || '')) || '');
+    const retained = text.slice(0, 350000);
+    record[field] = retained;
+    record.truncations = (record.truncations || []).filter(item => item.field !== field);
+    if (retained.length !== text.length) {
+      record.truncations.push({
+        field,
+        originalCharacters: text.length,
+        retainedCharacters: retained.length,
+      });
+    }
+  };
+  retain('rawOutput', result?.raw);
+  retain('html', result?.html);
   if (repaired) record.repairUsed = true;
   record.updatedAt = Date.now();
   return record;
@@ -95,7 +118,7 @@ export function finishDiagnostic(record, {
 } = {}) {
   record.status = status || record.status;
   record.failureCode = failureCode || '';
-  record.failureMessage = failureMessage || '';
+  record.failureMessage = String(sanitizeTraceValue(failureMessage || '') || '');
   record.generationId = generationId || record.generationId || '';
   record.finishedAt = Date.now();
   record.updatedAt = record.finishedAt;
@@ -105,30 +128,13 @@ export function finishDiagnostic(record, {
   return record;
 }
 
-function sanitizeValue(value, seen = new WeakSet()) {
-  if (value == null || typeof value !== 'object') return value;
-  if (seen.has(value)) return '[circular]';
-  seen.add(value);
-  if (Array.isArray(value)) return value.map(item => sanitizeValue(item, seen));
-  const output = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (SENSITIVE_KEYS.has(key.toLowerCase())) {
-      if (key === 'audioApiVersion') output[key] = nested;
-      else output[key] = '[redacted]';
-      continue;
-    }
-    output[key] = sanitizeValue(nested, seen);
-  }
-  return output;
-}
-
 export function diagnosticForExport(record, { includeHtml = true } = {}) {
   const copy = structuredClone(record);
   if (!includeHtml) {
     delete copy.html;
     delete copy.rawOutput;
   }
-  return sanitizeValue(copy);
+  return sanitizeTraceValue(copy);
 }
 
 export function diagnosticsForExport(records, options = {}) {

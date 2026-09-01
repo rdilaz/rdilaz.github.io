@@ -1,3 +1,12 @@
+import {
+  captureResponseBodyComplete,
+  captureResponseHeaders,
+  captureTraceError,
+  stripTraceContext,
+  traceContextFromInit,
+  traceDisplayName,
+} from './trace-bridge.js';
+
 (() => {
   'use strict';
 
@@ -59,8 +68,6 @@
   }
 
   function modelLabel(modelId) {
-    const visible = els.modelName?.textContent?.trim();
-    if (visible && visible !== 'Choose a model') return visible;
     return String(modelId || '').split('/').pop() || 'the model';
   }
 
@@ -167,12 +174,12 @@
     startClock();
   }
 
-  function requestSent(modelId, repair, controller) {
+  function requestSent(modelId, repair, controller, traceContext) {
     state.active = true;
     if (!state.startedAt) state.startedAt = performance.now();
     state.requestStartedAt = performance.now();
     state.modelId = modelId;
-    state.modelName = modelLabel(modelId);
+    state.modelName = traceDisplayName(traceContext) || modelLabel(modelId);
     state.controller = controller;
     state.userCancelled = false;
     state.timedOut = false;
@@ -186,7 +193,8 @@
     startClock();
   }
 
-  function responseHeaders(response, repair) {
+  function responseHeaders(response, repair, traceContext) {
+    captureResponseHeaders(traceContext, response);
     const status = response?.status ? `HTTP ${response.status}` : 'response';
     setPhase('receiving', {
       title: `${state.modelName} started responding`,
@@ -195,9 +203,10 @@
     });
   }
 
-  function responseBodyComplete(repair) {
+  function responseBodyComplete(repair, traceContext) {
     if (state.bodyComplete) return;
     state.bodyComplete = true;
+    captureResponseBodyComplete(traceContext);
     clearRequestTimer();
     state.controller = null;
     setPhase('response', {
@@ -216,9 +225,19 @@
     }, 180);
   }
 
-  function wrapResponseBody(response, repair) {
+  function dreamTimeoutError() {
+    const error = new Error('Dream timed out after 6 minutes. Your previous visualizer is still safe; try again or choose a faster model.');
+    error.code = 'DREAM_TIMEOUT';
+    return error;
+  }
+
+  function wrapResponseBody(response, repair, traceContext) {
     if (!response || response.__dreamBodyTracked) return response;
-    try { Object.defineProperty(response, '__dreamBodyTracked', { value: true }); } catch {}
+    try {
+      Object.defineProperty(response, '__dreamBodyTracked', { value: true });
+    } catch {
+      // Some Response implementations are non-extensible; method wrapping remains best-effort.
+    }
 
     for (const method of ['json', 'text', 'arrayBuffer', 'blob', 'formData']) {
       const original = response[method]?.bind(response);
@@ -227,12 +246,21 @@
         Object.defineProperty(response, method, {
           configurable: true,
           value: async (...args) => {
-            const value = await original(...args);
-            responseBodyComplete(repair);
-            return value;
+            try {
+              const value = await original(...args);
+              responseBodyComplete(repair, traceContext);
+              return value;
+            } catch (error) {
+              if (!state.timedOut) throw error;
+              const timeoutError = dreamTimeoutError();
+              captureTraceError(traceContext, timeoutError, { stage: 'dream-lifecycle-timeout' });
+              throw timeoutError;
+            }
           },
         });
-      } catch {}
+      } catch {
+        // Non-configurable body methods still work; only the secondary status timing is omitted.
+      }
     }
 
     const originalClone = response.clone?.bind(response);
@@ -240,9 +268,11 @@
       try {
         Object.defineProperty(response, 'clone', {
           configurable: true,
-          value: () => wrapResponseBody(originalClone(), repair),
+          value: () => wrapResponseBody(originalClone(), repair, traceContext),
         });
-      } catch {}
+      } catch {
+        // A non-configurable clone method does not affect the original response body.
+      }
     }
     return response;
   }
@@ -316,6 +346,7 @@
     if (!isCompletion(input)) return baseFetch(input, init);
     const body = parseBody(init);
     if (!body?.model) return baseFetch(input, init);
+    const traceContext = traceContextFromInit(init);
 
     const repair = String(body?.messages?.[0]?.content || '').startsWith('Repair the visualizer');
     const controller = new AbortController();
@@ -324,7 +355,7 @@
     if (externalSignal?.aborted) forwardAbort();
     else externalSignal?.addEventListener?.('abort', forwardAbort, { once: true });
 
-    requestSent(body.model, repair, controller);
+    requestSent(body.model, repair, controller, traceContext);
     clearRequestTimer();
     state.timeout = setTimeout(() => {
       state.timedOut = true;
@@ -332,21 +363,26 @@
     }, DREAM_TIMEOUT_MS);
 
     try {
-      const response = await baseFetch(input, { ...init, signal: controller.signal });
-      responseHeaders(response, repair);
-      return wrapResponseBody(response, repair);
+      const response = await baseFetch(input, { ...stripTraceContext(init), signal: controller.signal });
+      responseHeaders(response, repair, traceContext);
+      return wrapResponseBody(response, repair, traceContext);
     } catch (error) {
       clearRequestTimer();
       state.controller = null;
       if (state.timedOut) {
         if (els.live) els.live.textContent = 'Timed out · request stopped';
-        throw new Error('Dream timed out after 6 minutes. Your previous visualizer is still safe; try again or choose a faster model.');
+        const timeoutError = dreamTimeoutError();
+        captureTraceError(traceContext, timeoutError, { stage: 'dream-lifecycle-timeout' });
+        throw timeoutError;
       }
       if (state.userCancelled || controller.signal.aborted) {
         if (els.live) els.live.textContent = 'Cancelled · previous visualizer preserved';
-        throw new Error('Dream cancelled. Your previous visualizer is still running. OpenRouter may still bill work completed before cancellation.');
+        const cancellationError = new Error('Dream cancelled. Your previous visualizer is still running. OpenRouter may still bill work completed before cancellation.');
+        captureTraceError(traceContext, cancellationError, { stage: 'dream-lifecycle-cancelled' });
+        throw cancellationError;
       }
       if (els.live) els.live.textContent = 'Request failed before a usable response';
+      captureTraceError(traceContext, error, { stage: 'dream-lifecycle-fetch' });
       throw error;
     } finally {
       externalSignal?.removeEventListener?.('abort', forwardAbort);

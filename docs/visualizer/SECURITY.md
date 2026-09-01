@@ -24,7 +24,7 @@ High-frequency draw/RAF/mutation instrumentation is removed after the launch wat
 
 ## Diagnostic privacy
 
-`dream-diagnostic-v1` records are local IndexedDB data and are pruned to a bounded history. They may contain generated model output and technical metadata, but never intentionally contain:
+`dream-diagnostic-v1` records and their nested `dream-trace-v1` data are local IndexedDB data and are pruned to a bounded history. They may contain exact prompts, generated model output, provider-visible reasoning, and technical metadata, but never intentionally contain:
 
 - captured music or song metadata;
 - waveform or spectrum arrays;
@@ -33,7 +33,7 @@ High-frequency draw/RAF/mutation instrumentation is removed after the launch wat
 - authorization headers;
 - cookies or generated-frame access to host storage.
 
-Copy/export is always an explicit user/developer action. Export applies a defensive redaction pass for credential and audio-field names.
+Copy/export is always an explicit user/developer action. Capture, display, copy, and export apply defensive recursive redaction for credentials and audio data. Provider text and generated HTML are rendered as inert text in the trusted trace viewer and execute only through the existing isolated sandbox/reliability path when explicitly retested.
 
 ## Host bridge
 
