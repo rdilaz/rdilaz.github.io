@@ -37,8 +37,8 @@ export default function Home() {
               <h4>A Field That Dreams Back</h4>
               <p className="experiment-description">
                 A living generative universe written in code—no video or pre-rendered animation.
-                Every orbit is created in real time; your pointer becomes gravity, touch becomes a
-                shockwave, and rebirth gives the field a new set of initial conditions.
+                Bend it with touch, let nearby sound reshape its physics, or open it fullscreen and
+                disappear into a universe that is being drawn only for this moment.
               </p>
             </div>
             <button
