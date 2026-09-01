@@ -106,12 +106,12 @@ test('Prompt Lab edits and persists the creative brief without exposing the fixe
   const dialog = page.locator('#promptLabDialog');
   await expect(dialog).toBeVisible();
   const editor = page.locator('#promptLabEditor');
-  await expect(editor).toContainText('complete artistic freedom');
-  await expect(editor).not.toContainText('window.VIZ');
+  await expect(editor).toHaveValue(/complete artistic freedom/);
+  await expect(editor).not.toHaveValue(/window\.VIZ/);
   await expect(page.locator('#promptLabContract')).toContainText('window.VIZ');
 
   await page.getByRole('button', { name: 'Original baseline' }).click();
-  await expect(editor).toContainText('wow factor');
+  await expect(editor).toHaveValue(/wow factor/);
   await page.locator('#promptLabApply').click();
   await expect(dialog).toBeHidden();
   await expect(button).toHaveAttribute('title', /Original baseline/);
