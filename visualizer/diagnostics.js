@@ -1,3 +1,4 @@
+import './debug-bundle.js';
 import { createDreamTrace, sanitizeTraceValue } from './dream-trace.js';
 
 export const DIAGNOSTIC_SCHEMA = 'dream-diagnostic-v1';
