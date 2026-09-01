@@ -1,0 +1,46 @@
+name: Apply CSS reliability capability fix
+
+on:
+  push:
+    branches:
+      - milestone/dream-reliability-harness-v1
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Restore fixes
+        id: restore
+        run: |
+          if [ ! -f .css-capability-fix.b64 ]; then
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base64 --decode .css-capability-fix.b64 > /tmp/css-capability-fix.tar.gz
+          tar -xzf /tmp/css-capability-fix.tar.gz
+          rm .css-capability-fix.b64
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify syntax and static contract
+        if: steps.restore.outputs.applied == 'true'
+        run: |
+          node --check public/visualizer/sandbox.js
+          node --check tests/visualizer-reliability.spec.mjs
+          node --check scripts/visualizer-static-check.mjs
+          node scripts/visualizer-static-check.mjs
+
+      - name: Commit fixes
+        if: steps.restore.outputs.applied == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git reset -- .github/workflows
+          git commit -m "Support CSS-only art and deterministic rollback regression"
+          git push origin HEAD:milestone/dream-reliability-harness-v1
