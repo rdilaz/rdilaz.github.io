@@ -29,6 +29,7 @@ const readJson = (storage, key, fallback) => {
   try { return JSON.parse(storage.getItem(key)) ?? fallback; } catch { return fallback; }
 };
 const writeJson = (storage, key, value) => storage.setItem(key, JSON.stringify(value));
+const isLocalSubscriptionModel = modelId => String(modelId || '').startsWith('local/');
 
 let settings = { ...DEFAULTS, ...readJson(localStorage, SETTINGS_STORAGE, {}) };
 settings.perDream = clampNumber(settings.perDream, DEFAULTS.perDream, 0.05, 100);
@@ -179,7 +180,7 @@ function recordCost({ modelId, cost, usage, repair, estimated = false }) {
 async function refreshKeyInfo() {
   const key = sessionStorage.getItem(OPENROUTER_KEY_STORAGE) || '';
   lastKey = key;
-  if (!key) {
+  if (!key || key === '__ai_visualizer_local_opencode__') {
     keyInfo = null;
     render();
     return;
@@ -233,12 +234,12 @@ function render() {
   if (els.sessionSpendSummary) els.sessionSpendSummary.textContent = `${money(sessionSpent)} / ${money(settings.session)}`;
   if (els.dailySpendSummary) els.dailySpendSummary.textContent = `${money(daily.spent)} / ${money(settings.daily)}`;
   if (els.keyBudgetSummary) {
-    if (!lastKey) els.keyBudgetSummary.textContent = 'Not connected';
+    if (!lastKey || lastKey === '__ai_visualizer_local_opencode__') els.keyBudgetSummary.textContent = 'Not connected';
     else if (keyInfo?.limit_remaining != null && Number.isFinite(Number(keyInfo.limit_remaining))) els.keyBudgetSummary.textContent = `${money(keyInfo.limit_remaining)} remaining`;
     else els.keyBudgetSummary.textContent = 'No provider-side key cap';
   }
   if (els.keyBudgetCopy) {
-    if (!lastKey) els.keyBudgetCopy.textContent = 'Connect OpenRouter to read the key’s provider-enforced limit.';
+    if (!lastKey || lastKey === '__ai_visualizer_local_opencode__') els.keyBudgetCopy.textContent = 'Connect OpenRouter to read the key’s provider-enforced limit.';
     else if (keyInfo?.limit != null && Number.isFinite(Number(keyInfo.limit))) els.keyBudgetCopy.textContent = `${money(keyInfo.usage)} used of a ${money(keyInfo.limit)} OpenRouter key limit${keyInfo.limit_reset ? ` · resets ${keyInfo.limit_reset}` : ''}.`;
     else els.keyBudgetCopy.textContent = 'This OpenRouter key reports no hard provider limit. The Visualizer app caps below still apply in this browser.';
   }
@@ -329,6 +330,9 @@ function fallbackUsageCost(body, usage) {
 async function guardedCompletion(input, init) {
   const body = completionBody(init);
   if (!body?.model) return nativeFetch(input, init);
+  // Local subscription-backed models are routed by opencode-lab.js and must never
+  // consume or be blocked by OpenRouter dollar budgets.
+  if (isLocalSubscriptionModel(body.model)) return nativeFetch(input, init);
   const repair = isRepairRequest(body);
   if (!repair) currentDreamSpent = 0;
   const pricingEstimate = estimateFor(body.model, body.messages, Number(body.max_tokens || 14000));
