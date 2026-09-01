@@ -42,6 +42,9 @@ jobs:
       - name: Verify visualizer safety, freedom, provider and reliability contracts
         run: node scripts/visualizer-static-check.mjs
 
+      - name: Verify live Dream model eligibility contract
+        run: node tests/model-eligibility.spec.mjs
+
       - name: Install portfolio dependencies
         run: npm ci
 

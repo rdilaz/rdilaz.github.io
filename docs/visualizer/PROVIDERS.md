@@ -27,6 +27,14 @@ Every registered adapter exposes:
 
 Registration fails closed when those requirements are missing.
 
+## Live Dream model eligibility
+
+A provider catalog may contain entries that exist for other API products but cannot serve the Visualizer's interactive generation path. `listModels()` must expose only models that can currently produce a live Dream through the adapter's declared generation endpoint.
+
+For OpenRouter, `visualizer-model-eligibility-v1` removes Batch API-only `:batch` entries, expired models, non-text-output entries, and models whose declared output ceiling cannot satisfy the Visualizer's minimum response budget. Interactive variants such as `:free` or `:nitro` remain eligible when the underlying model is otherwise compatible.
+
+Catalog filtering is not the final authority. Immediately before each paid generation or repair, the OpenRouter adapter refreshes the current catalog with `cache: no-store` and verifies the exact model id again. If the model disappeared or became ineligible, the Dream fails before the `/chat/completions` request is sent. No availability fallback silently substitutes another model because model identity is part of the experiment.
+
 ## Normalized model record
 
 Adapters return stable records containing at least:
@@ -36,7 +44,8 @@ Adapters return stable records containing at least:
 - Visualizer provider id/source;
 - context and output limits when known;
 - pricing when known;
-- supported parameters/capabilities when known.
+- supported parameters/capabilities when known;
+- current eligibility metadata when the provider catalog exposes lifecycle information.
 
 Future inference-level support must come from verified provider capability metadata. The Visualizer must never fabricate low/medium/high/xhigh options.
 
@@ -51,7 +60,7 @@ A successful generation or repair returns:
 - request id when available;
 - prompt version and attempt number.
 
-The shared host, not the adapter, validates HTML, performs sandbox smoke tests, stores successful generations, and decides whether one bounded repair is needed.
+The shared host, not the adapter, validates HTML, runs the Dream reliability harness, stores successful generations, and decides whether one bounded repair is needed.
 
 ## Credential and billing rules
 
@@ -61,6 +70,6 @@ The Visualizer does not fund model calls from a site-owned balance in this phase
 
 ## Active reference adapter
 
-OpenRouter is the only active adapter in Browser Provider Reset v1. It uses PKCE, a session-scoped delegated key, the live OpenRouter model catalog, browser-side spend controls, exact usage accounting when available, explicit provider errors, and no automatic request retry after uncertain model execution.
+OpenRouter is the only active adapter in Browser Provider Reset v1. It uses PKCE, a session-scoped delegated key, the live OpenRouter model catalog, live-Dream eligibility filtering, a fresh pre-spend model-availability check, browser-side spend controls, exact usage accounting when available, explicit provider errors, and no automatic request retry after uncertain model execution.
 
 Additional adapters are not accepted until the OpenRouter path passes repeated real-browser acceptance and the new provider's official authentication/billing path has been verified.
