@@ -12,12 +12,11 @@ const expect = (condition, message) => { if (!condition) failures.push(message);
 
 expect(source.includes('host          = "127.0.0.1"'), 'Windows companion must bind loopback only.');
 expect(source.includes('allowedOrigin = "https://ryo-nd.com"'), 'Windows companion must restrict browser origin to ryo-nd.com.');
-expect(source.includes('"permission": "deny"'), 'Windows companion must deny OpenCode tools in its isolated workspace.');
+expect(source.includes('\\"permission\\": \\"deny\\"'), 'Windows companion must deny OpenCode tools in its isolated workspace.');
 expect(source.includes('"models", "--verbose"'), 'Windows companion must discover the live OpenCode model catalog.');
 expect(source.includes('"run", "--format", "json"') && source.includes('"--variant"'), 'Windows companion must use OpenCode run and preserve model variants.');
 expect(source.includes('taskkill.exe') && source.includes('"/T", "/F"'), 'Windows companion cancellation must terminate the process tree.');
 expect(!source.includes('auth.json'), 'Windows companion must never read OpenCode credential files directly.');
-expect(source.includes('permission\\\": \\\"deny') || source.includes('permission\": \"deny'), 'Companion config must remain tool-denied.');
 expect(ui.includes('./AI-Visualizer-Model-Lab.exe') && ui.includes('Download Windows companion'), 'Windows Model Lab UI must offer the one-click companion executable.');
 expect(ui.includes('No PowerShell, ports, or terminal window'), 'Windows setup copy must explicitly remove terminal setup from the normal path.');
 expect(css.includes('.model-lab__companion-download'), 'Windows companion download must have a first-class UI treatment.');
