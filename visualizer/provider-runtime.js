@@ -1,4 +1,5 @@
 import { PROMPT_VERSION, buildGenerationMessages, buildRepairMessages } from './prompt.js';
+import { filterLiveDreamModels, liveDreamEligibility, MODEL_ELIGIBILITY_VERSION } from './model-eligibility.js';
 
 export const PROVIDER_CONTRACT_VERSION = 'visualizer-provider-v1';
 export const DEFAULT_PROVIDER_ID = 'openrouter';
@@ -90,7 +91,7 @@ export function repairProviderVisualizer(options) {
 
 const KEY_STORAGE = 'ai-visualizer.openrouter.key';
 const VERIFIER_STORAGE = 'ai-visualizer.openrouter.pkce-verifier';
-const MODELS_CACHE = 'ai-visualizer.openrouter.models-cache.v1';
+const MODELS_CACHE = 'ai-visualizer.openrouter.models-cache.v2';
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 const OPENROUTER_KEY_EXCHANGE_URL = 'https://openrouter.ai/api/v1/auth/keys';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
@@ -177,6 +178,9 @@ function normalizeModel(model) {
     provider: upstreamProvider,
     providerId: DEFAULT_PROVIDER_ID,
     source: 'openrouter',
+    canonicalSlug: model.canonical_slug || '',
+    expirationDate: model.expiration_date || null,
+    eligibilityVersion: MODEL_ELIGIBILITY_VERSION,
     description: model.description || '',
     contextLength: model.context_length || 0,
     created: model.created || 0,
@@ -193,24 +197,79 @@ function normalizeModel(model) {
   };
 }
 
+async function fetchRawOpenRouterCatalog({ fresh = false } = {}) {
+  const response = await fetch(OPENROUTER_MODELS_URL, fresh ? { cache: 'no-store' } : undefined);
+  if (!response.ok) throw new Error('The OpenRouter model catalog could not be loaded. Check your connection and try again.');
+  const payload = await response.json();
+  return Array.isArray(payload.data) ? payload.data : [];
+}
+
+function normalizeEligibleModels(rawModels) {
+  return filterLiveDreamModels(rawModels)
+    .map(normalizeModel)
+    .sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
+}
+
 async function fetchOpenRouterModels() {
   const cached = sessionStorage.getItem(MODELS_CACHE);
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
-      if (Date.now() - parsed.savedAt < 15 * 60 * 1000 && Array.isArray(parsed.models)) return parsed.models;
+      if (
+        parsed.eligibilityVersion === MODEL_ELIGIBILITY_VERSION
+        && Date.now() - parsed.savedAt < 15 * 60 * 1000
+        && Array.isArray(parsed.models)
+      ) return parsed.models;
     } catch {}
   }
 
-  const response = await fetch(OPENROUTER_MODELS_URL);
-  if (!response.ok) throw new Error('The OpenRouter model catalog could not be loaded. Check your connection and try again.');
-  const payload = await response.json();
-  const models = (payload.data || [])
-    .filter(model => model?.id)
-    .map(normalizeModel)
-    .sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
-  sessionStorage.setItem(MODELS_CACHE, JSON.stringify({ savedAt: Date.now(), models }));
+  const rawModels = await fetchRawOpenRouterCatalog();
+  const models = normalizeEligibleModels(rawModels);
+  sessionStorage.setItem(MODELS_CACHE, JSON.stringify({
+    savedAt: Date.now(),
+    eligibilityVersion: MODEL_ELIGIBILITY_VERSION,
+    models,
+  }));
   return models;
+}
+
+function modelEligibilityError(modelId, reason) {
+  const reasonCopy = {
+    BATCH_ONLY: 'This model entry is Batch API only, so it cannot serve an interactive Dream.',
+    EXPIRED: 'This model has expired in the current OpenRouter catalog.',
+    NO_TEXT_OUTPUT: 'This model does not provide the text output required to return visualizer HTML.',
+    OUTPUT_TOO_SMALL: 'This model cannot return enough output for the Visualizer runtime contract.',
+    NOT_IN_CURRENT_CATALOG: 'This model is no longer in OpenRouter’s current live catalog.',
+  }[reason] || 'This model is not currently compatible with live Dreams.';
+  const error = new Error(`${reasonCopy} Choose another model. No generation request was sent.`);
+  error.code = 'MODEL_NOT_LIVE_DREAM_COMPATIBLE';
+  error.modelId = modelId;
+  error.eligibilityReason = reason;
+  return error;
+}
+
+async function assertCurrentOpenRouterModel(modelId) {
+  let rawModels;
+  try {
+    rawModels = await fetchRawOpenRouterCatalog({ fresh: true });
+  } catch (error) {
+    const verificationError = new Error('Could not verify that this model is still available for a live Dream. No generation request was sent; try again in a moment.');
+    verificationError.code = 'MODEL_AVAILABILITY_UNVERIFIED';
+    verificationError.cause = error;
+    throw verificationError;
+  }
+
+  const raw = rawModels.find(model => model?.id === modelId);
+  if (!raw) {
+    sessionStorage.removeItem(MODELS_CACHE);
+    throw modelEligibilityError(modelId, 'NOT_IN_CURRENT_CATALOG');
+  }
+  const eligibility = liveDreamEligibility(raw);
+  if (!eligibility.eligible) {
+    sessionStorage.removeItem(MODELS_CACHE);
+    throw modelEligibilityError(modelId, eligibility.reason);
+  }
+  return normalizeModel(raw);
 }
 
 function extractText(payload) {
@@ -245,7 +304,7 @@ function openRouterError(response, payload, modelId) {
     return new Error(`OpenRouter could not fund this Dream. Check your OpenRouter balance or key limit before trying again.${suffix}`);
   }
   if (response.status === 404) {
-    return new Error(`The selected model is no longer available through OpenRouter. Choose another model.${suffix}`);
+    return new Error(`The selected model became unavailable after the live catalog check. Choose another model.${suffix}`);
   }
   if (response.status === 408 || response.status === 504) {
     return new Error(`The selected model timed out before returning a complete visualizer. No automatic retry was sent.${suffix}`);
@@ -260,6 +319,7 @@ function openRouterError(response, payload, modelId) {
 }
 
 async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxTokens = 14000 }) {
+  await assertCurrentOpenRouterModel(modelId);
   const response = await fetch(OPENROUTER_COMPLETIONS_URL, {
     method: 'POST',
     headers: {
@@ -322,6 +382,7 @@ const openRouterAdapter = {
     pricing: true,
     usageAccounting: true,
     inferenceLevels: false,
+    modelEligibility: MODEL_ELIGIBILITY_VERSION,
   }),
   getCredential: getOpenRouterCredential,
   isConnected: () => Boolean(getOpenRouterCredential()),
