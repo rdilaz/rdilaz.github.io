@@ -10,11 +10,15 @@ import {
   isOpenRouterConnected,
   repairVisualizer,
 } from './openrouter.js';
-import { PROMPT_VERSION, AUDIO_API_VERSION } from './prompt.js';
+import { PROMPT_VERSION, AUDIO_API_VERSION, loadPromptProfile } from './prompt.js';
 import { VisualizerSandbox, validateVisualizerHtml } from './sandbox.js';
 import { DreamReliabilityHarness, DreamReliabilityError, FAILURE_CODES } from './reliability.js';
 import { GenerationStore, DiagnosticStore } from './storage.js';
 import { createLiveIdentityController } from './live-identity.js';
+import { createPlaybackController, EXTERNAL_CAPTURE_PAUSE_COPY } from './playback-state.js';
+import { createDreamJobController, DREAM_JOB_PHASES, mountDreamJobView } from './dream-job.js';
+import { loadFeaturedDreams, createFeaturedExportPackage } from './featured-dreams.js';
+import { buildDreamSwitcherGroups, localDreamKey, mountDreamSwitcher } from './dream-switcher.js';
 import {
   appendDreamAttempt,
   closeDreamAttempt,
@@ -47,10 +51,15 @@ const els = {
   frame: $('#visualizerFrame'),
   preflightFrame: $('#preflightFrame'),
   topStatus: $('#topStatus'),
+  playbackButton: $('#playbackButton'),
+  pauseOverlay: $('#pauseOverlay'),
+  pauseMessage: $('#pauseMessage'),
   liveIdentity: $('#liveIdentity'),
   liveIdentityName: $('#liveIdentityName'),
   modelButton: $('#modelButton'),
   selectedModelName: $('#selectedModelName'),
+  switcherCurrent: $('#switcherCurrent'),
+  switcherButton: $('#switcherButton'),
   dreamButton: $('#dreamButton'),
   favoriteButton: $('#favoriteButton'),
   audioButton: $('#audioButton'),
@@ -60,13 +69,9 @@ const els = {
   fullscreenButton: $('#fullscreenButton'),
   infoButton: $('#infoButton'),
   diagnosticsButton: $('#diagnosticsButton'),
-  centerStatus: $('#centerStatus'),
-  centerStatusTitle: $('#centerStatusTitle'),
-  centerStatusDetail: $('#centerStatusDetail'),
-  dreamCancelButton: $('#dreamCancelButton'),
-  dreamProgress: $('#dreamStatusProgressFill'),
-  dreamStatusLive: $('#dreamStatusLive'),
-  dreamSteps: [...document.querySelectorAll('[data-dream-step]')],
+  centerStatus: $('#transientStatus'),
+  centerStatusTitle: $('#transientStatusTitle'),
+  centerStatusDetail: $('#transientStatusDetail'),
   modelDrawer: $('#modelDrawer'),
   libraryDrawer: $('#libraryDrawer'),
   aboutDrawer: $('#aboutDrawer'),
@@ -92,6 +97,7 @@ const els = {
   copyLatestDiagnostics: $('#copyLatestDiagnostics'),
   exportDiagnostics: $('#exportDiagnostics'),
   copyCurrentHtml: $('#copyCurrentHtml'),
+  exportFeaturedCandidate: $('#exportFeaturedCandidate'),
   retestCurrent: $('#retestCurrent'),
   transparencySelfTest: $('#transparencySelfTest'),
   pickDiagnosticModel: $('#pickDiagnosticModel'),
@@ -116,6 +122,7 @@ activeSlot.sandbox.setPresentation('active');
 standbySlot.sandbox.setPresentation('standby');
 
 let models = [];
+let modelCatalogError = '';
 let selectedModel = null;
 let currentGeneration = null;
 let currentHtml = DEFAULT_VISUALIZER_HTML;
@@ -138,17 +145,38 @@ let activeDreamController = null;
 let promotion = null;
 let devMode = false;
 let runtimeRecoveryQueued = false;
+let pendingActiveFailure = null;
+let visualPaused = false;
+let candidateSlotTail = Promise.resolve();
 const liveDiagnosticEvents = [];
 const volatileDiagnostics = new Map();
 const MAX_VOLATILE_DIAGNOSTICS = 8;
 const identityController = createLiveIdentityController();
+const playbackController = createPlaybackController();
+const dreamJobController = createDreamJobController();
 const fixtureDiagnostics = new Map();
+let dreamSwitcher = null;
+let featuredDreams = [];
+let currentDreamKey = 'featured:calibration-bloom';
+let drawerReturnFocus = null;
 
 function renderIdentity(snapshot = identityController.snapshot()) {
   els.liveIdentityName.textContent = snapshot.live.displayName;
   els.liveIdentity.setAttribute('aria-label', `Live visualizer: ${snapshot.live.displayName}`);
+  if (els.switcherCurrent) els.switcherCurrent.textContent = snapshot.live.displayName;
   els.selectedModelName.textContent = snapshot.next.displayName;
   return snapshot;
+}
+
+function renderFavoriteControl() {
+  const available = Boolean(currentGeneration && currentGeneration.source !== 'featured');
+  const favorite = available && Boolean(currentGeneration.favorite);
+  els.favoriteButton.disabled = !available;
+  els.favoriteButton.classList.toggle('is-active', favorite);
+  els.favoriteButton.textContent = favorite ? '♥' : '♡';
+  els.favoriteButton.setAttribute('aria-pressed', String(favorite));
+  els.favoriteButton.setAttribute('aria-label', favorite ? 'Remove current Dream from favorites' : 'Save current Dream to favorites');
+  els.favoriteButton.title = available ? (favorite ? 'Remove from favorites' : 'Save to favorites') : 'Featured Dreams are always available';
 }
 
 function setNextIdentity(model) {
@@ -183,6 +211,8 @@ function liveIdentityForGeneration(generation, { kind = 'generated', diagnosticI
     upstreamProvider: generation.provider || '',
     resolvedModel: generation.resolvedModel || '',
     generationId: generation.id,
+    artifactId: generation.artifactId || '',
+    title: generation.title || '',
     traceId: generation.traceId || generation.diagnosticId || diagnosticId,
     diagnosticId: diagnosticId || generation.diagnosticId || '',
   };
@@ -209,15 +239,6 @@ function hideCenter() {
   els.centerStatus.hidden = true;
 }
 
-
-function setArtifactProgress(progress, currentStep, liveText = '') {
-  if (els.dreamProgress) els.dreamProgress.style.width = `${Math.max(0, Math.min(100, progress))}%`;
-  els.dreamSteps.forEach((step, index) => {
-    step.classList.toggle('is-done', index < currentStep);
-    step.classList.toggle('is-current', index === currentStep);
-  });
-  if (liveText && els.dreamStatusLive) els.dreamStatusLive.textContent = liveText;
-}
 
 function humanTime(timestamp) {
   const seconds = Math.max(1, Math.round((Date.now() - timestamp) / 1000));
@@ -261,15 +282,82 @@ function updateConnectionUi() {
   els.connectOpenRouterButton.textContent = connected ? 'Disconnect' : 'Connect';
 }
 
+function renderPlayback(snapshot = playbackController.snapshot()) {
+  visualPaused = snapshot.paused;
+  document.body.classList.toggle('visual-paused', visualPaused);
+  els.stage.classList.toggle('is-visual-paused', visualPaused);
+  if (els.playbackButton) {
+    els.playbackButton.textContent = visualPaused ? '▶' : '⏸';
+    els.playbackButton.setAttribute('aria-label', visualPaused ? 'Play visual' : 'Pause visual');
+    els.playbackButton.setAttribute('aria-pressed', String(visualPaused));
+    els.playbackButton.title = visualPaused ? 'Play visual' : 'Pause visual';
+  }
+  if (els.pauseMessage) {
+    els.pauseMessage.textContent = visualPaused && audio.connected
+      ? EXTERNAL_CAPTURE_PAUSE_COPY
+      : 'Visual paused';
+  }
+  if (els.pauseOverlay) els.pauseOverlay.hidden = !visualPaused;
+  activeSlot.sandbox.setPaused(visualPaused);
+  if (promotion?.candidate && promotion.candidate !== activeSlot.sandbox) {
+    promotion.candidate.setPaused(visualPaused);
+  }
+}
+
 function updateAudioState(state) {
   const connected = Boolean(state.connected);
   els.audioDot.classList.toggle('is-live', connected);
   els.audioButtonLabel.textContent = connected ? 'Audio connected' : 'Connect audio';
+  renderPlayback();
   if (!connected && state.label) showToast(state.label);
 }
 
+playbackController.subscribe(renderPlayback);
+
+function dreamLifecycleDetail(phase, eventDetail = {}) {
+  if (phase === DREAM_JOB_PHASES.SENDING) return 'Request sent. Keep watching or collapse this panel.';
+  if (phase === DREAM_JOB_PHASES.WORKING) {
+    const waitingMs = performance.now() - Number(eventDetail.requestStartedAt || performance.now());
+    return waitingMs >= 45000
+      ? 'Still working. Some models take several minutes, and the request remains open.'
+      : 'The model is creating your visual.';
+  }
+  if (phase === DREAM_JOB_PHASES.RECEIVING) return 'Response started. Waiting for the complete visual.';
+  if (phase === DREAM_JOB_PHASES.CHECKING) return 'The response arrived. Checking it safely in the background.';
+  return eventDetail.message || '';
+}
+
+window.addEventListener('visualizer:dream-lifecycle', event => {
+  const detail = event.detail || {};
+  const phase = ({
+    sending: DREAM_JOB_PHASES.SENDING,
+    working: DREAM_JOB_PHASES.WORKING,
+    receiving: DREAM_JOB_PHASES.RECEIVING,
+    checking: DREAM_JOB_PHASES.CHECKING,
+  })[detail.phase];
+  if (!phase) return;
+  const job = dreamJobController.snapshot();
+  if (!job.id || !generating || (detail.modelId && detail.modelId !== job.modelId)) return;
+  try {
+    const patch = { detail: dreamLifecycleDetail(phase, detail) };
+    if (phase === DREAM_JOB_PHASES.CHECKING) patch.cancellable = false;
+    dreamJobController.transition(job.id, phase, patch);
+  } catch {
+    // Late provider lifecycle events cannot mutate a completed or replaced job.
+  }
+});
+
 function isFatalEvent(message) {
   return message?.type === 'diagnostic-event' && message.event?.severity === 'fatal';
+}
+
+function flushPendingActiveFailure() {
+  if (!pendingActiveFailure || promotion || recovering || reopening || deletingGeneration) return;
+  const pending = pendingActiveFailure;
+  pendingActiveFailure = null;
+  if (pending.sandbox === activeSlot.sandbox && pending.sessionId === activeSlot.sandbox.sessionId) {
+    queueRuntimeRecovery(pending.event);
+  }
 }
 
 function pushLiveDiagnostic(source, message) {
@@ -313,8 +401,12 @@ function handleSandboxEvent(sandbox, message) {
     return;
   }
 
-  if (sandbox === activeSlot.sandbox && isFatalEvent(message) && !promotion && !generating && !recovering && !reopening && !deletingGeneration) {
-    queueRuntimeRecovery(message.event);
+  if (sandbox === activeSlot.sandbox && isFatalEvent(message)) {
+    if (promotion || recovering || reopening || deletingGeneration) {
+      pendingActiveFailure = { sandbox, sessionId: sandbox.sessionId, event: message.event };
+    } else {
+      queueRuntimeRecovery(message.event);
+    }
   }
 }
 
@@ -331,23 +423,63 @@ function setSelectedModel(model) {
 }
 
 function openDrawer(drawer) {
+  if (!anyDrawerOpen() && document.activeElement instanceof HTMLElement) drawerReturnFocus = document.activeElement;
   drawerElements.forEach(candidate => {
     const open = candidate === drawer;
     candidate.classList.toggle('is-open', open);
     candidate.setAttribute('aria-hidden', String(!open));
+    candidate.inert = !open;
   });
+  els.stage.inert = true;
   els.drawerScrim.hidden = false;
   document.body.classList.remove('ui-hidden');
   clearTimeout(hideUiTimer);
+  queueMicrotask(() => drawer.querySelector('button:not(:disabled), input:not(:disabled), summary, [tabindex]:not([tabindex="-1"])')?.focus());
 }
 
-function closeDrawers() {
+function closeDrawers({ restoreFocus = true } = {}) {
   drawerElements.forEach(drawer => {
     drawer.classList.remove('is-open');
     drawer.setAttribute('aria-hidden', 'true');
+    drawer.inert = true;
   });
   els.drawerScrim.hidden = true;
+  els.stage.inert = Boolean(document.querySelector('#spendDrawer.is-open'));
+  if (restoreFocus) {
+    const target = drawerReturnFocus?.isConnected && !drawerReturnFocus.closest('[hidden], [aria-hidden="true"]')
+      ? drawerReturnFocus
+      : els.switcherButton;
+    queueMicrotask(() => target?.focus());
+  }
+  drawerReturnFocus = null;
   scheduleUiHide();
+}
+
+function trapDrawerFocus(event) {
+  if (event.key !== 'Tab') return false;
+  const drawer = [...document.querySelectorAll('.drawer.is-open:not([inert])')].at(-1);
+  if (!drawer) return false;
+  const focusable = [...drawer.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter(element => element.getClientRects().length > 0);
+  if (!focusable.length) return false;
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (!drawer.contains(document.activeElement)) {
+    event.preventDefault();
+    first.focus();
+    return true;
+  }
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+    return true;
+  }
+  return false;
 }
 
 function anyDrawerOpen() {
@@ -361,9 +493,9 @@ function showUi() {
 
 function scheduleUiHide() {
   clearTimeout(hideUiTimer);
-  if (anyDrawerOpen()) return;
+  if (anyDrawerOpen() || dreamSwitcher?.isOpen() || visualPaused || dreamJobController.snapshot().expanded) return;
   hideUiTimer = setTimeout(() => {
-    if (!generating && !document.activeElement?.matches('input, button, summary')) {
+    if (!document.activeElement?.matches('input, button, summary')) {
       document.body.classList.add('ui-hidden');
     }
   }, 3000);
@@ -391,7 +523,7 @@ function renderModels() {
   if (!filtered.length) {
     const empty = document.createElement('div');
     empty.className = 'model-empty';
-    empty.textContent = 'No models match that search.';
+    empty.textContent = modelCatalogError || 'No models match that search.';
     els.modelList.appendChild(empty);
   }
 }
@@ -435,10 +567,6 @@ async function listDiagnosticRecords(limit = 60) {
 
 async function getDiagnosticRecord(id) {
   return fixtureDiagnostics.get(id) || volatileDiagnostics.get(id) || diagnosticStore.get(id);
-}
-
-function diagnosticIsDurable(id) {
-  return diagnosticStore.persistent && !volatileDiagnostics.has(id);
 }
 
 function startTraceAttempt(diagnostic, kind, model) {
@@ -621,35 +749,22 @@ async function runTransparencySelfTest() {
   };
 }
 
-function stageCopy(stage) {
-  const copies = {
-    booting: ['Booting the candidate…', 'Starting it inside an isolated browser sandbox.'],
-    'probing-baseline': ['Checking the first frame…', 'Looking for runtime errors and credible visual output.'],
-    stimulating: ['Testing music response…', 'Feeding the same deterministic synthetic music signals used for every candidate.'],
-    'proving-visible-output': ['Proving the artwork is visible…', 'Checking Canvas, WebGL, SVG, DOM and CSS output without prescribing an aesthetic.'],
-    'canary-viewport': ['Testing your screen size…', 'Running the candidate at the real viewport before it can replace the current visualizer.'],
-    'post-launch-watchdog': ['Launching with rollback armed…', 'The previous visualizer stays warm while this one proves it can survive live playback.'],
-  };
-  return copies[stage] || ['Checking the visualizer…', 'Running the Dream reliability harness.'];
-}
-
 function createHarness(sandbox, diagnostic, traceAttempt = null) {
   return new DreamReliabilityHarness({
     sandbox,
     onStage: event => {
-      const [title, detail] = stageCopy(event.name);
-      showCenter(title, detail);
-      const progress = {
-        booting: 72,
-        'probing-baseline': 76,
-        stimulating: 81,
-        'proving-visible-output': 86,
-        'canary-viewport': 91,
-        'post-launch-watchdog': 96,
-      }[event.name] || 74;
-      const step = event.name === 'post-launch-watchdog' ? 4 : 3;
-      setArtifactProgress(progress, step, event.name === 'post-launch-watchdog' ? 'Candidate visible · rollback armed' : 'Model response complete ✓ · reliability harness running');
-      if (generating && activeDreamController && els.dreamCancelButton) els.dreamCancelButton.disabled = false;
+      if (generating) {
+        const job = dreamJobController.snapshot();
+        if (job.id && job.phase !== DREAM_JOB_PHASES.READY) {
+          try {
+            dreamJobController.transition(job.id, DREAM_JOB_PHASES.CHECKING, {
+              detail: 'Checking the complete visual safely in the background.',
+            });
+          } catch {
+            // A stale reliability stage cannot reopen a completed job.
+          }
+        }
+      }
       addDiagnosticTimeline(diagnostic, `artifact:${event.name}`, event);
       if (traceAttempt && !traceAttempt.closed) {
         patchTraceAttempt(diagnostic, traceAttempt, {
@@ -676,7 +791,19 @@ function staticFailure(problems) {
   };
 }
 
-async function evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt = null) {
+async function withCandidateSlot(operation) {
+  const previous = candidateSlotTail;
+  let release;
+  candidateSlotTail = new Promise(resolve => { release = resolve; });
+  await previous.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+async function evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt = null, { quickReopen = false } = {}) {
   const validationStartedAt = Date.now();
   if (traceAttempt) patchTraceAttempt(diagnostic, traceAttempt, { timing: { artifactValidationStartedAt: validationStartedAt } });
   const attempt = {
@@ -713,17 +840,28 @@ async function evaluateCandidate(result, diagnostic, attemptNumber, signal, trac
     return { passed: false, health: failure, attempt };
   }
 
-  const harness = createHarness(standbySlot.sandbox, diagnostic, traceAttempt);
-  const health = await harness.preflight(result.html, {
+  const candidateSandbox = standbySlot.sandbox;
+  const harness = createHarness(candidateSandbox, diagnostic, traceAttempt);
+  const health = await (quickReopen ? harness.reopen(result.html, {
     viewport: currentViewport(),
     signal,
-  });
+  }) : harness.preflight(result.html, {
+    viewport: currentViewport(),
+    signal,
+  }));
   attempt.reliability = health;
   diagnostic.reliability = health;
   attempt.finishedAt = Date.now();
   if (traceAttempt) patchTraceAttempt(diagnostic, traceAttempt, { artifact: reliabilityEvidence(health) });
   await persistDiagnostic(diagnostic);
-  return { passed: health.passed, health, attempt, harness };
+  return {
+    passed: health.passed,
+    health,
+    attempt,
+    harness,
+    candidateSandbox,
+    candidateSessionId: candidateSandbox.sessionId,
+  };
 }
 
 function swapSlots() {
@@ -734,15 +872,21 @@ function swapSlots() {
   standbySlot.sandbox.setPresentation('standby');
 }
 
-async function promoteCandidate({ harness, diagnostic, signal, traceAttempt = null, onCommit = () => {} }) {
+async function promoteCandidate({ harness, candidateSandbox, candidateSessionId, diagnostic, signal, traceAttempt = null, onCommit = () => {} }) {
+  if (
+    !candidateSandbox
+    || standbySlot.sandbox !== candidateSandbox
+    || candidateSandbox.sessionId !== candidateSessionId
+  ) throw new Error('The Dream candidate slot changed before it could open safely.');
   const promotionStartedAt = Date.now();
   if (traceAttempt) patchTraceAttempt(diagnostic, traceAttempt, {
     timing: { promotionStartedAt, watchdogStartedAt: promotionStartedAt },
   });
-  showCenter('Launching the dream…', 'The candidate is visible now, but instant rollback remains armed.');
   addDiagnosticTimeline(diagnostic, 'promotion:started');
   await persistDiagnostic(diagnostic);
 
+  standbySlot.sandbox.setPaused(visualPaused);
+  await standbySlot.sandbox.waitForPlayback(visualPaused);
   standbySlot.sandbox.setPresentation('promoting');
   activeSlot.sandbox.setPresentation('retiring');
 
@@ -811,7 +955,11 @@ async function promoteCandidate({ harness, diagnostic, signal, traceAttempt = nu
     watchdogDurationMs: watchdog.durationMs,
   });
   await persistDiagnostic(diagnostic);
-  setTimeout(() => standbySlot.sandbox.clear(), 420);
+  const retiredSandbox = standbySlot.sandbox;
+  const retiredSessionId = retiredSandbox.sessionId;
+  setTimeout(() => {
+    if (retiredSandbox.sessionId === retiredSessionId) retiredSandbox.clear();
+  }, 420);
   return watchdog;
 }
 
@@ -824,19 +972,29 @@ function friendlyFailure(failure, repairUsed) {
     case FAILURE_CODES.PROGRAM_LINK_FAILED:
       return `${prefix.toLowerCase()}could not start its graphics on this device, so the current visualizer stayed live.`;
     case FAILURE_CODES.VIZ_NOT_CONSUMED:
-      return `${prefix.toLowerCase()}did not connect to the music API, so it was not promoted.`;
+      return `${prefix.toLowerCase()}did not respond to the music signal, so it stayed safely in the background.`;
     case FAILURE_CODES.WEBGL_CONTEXT_LOST:
     case FAILURE_CODES.RUNTIME_STALLED:
     case FAILURE_CODES.PERFORMANCE_COLLAPSE:
-      return `${prefix.toLowerCase()}became unstable, so it was rolled back automatically.`;
+      return `${prefix.toLowerCase()}became unstable, so your previous visual is still here.`;
     case FAILURE_CODES.INVALID_HTML:
       return `${prefix.toLowerCase()}did not return a complete visualizer document.`;
     default:
-      return `${prefix.toLowerCase()}could not pass the reliability checks. Your previous visualizer is still safe.`;
+      return `${prefix.toLowerCase()}could not open safely. Your previous visualizer is still here.`;
   }
 }
 
-async function runRepair(result, failureReport, diagnostic, signal, requestedModel) {
+function friendlyPipelineFailure(failure) {
+  const sanitized = String(sanitizeTraceValue(failure?.message || 'The AI service could not finish this Dream.'))
+    .replace(/OpenRouter/gi, 'The AI service')
+    .replace(/\bprovider\b/gi, 'AI service')
+    .replace(/\bHTTP\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${sanitized.slice(0, 240)}${/[.!?]$/.test(sanitized) ? '' : '.'}`;
+}
+
+async function runRepair(result, failureReport, diagnostic, signal, requestedModel, promptProfile) {
   const problem = failureReport?.repairProblem
     || `${failureReport?.failure?.code || 'ARTIFACT_FAILURE'}\n${failureReport?.failure?.message || 'The candidate failed its runtime check.'}`;
   diagnostic.repairUsed = true;
@@ -847,7 +1005,6 @@ async function runRepair(result, failureReport, diagnostic, signal, requestedMod
     failureCode: failureReport?.failure?.code || '',
   });
   await persistDiagnostic(diagnostic);
-  showCenter(`${requestedModel.name} is repairing its dream…`, failureReport?.failure?.message || 'Preserving the artistic idea while fixing the runtime failure.');
   let repaired;
   try {
     repaired = await repairVisualizer({
@@ -856,6 +1013,7 @@ async function runRepair(result, failureReport, diagnostic, signal, requestedMod
       problem,
       signal,
       traceContext: traceAttempt.captureContext,
+      promptProfile,
     });
     absorbTraceCapture(diagnostic, traceAttempt, repaired);
   } catch (error) {
@@ -885,14 +1043,23 @@ async function dream() {
     showToast('Connect OpenRouter first. The key is session-only.');
     return;
   }
+  if (!store.persistent) {
+    showToast('Local Dream storage is unavailable, so no paid request was sent. Check this browser’s site-storage settings.', 7200);
+    return;
+  }
 
   const requestedModel = structuredClone(selectedModel);
+  const promptProfile = structuredClone(loadPromptProfile());
   const identityAtStart = identityController.snapshot();
   const generationId = crypto.randomUUID();
+  const job = dreamJobController.start({
+    model: requestedModel,
+    promptProfile,
+    detail: 'Your current Dream keeps playing while the model works.',
+  });
 
   generating = true;
   showUi();
-  showCenter(`${requestedModel.name} is dreaming…`, 'Your current visualizer keeps playing while the model invents a new one.');
   els.dreamButton.disabled = true;
   activeDreamController = new AbortController();
   const signal = activeDreamController.signal;
@@ -903,29 +1070,21 @@ async function dream() {
     nextSnapshot: identityAtStart.next,
   });
   diagnostic.promptVersion = PROMPT_VERSION;
+  diagnostic.promptProfile = sanitizeTraceValue(promptProfile);
   diagnostic.audioApiVersion = AUDIO_API_VERSION;
   diagnostic.attempts = [];
   addDiagnosticTimeline(diagnostic, 'generation:started');
   let traceAttempt = startTraceAttempt(diagnostic, 'generation', requestedModel);
-  let identityToken = stageLiveCandidate({
-    modelId: requestedModel.id,
-    modelName: requestedModel.name,
-    providerId: 'openrouter',
-    upstreamProvider: requestedModel.provider || '',
-    generationId,
-    traceId: diagnostic.trace.id,
-    diagnosticId: diagnostic.id,
-  });
   await persistDiagnostic(diagnostic);
 
   let result;
-  let promoted = false;
   try {
     try {
       result = await generateVisualizer({
         modelId: requestedModel.id,
         signal,
         traceContext: traceAttempt.captureContext,
+        promptProfile,
       });
       absorbTraceCapture(diagnostic, traceAttempt, result);
     } catch (error) {
@@ -942,14 +1101,32 @@ async function dream() {
     await persistDiagnostic(diagnostic);
 
     for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1) {
-      const candidate = await evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt);
-      let failureReport = candidate.health;
-      let attemptRolledBack = false;
+      const currentJob = dreamJobController.snapshot();
+      dreamJobController.transition(currentJob.id, DREAM_JOB_PHASES.CHECKING, {
+        detail: 'Checking the complete visual safely in the background.',
+      });
+      const candidate = await withCandidateSlot(async () => {
+        const candidateSandbox = standbySlot.sandbox;
+        try {
+          return await evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt);
+        } finally {
+          if (standbySlot.sandbox === candidateSandbox) {
+            candidateSandbox.setPresentation('standby');
+            candidateSandbox.clear();
+          }
+        }
+      });
+      const failureReport = candidate.health;
 
       if (candidate.passed) {
+        if (signal.aborted) throw new DOMException('Dream cancelled before its ready artifact was committed.', 'AbortError');
+        dreamJobController.transition(job.id, DREAM_JOB_PHASES.CHECKING, { cancellable: false });
+        const createdAt = Date.now();
         const generation = {
           schema: 'visualizer-generation-v1',
           id: generationId,
+          source: 'local',
+          jobId: job.id,
           modelId: requestedModel.id,
           modelName: requestedModel.name,
           provider: requestedModel.provider,
@@ -957,8 +1134,12 @@ async function dream() {
           resolvedModel: result.resolvedModel,
           requestId: result.requestId || '',
           promptVersion: PROMPT_VERSION,
+          promptProfileId: promptProfile.id,
+          promptProfileName: promptProfile.name,
+          promptProfile: sanitizeTraceValue(promptProfile),
           audioApiVersion: AUDIO_API_VERSION,
-          createdAt: Date.now(),
+          createdAt,
+          readyAt: createdAt,
           favorite: false,
           battleWins: 0,
           battleLosses: 0,
@@ -967,80 +1148,55 @@ async function dream() {
           html: result.html,
           diagnosticId: diagnostic.id,
           traceId: diagnostic.trace.id,
-          healthStatus: 'verified',
+          healthStatus: 'ready',
+          openStatus: 'ready-to-open',
           healthSummary: candidate.health.summary,
-        };
-        const watchdog = await promoteCandidate({
-          harness: candidate.harness,
-          diagnostic,
-          signal,
-          traceAttempt,
-          onCommit: () => {
-            commitLiveCandidate(identityToken);
-            identityToken = '';
-            currentGeneration = generation;
-            currentHtml = generation.html;
-            currentDiagnosticId = diagnostic.id;
+          preflightEvidence: {
+            schema: candidate.health.schema,
+            passed: true,
+            summary: candidate.health.summary,
+            warnings: candidate.health.warnings || [],
+            checkedAt: createdAt,
           },
-        });
-        candidate.attempt.promotionWatchdog = watchdog;
-        diagnostic.promotionWatchdog = watchdog;
-        await persistDiagnostic(diagnostic);
-        if (watchdog.passed) {
-          promoted = true;
-          closeTraceAttempt(diagnostic, traceAttempt, 'succeeded', {
-            identity: { generationId: generation.id },
-            artifact: { promotionWatchdog: watchdog },
-          });
-          finalizeDiagnosticTrace(diagnostic, 'succeeded', { generationId: generation.id });
-          diagnostic.generationId = generation.id;
-          finishDiagnostic(diagnostic, { status: 'succeeded', generationId: generation.id });
-          await persistDiagnostic(diagnostic);
-          try {
-            await store.put(generation);
-          } catch (storageError) {
-            console.warn('Dream rendered but could not be saved:', storageError);
-            showToast(`${requestedModel.name} is live, but this browser could not save it.`, 6000);
-          }
-          els.favoriteButton.classList.remove('is-active');
-          els.favoriteButton.textContent = '♡';
-          els.topStatus.textContent = 'Verified · rollback window passed';
-          setArtifactProgress(100, 4, 'Dream verified ✓ · rollback window passed');
-          showCenter(`${requestedModel.name} is live`, 'Rendering, music-API, viewport and post-launch checks all passed.');
-          await new Promise(resolve => setTimeout(resolve, 520));
-          hideCenter();
-          const traceWarning = diagnosticIsDurable(diagnostic.id)
-            ? ''
-            : ' Its trace is available only for this tab because durable local storage failed.';
-          showToast(`${requestedModel.name} made this. It passed rendering, music-API, viewport and rollback checks.${traceWarning}`, traceWarning ? 7600 : 3600);
-          await renderLibrary();
-          return;
+        };
+        try {
+          await store.put(generation);
+        } catch (storageError) {
+          console.warn('A ready Dream could not be saved:', storageError);
+          throw new Error('The Dream passed its checks, but this browser could not save it safely. Your current Dream is unchanged.', { cause: storageError });
         }
-        failureReport = watchdog;
-        attemptRolledBack = true;
+        closeTraceAttempt(diagnostic, traceAttempt, 'ready', {
+          identity: { generationId: generation.id, openStatus: generation.openStatus },
+          artifact: reliabilityEvidence(candidate.health),
+        });
+        finalizeDiagnosticTrace(diagnostic, 'ready', { generationId: generation.id });
+        diagnostic.generationId = generation.id;
+        finishDiagnostic(diagnostic, { status: 'ready', generationId: generation.id });
+        await persistDiagnostic(diagnostic);
+        dreamJobController.transition(job.id, DREAM_JOB_PHASES.READY, {
+          artifact: { generationId: generation.id, favorite: false },
+          detail: 'Ready whenever you are. Open it now or find it later in Recent.',
+          cancellable: false,
+        });
+        showToast('Dream ready', 4200);
+        await renderLibrary();
+        return;
       }
 
       if (attemptNumber === 2 || diagnostic.repairUsed) {
-        closeTraceAttempt(diagnostic, traceAttempt, attemptRolledBack ? 'rolled-back' : 'failed', {
+        closeTraceAttempt(diagnostic, traceAttempt, 'failed', {
           artifact: { ...reliabilityEvidence(failureReport), repairProblem: failureReport?.repairProblem || '' },
         });
         throw new DreamReliabilityError(failureReport.failure, failureReport);
       }
-      closeTraceAttempt(diagnostic, traceAttempt, attemptRolledBack ? 'rolled-back' : 'repair-required', {
+      closeTraceAttempt(diagnostic, traceAttempt, 'repair-required', {
         artifact: { ...reliabilityEvidence(failureReport), repairProblem: failureReport?.repairProblem || '' },
       });
-      const repair = await runRepair(result, failureReport, diagnostic, signal, requestedModel);
+      const repair = await runRepair(result, failureReport, diagnostic, signal, requestedModel, promptProfile);
       result = repair.result;
       traceAttempt = repair.traceAttempt;
     }
   } catch (error) {
-    standbySlot.sandbox.setPresentation('standby');
-    if (promotion) {
-      activeSlot.sandbox.setPresentation('active');
-      promotion = null;
-    }
-    standbySlot.sandbox.clear();
-
     const cancelled = error?.name === 'AbortError' || /cancel/i.test(error?.message || '');
     const failure = error instanceof DreamReliabilityError
       ? error.failure
@@ -1048,10 +1204,6 @@ async function dream() {
           code: cancelled ? 'CANCELLED' : error?.code || 'PROVIDER_OR_PIPELINE_FAILURE',
           message: error?.message || 'That Dream failed.',
         };
-    if (!promoted && identityToken) {
-      discardLiveCandidate(identityToken);
-      identityToken = '';
-    }
     absorbTraceCapture(diagnostic, traceAttempt);
     if (traceAttempt && !traceAttempt.closed) {
       closeTraceAttempt(diagnostic, traceAttempt, cancelled ? 'cancelled' : 'failed', { error });
@@ -1065,24 +1217,37 @@ async function dream() {
       failureMessage: failure.message,
     });
     await persistDiagnostic(diagnostic);
-    hideCenter();
     const message = error instanceof DreamReliabilityError
       ? friendlyFailure(failure, diagnostic.repairUsed)
-      : failure.message;
+      : friendlyPipelineFailure(failure);
     const suffix = devMode ? ` Diagnostic ${shortDiagnosticId(diagnostic.id)}.` : '';
-    showToast(`${message}${suffix}`, 7600);
+    const latestJob = dreamJobController.snapshot();
+    try {
+      dreamJobController.transition(job.id, cancelled ? DREAM_JOB_PHASES.CANCELLED : DREAM_JOB_PHASES.FAILED, {
+        detail: cancelled ? 'No further request will be sent. Your current Dream is unchanged.' : `${message} Your current Dream is unchanged.`,
+        failure,
+        cancellable: false,
+      });
+    } catch {
+      // A stale failure cannot replace a newer job state.
+    }
+    if (latestJob.id === job.id) showToast(`${cancelled ? 'Dream cancelled' : 'Dream failed safely'}.${suffix}`, 6200);
+    else showToast(`${message}${suffix}`, 7600);
   } finally {
-    if (!promoted && identityToken) discardLiveCandidate(identityToken);
+    window.dispatchEvent(new CustomEvent('visualizer:dream-job-terminal'));
     activeDreamController = null;
     generating = false;
     els.dreamButton.disabled = false;
-    if (!promoted) activeSlot.sandbox.setPresentation('active');
     scheduleUiHide();
   }
 }
 
-async function openGeneration(generation, { close = true } = {}) {
-  if (generating || recovering || reopening || deletingGeneration || promotion) return false;
+async function openGeneration(generation, { close = true, jobId = '', source = 'local' } = {}) {
+  if (recovering || reopening || deletingGeneration || promotion) return false;
+  const visibleJob = dreamJobController.snapshot();
+  if (!jobId && source === 'local' && visibleJob.phase === DREAM_JOB_PHASES.READY && visibleJob.artifact?.generationId === generation.id) {
+    jobId = visibleJob.id;
+  }
   reopening = true;
   const model = models.find(candidate => candidate.id === generation.modelId) || {
     id: generation.modelId,
@@ -1093,12 +1258,13 @@ async function openGeneration(generation, { close = true } = {}) {
   const diagnostic = createDiagnosticRecord({
     model,
     providerId: generation.providerId || 'openrouter',
-    kind: 'library-reopen',
+    kind: source === 'featured' ? 'featured-open' : 'library-reopen',
     liveSnapshot: identityAtStart,
     nextSnapshot: identityAtStart.next,
   });
-  let identityToken = stageLiveCandidate(liveIdentityForGeneration(generation, { kind: 'saved', diagnosticId: diagnostic.id }));
+  let identityToken = '';
   diagnostic.promptVersion = generation.promptVersion || '';
+  diagnostic.promptProfile = generation.promptProfile || null;
   diagnostic.audioApiVersion = generation.audioApiVersion || '';
   diagnostic.html = generation.html;
   diagnostic.outputBytes = new TextEncoder().encode(String(generation.html || '')).byteLength;
@@ -1106,7 +1272,18 @@ async function openGeneration(generation, { close = true } = {}) {
   addDiagnosticTimeline(diagnostic, 'library-reopen:started', { generationId: generation.id });
   await persistDiagnostic(diagnostic);
 
-  showCenter('Rechecking the saved dream…', 'Legacy and saved visualizers must prove they still render before replacing the current one.');
+  if (jobId) {
+    try {
+      dreamJobController.transition(jobId, DREAM_JOB_PHASES.OPENING, {
+        detail: 'Opening carefully. Your current Dream stays visible until this one is ready to take over.',
+        cancellable: false,
+      });
+    } catch {
+      reopening = false;
+      flushPendingActiveFailure();
+      return false;
+    }
+  }
   try {
     const result = {
       html: generation.html,
@@ -1116,43 +1293,74 @@ async function openGeneration(generation, { close = true } = {}) {
       usage: generation.usage || null,
       attempt: generation.attempt || 1,
     };
-    const candidate = await evaluateCandidate(result, diagnostic, 1, null);
-    if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
-    const watchdog = await promoteCandidate({
-      harness: candidate.harness,
-      diagnostic,
-      signal: null,
-      onCommit: () => {
-        commitLiveCandidate(identityToken);
-        identityToken = '';
-        currentGeneration = generation;
-        currentHtml = generation.html;
-        currentDiagnosticId = diagnostic.id;
-      },
+    const quickReopen = ['ready', 'verified'].includes(generation.healthStatus)
+      && generation.preflightEvidence?.passed === true
+      && generation.preflightEvidence?.schema === 'dream-reliability-v1';
+    const candidate = await withCandidateSlot(async () => {
+      const candidateSandbox = standbySlot.sandbox;
+      identityToken = stageLiveCandidate(liveIdentityForGeneration(generation, {
+        kind: source === 'featured' ? 'featured' : 'saved',
+        diagnosticId: diagnostic.id,
+      }));
+      try {
+        const checked = await evaluateCandidate(result, diagnostic, 1, null, null, { quickReopen });
+        if (!checked.passed) throw new DreamReliabilityError(checked.health.failure, checked.health);
+        const watchdog = await promoteCandidate({
+          harness: checked.harness,
+          candidateSandbox: checked.candidateSandbox,
+          candidateSessionId: checked.candidateSessionId,
+          diagnostic,
+          signal: null,
+          onCommit: () => {
+            commitLiveCandidate(identityToken);
+            identityToken = '';
+            currentGeneration = generation;
+            currentHtml = generation.html;
+            currentDiagnosticId = diagnostic.id;
+            currentDreamKey = source === 'featured' ? generation.key : localDreamKey(generation);
+          },
+        });
+        if (!watchdog.passed) throw new DreamReliabilityError(watchdog.failure, watchdog);
+        return checked;
+      } catch (error) {
+        if (standbySlot.sandbox === candidateSandbox) {
+          candidateSandbox.setPresentation('standby');
+          candidateSandbox.clear();
+        }
+        throw error;
+      }
     });
-    if (!watchdog.passed) throw new DreamReliabilityError(watchdog.failure, watchdog);
-    try {
-      const updated = await store.update(generation.id, {
-        healthStatus: 'verified',
-        healthSummary: candidate.health.summary,
-        lastDiagnosticId: diagnostic.id,
-      });
-      if (updated) currentGeneration = updated;
-    } catch (storageError) {
-      console.warn('Saved Dream opened, but its health metadata could not be updated:', storageError);
+    if (source === 'local') {
+      try {
+        const updated = await store.update(generation.id, {
+          healthStatus: 'verified',
+          openStatus: 'verified-live',
+          healthSummary: candidate.health.summary,
+          lastDiagnosticId: diagnostic.id,
+          lastOpenedAt: Date.now(),
+        });
+        if (updated) currentGeneration = updated;
+      } catch (storageError) {
+        console.warn('Saved Dream opened, but its health metadata could not be updated:', storageError);
+      }
     }
     finalizeDiagnosticTrace(diagnostic, 'succeeded', { generationId: generation.id });
     finishDiagnostic(diagnostic, { status: 'succeeded', generationId: generation.id });
     await persistDiagnostic(diagnostic);
-    els.favoriteButton.classList.toggle('is-active', Boolean(generation.favorite));
-    els.favoriteButton.textContent = generation.favorite ? '♥' : '♡';
-    els.topStatus.textContent = `Saved Dream verified · ${humanTime(generation.createdAt)}`;
-    hideCenter();
+    renderFavoriteControl();
+    els.topStatus.textContent = 'Playing';
+    if (jobId) {
+      dreamJobController.transition(jobId, DREAM_JOB_PHASES.LIVE, {
+        artifact: { generationId: generation.id, favorite: Boolean(currentGeneration?.favorite) },
+        detail: 'This Dream is now LIVE.',
+        cancellable: false,
+      });
+    }
     if (close) closeDrawers();
+    showToast('Dream opened');
+    await renderLibrary();
     return true;
   } catch (error) {
-    standbySlot.sandbox.setPresentation('standby');
-    standbySlot.sandbox.clear();
     activeSlot.sandbox.setPresentation('active');
     const failure = error instanceof DreamReliabilityError
       ? error.failure
@@ -1161,10 +1369,18 @@ async function openGeneration(generation, { close = true } = {}) {
       discardLiveCandidate(identityToken);
       identityToken = '';
     }
-    await store.update(generation.id, {
-      healthStatus: 'failed-on-device',
-      lastDiagnosticId: diagnostic.id,
-    });
+    if (source === 'local') {
+      try {
+        await store.update(generation.id, {
+          healthStatus: generation.healthStatus === 'ready' ? 'ready' : 'failed-on-device',
+          openStatus: 'failed-to-open',
+          lastOpenFailure: { code: failure.code, message: failure.message, at: Date.now() },
+          lastDiagnosticId: diagnostic.id,
+        });
+      } catch (storageError) {
+        console.warn('Failed Open evidence could not be updated in local storage:', storageError);
+      }
+    }
     finishDiagnostic(diagnostic, {
       status: 'failed',
       failureCode: failure.code,
@@ -1173,14 +1389,83 @@ async function openGeneration(generation, { close = true } = {}) {
     });
     finalizeDiagnosticTrace(diagnostic, 'failed', { failure });
     await persistDiagnostic(diagnostic);
-    hideCenter();
-    showToast(`That saved Dream is not healthy on this device, so the current visualizer stayed live.${devMode ? ` Diagnostic ${shortDiagnosticId(diagnostic.id)}.` : ''}`, 7000);
+    if (jobId) {
+      dreamJobController.transition(jobId, DREAM_JOB_PHASES.FAILED_OPEN, {
+        detail: 'The previous Dream stayed LIVE. You can try this Dream again from Recent.',
+        failure,
+        cancellable: false,
+      });
+    }
+    showToast(`Could not open safely. Your current Dream stayed LIVE.${devMode ? ` Diagnostic ${shortDiagnosticId(diagnostic.id)}.` : ''}`, 7000);
     await renderLibrary();
     return false;
   } finally {
     if (identityToken) discardLiveCandidate(identityToken);
     reopening = false;
+    flushPendingActiveFailure();
+    scheduleUiHide();
   }
+}
+
+function featuredArtifact(featured) {
+  return {
+    ...featured,
+    id: `featured:${featured.id}`,
+    key: featured.key || `featured:${featured.id}`,
+    source: 'featured',
+    artifactId: featured.id,
+    modelId: featured.modelId,
+    modelName: featured.modelName,
+    provider: featured.provenance?.generatedByModel ? String(featured.modelId).split('/')[0] : 'built-in',
+    providerId: featured.provenance?.generatedByModel ? 'openrouter' : 'built-in',
+    promptProfileId: featured.promptProfileId,
+    promptVersion: featured.promptVersion,
+    audioApiVersion: featured.audioApiVersion,
+    createdAt: 0,
+    favorite: false,
+    healthStatus: 'verified',
+    openStatus: 'ready-to-open',
+    preflightEvidence: { passed: true, schema: 'dream-reliability-v1', source: 'featured-manifest' },
+  };
+}
+
+async function openSwitcherItem(item) {
+  if (item.active) {
+    dreamSwitcher?.close({ restoreFocus: true });
+    return true;
+  }
+  const opened = item.source === 'featured'
+    ? await openGeneration(featuredArtifact(item.featured), { close: false, source: 'featured' })
+    : await openGeneration(item.generation, { close: false });
+  if (opened) dreamSwitcher?.close({ restoreFocus: true });
+  return opened;
+}
+
+async function toggleSwitcherFavorite(item) {
+  if (item.source !== 'local') return;
+  const updated = await store.toggleFavorite(item.id);
+  if (!updated) return;
+  if (currentGeneration?.id === item.id) {
+    currentGeneration = updated;
+    renderFavoriteControl();
+  }
+  const job = dreamJobController.snapshot();
+  if (job.artifact?.generationId === item.id) {
+    dreamJobController.transition(job.id, job.phase, {
+      artifact: { generationId: item.id, favorite: Boolean(updated.favorite) },
+    });
+  }
+  await renderLibrary();
+}
+
+async function refreshDreamSwitcher(generations = null) {
+  if (!dreamSwitcher) return;
+  const localDreams = generations || await store.list();
+  dreamSwitcher.render(buildDreamSwitcherGroups({
+    featured: featuredDreams,
+    generations: localDreams,
+    activeKey: currentDreamKey,
+  }));
 }
 
 async function renderLibrary() {
@@ -1194,10 +1479,14 @@ async function renderLibrary() {
     const article = document.createElement('article');
     const usage = generation.usage || {};
     const healthLabel = generation.healthStatus === 'verified'
-      ? 'verified'
+      ? 'opened safely'
       : generation.healthStatus === 'failed-on-device'
         ? 'failed safely'
-        : 'legacy · rechecked on open';
+        : generation.openStatus === 'failed-to-open'
+          ? 'needs attention'
+          : generation.openStatus === 'ready-to-open'
+            ? 'ready to open'
+            : 'legacy · rechecked on open';
     article.className = 'library-item';
     const promptVersion = generation.promptVersion || 'Not captured by this app version.';
     const audioApiVersion = generation.audioApiVersion || 'Not captured by this app version.';
@@ -1208,8 +1497,7 @@ async function renderLibrary() {
       await store.toggleFavorite(generation.id);
       if (currentGeneration?.id === generation.id) {
         currentGeneration = await store.get(generation.id);
-        els.favoriteButton.classList.toggle('is-active', Boolean(currentGeneration.favorite));
-        els.favoriteButton.textContent = currentGeneration.favorite ? '♥' : '♡';
+        renderFavoriteControl();
       }
       await renderLibrary();
     });
@@ -1227,21 +1515,24 @@ async function renderLibrary() {
         }
         if (currentGeneration?.id === generation.id) {
           await activeSlot.sandbox.load(DEFAULT_VISUALIZER_HTML, { viewport: currentViewport(), readyTimeoutMs: 1800 });
+          activeSlot.sandbox.setPaused(visualPaused);
+          await activeSlot.sandbox.waitForPlayback(visualPaused);
           activeSlot.sandbox.setPresentation('active');
           activeSlot.sandbox.enterPassiveMode();
           currentGeneration = null;
           currentHtml = DEFAULT_VISUALIZER_HTML;
           currentDiagnosticId = '';
+          currentDreamKey = 'featured:calibration-bloom';
           fallbackGeneration = null;
           fallbackHtml = DEFAULT_VISUALIZER_HTML;
           restoreBuiltInIdentity();
-          els.favoriteButton.classList.remove('is-active');
-          els.favoriteButton.textContent = '♡';
+          renderFavoriteControl();
           els.topStatus.textContent = 'Built-in visualizer restored';
         }
         await renderLibrary();
       } finally {
         deletingGeneration = false;
+        flushPendingActiveFailure();
       }
     });
     article.querySelector('[data-action="diagnostics"]')?.addEventListener('click', async () => {
@@ -1262,9 +1553,10 @@ async function renderLibrary() {
     empty.className = 'library-empty';
     empty.textContent = favoritesOnly
       ? 'No favorites yet. Heart a visualizer when one really hits.'
-      : 'Nothing here yet. Choose a model, press Dream, and the first verified generation will appear here automatically.';
+      : 'Nothing here yet. Choose a model and press Dream; it will appear in Recent when it is ready.';
     els.libraryList.appendChild(empty);
   }
+  await refreshDreamSwitcher(all);
 }
 
 async function toggleAudio() {
@@ -1285,17 +1577,53 @@ async function toggleAudio() {
 }
 
 async function toggleFavorite() {
-  if (!currentGeneration) {
-    showToast('Generate a verified Dream first.');
+  if (!currentGeneration || currentGeneration.source === 'featured') {
+    showToast(currentGeneration?.source === 'featured' ? 'Featured Dreams are always here.' : 'Open a saved Dream to favorite it.');
     return;
   }
   const next = await store.toggleFavorite(currentGeneration.id);
   if (!next) return;
   currentGeneration = next;
-  els.favoriteButton.classList.toggle('is-active', Boolean(next.favorite));
-  els.favoriteButton.textContent = next.favorite ? '♥' : '♡';
+  renderFavoriteControl();
   showToast(next.favorite ? 'Saved to favorites.' : 'Removed from favorites. It stays in your history.');
   await renderLibrary();
+}
+
+async function toggleReadyJobFavorite(jobSnapshot) {
+  const generationId = jobSnapshot?.artifact?.generationId;
+  if (!generationId) return;
+  const next = await store.toggleFavorite(generationId);
+  if (!next) return;
+  dreamJobController.transition(jobSnapshot.id, jobSnapshot.phase, {
+    artifact: { generationId, favorite: Boolean(next.favorite) },
+  });
+  showToast(next.favorite ? 'Saved to favorites.' : 'Removed from favorites.');
+  await renderLibrary();
+}
+
+async function openReadyJob(jobSnapshot) {
+  const generationId = jobSnapshot?.artifact?.generationId;
+  if (!generationId) return;
+  const generation = await store.get(generationId);
+  if (!generation) {
+    dreamJobController.transition(jobSnapshot.id, DREAM_JOB_PHASES.OPENING, { cancellable: false });
+    dreamJobController.transition(jobSnapshot.id, DREAM_JOB_PHASES.FAILED_OPEN, {
+      detail: 'This saved Dream is no longer available in this browser.',
+      cancellable: false,
+    });
+    return;
+  }
+  await openGeneration(generation, { close: false, jobId: jobSnapshot.id });
+}
+
+async function exportFeaturedCandidate(generationId = '') {
+  let generation = generationId ? await store.get(generationId) : null;
+  if (!generation && currentGeneration?.source !== 'featured') generation = currentGeneration;
+  if (!generation) generation = (await store.list()).find(item => ['ready', 'verified'].includes(item.healthStatus));
+  if (!generation) throw new Error('No saved local Dream is available to package.');
+  const payload = await createFeaturedExportPackage(generation);
+  downloadJson(`featured-candidate-${payload.manifestEntry.id}.json`, payload);
+  return payload;
 }
 
 async function toggleFullscreen() {
@@ -1355,6 +1683,7 @@ function composeHostFrame(timestamp) {
 
 function hostLoop(timestamp) {
   requestAnimationFrame(hostLoop);
+  if (visualPaused) return;
   if (timestamp - lastHostFrame < 1000 / 60) return;
   lastHostFrame = timestamp;
   const frame = composeHostFrame(timestamp);
@@ -1448,8 +1777,14 @@ async function testDiagnosticHtml(html, label = 'manual HTML') {
   showCenter('Testing supplied visualizer HTML…', 'Running the complete hidden reliability harness without changing the active artwork.');
   try {
     const result = { html: diagnostic.html, raw: diagnostic.html, attempt: 1 };
-    const candidate = await evaluateCandidate(result, diagnostic, 1, null);
-    standbySlot.sandbox.clear();
+    const candidate = await withCandidateSlot(async () => {
+      const candidateSandbox = standbySlot.sandbox;
+      try {
+        return await evaluateCandidate(result, diagnostic, 1, null);
+      } finally {
+        if (standbySlot.sandbox === candidateSandbox) candidateSandbox.clear();
+      }
+    });
     if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
     finalizeDiagnosticTrace(diagnostic, 'succeeded');
     finishDiagnostic(diagnostic, { status: 'succeeded' });
@@ -1457,7 +1792,6 @@ async function testDiagnosticHtml(html, label = 'manual HTML') {
     hideCenter();
     showToast(`HTML test passed. Diagnostic ${shortDiagnosticId(diagnostic.id)}.`);
   } catch (error) {
-    standbySlot.sandbox.clear();
     const failure = error instanceof DreamReliabilityError ? error.failure : { code: 'HTML_TEST_FAILED', message: error?.message || 'HTML test failed.' };
     finalizeDiagnosticTrace(diagnostic, 'failed', { failure });
     finishDiagnostic(diagnostic, { status: 'failed', failureCode: failure.code, failureMessage: failure.message });
@@ -1509,6 +1843,8 @@ function runtimeSummary() {
     reopening,
     deletingGeneration,
     promotionActive: Boolean(promotion),
+    playback: playbackController.snapshot(),
+    job: dreamJobController.snapshot(),
     activeSessionId: activeSlot.sandbox.sessionId,
     activeEvents: activeSlot.sandbox.events.slice(-10),
   };
@@ -1596,8 +1932,14 @@ async function retestCurrentVisualizer() {
   showCenter('Retesting the active visualizer…', 'This runs in the hidden candidate slot and does not interrupt the live artwork.');
   try {
     const result = { html: currentHtml, raw: currentHtml, attempt: 1 };
-    const candidate = await evaluateCandidate(result, diagnostic, 1, null);
-    standbySlot.sandbox.clear();
+    const candidate = await withCandidateSlot(async () => {
+      const candidateSandbox = standbySlot.sandbox;
+      try {
+        return await evaluateCandidate(result, diagnostic, 1, null);
+      } finally {
+        if (standbySlot.sandbox === candidateSandbox) candidateSandbox.clear();
+      }
+    });
     if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
     finalizeDiagnosticTrace(diagnostic, 'succeeded', { generationId: currentGeneration?.id || '' });
     finishDiagnostic(diagnostic, { status: 'succeeded', generationId: currentGeneration?.id || '' });
@@ -1607,7 +1949,6 @@ async function retestCurrentVisualizer() {
     await renderDiagnostics(diagnostic.id);
     return diagnostic;
   } catch (error) {
-    standbySlot.sandbox.clear();
     const failure = error instanceof DreamReliabilityError
       ? error.failure
       : { code: 'RETEST_FAILED', message: error?.message || 'Retest failed.' };
@@ -1636,7 +1977,7 @@ function queueRuntimeRecovery(event) {
 }
 
 async function recoverFromRuntimeFailure(event) {
-  if (recovering || generating || reopening || deletingGeneration || promotion) return;
+  if (recovering || reopening || deletingGeneration || promotion) return;
   recovering = true;
   const failedGeneration = currentGeneration;
   const failedDiagnosticId = currentDiagnosticId;
@@ -1648,7 +1989,7 @@ async function recoverFromRuntimeFailure(event) {
   showCenter('Rolling back safely…', 'The active Dream became unstable. Restoring the last known-good visualizer.');
 
   try {
-    if (failedGeneration) {
+    if (failedGeneration && failedGeneration.source !== 'featured') {
       try {
         await store.update(failedGeneration.id, { healthStatus: 'failed-on-device' });
       } catch {
@@ -1685,26 +2026,45 @@ async function recoverFromRuntimeFailure(event) {
       liveSnapshot: identityAtStart,
       nextSnapshot: identityAtStart.next,
     });
-    recoveryIdentityToken = stageLiveCandidate(targetGeneration
-      ? liveIdentityForGeneration(targetGeneration, { kind: 'saved', diagnosticId: recoveryDiagnostic.id })
-      : { kind: 'built-in' });
     recoveryDiagnostic.html = targetHtml;
     recoveryDiagnostic.outputBytes = new TextEncoder().encode(targetHtml).byteLength;
     recoveryDiagnostic.attempts = [];
     const result = { html: targetHtml, raw: targetHtml, attempt: 1 };
-    const candidate = await evaluateCandidate(result, recoveryDiagnostic, 1, null);
-    if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
-    const watchdog = await promoteCandidate({
-      harness: candidate.harness,
-      diagnostic: recoveryDiagnostic,
-      signal: null,
-      onCommit: () => {
-        commitLiveCandidate(recoveryIdentityToken);
-        recoveryIdentityToken = '';
-        currentHtml = targetHtml;
-        currentGeneration = targetGeneration;
-        currentDiagnosticId = recoveryDiagnostic.id;
-      },
+    const watchdog = await withCandidateSlot(async () => {
+      recoveryIdentityToken = stageLiveCandidate(targetGeneration
+        ? liveIdentityForGeneration(targetGeneration, {
+            kind: targetGeneration.source === 'featured' ? 'featured' : 'saved',
+            diagnosticId: recoveryDiagnostic.id,
+          })
+        : { kind: 'built-in' });
+      const candidate = await evaluateCandidate(result, recoveryDiagnostic, 1, null, null, {
+        quickReopen: Boolean(
+          targetGeneration
+          && ['ready', 'verified'].includes(targetGeneration.healthStatus)
+          && targetGeneration.preflightEvidence?.passed === true
+          && targetGeneration.preflightEvidence?.schema === 'dream-reliability-v1'
+        ),
+      });
+      if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
+      return promoteCandidate({
+        harness: candidate.harness,
+        candidateSandbox: candidate.candidateSandbox,
+        candidateSessionId: candidate.candidateSessionId,
+        diagnostic: recoveryDiagnostic,
+        signal: null,
+        onCommit: () => {
+          commitLiveCandidate(recoveryIdentityToken);
+          recoveryIdentityToken = '';
+          currentHtml = targetHtml;
+          currentGeneration = targetGeneration;
+          currentDiagnosticId = recoveryDiagnostic.id;
+          currentDreamKey = targetGeneration?.source === 'featured'
+            ? targetGeneration.key
+            : targetGeneration
+              ? localDreamKey(targetGeneration)
+              : 'featured:calibration-bloom';
+        },
+      });
     });
     if (!watchdog.passed) throw new DreamReliabilityError(watchdog.failure, watchdog);
     // Never make the just-failed artwork the next rollback target.
@@ -1720,6 +2080,8 @@ async function recoverFromRuntimeFailure(event) {
     finalizeDiagnosticTrace(recoveryDiagnostic, 'succeeded', { generationId: targetGeneration?.id || '' });
     finishDiagnostic(recoveryDiagnostic, { status: 'succeeded', generationId: targetGeneration?.id || '' });
     await persistDiagnostic(recoveryDiagnostic);
+    renderFavoriteControl();
+    await renderLibrary();
     hideCenter();
     showToast('The unstable Dream was rolled back. Your last known-good visualizer is live again.', 6500);
   } catch (recoveryError) {
@@ -1728,18 +2090,24 @@ async function recoverFromRuntimeFailure(event) {
       recoveryIdentityToken = '';
     }
     console.warn('Automatic rollback target also failed; restoring built-in visualizer.', recoveryError);
-    await standbySlot.sandbox.load(DEFAULT_VISUALIZER_HTML, { viewport: currentViewport(), readyTimeoutMs: 2000 });
-    standbySlot.sandbox.setPresentation('promoting');
-    activeSlot.sandbox.setPresentation('retiring');
-    await new Promise(resolve => setTimeout(resolve, 180));
-    swapSlots();
-    activeSlot.sandbox.enterPassiveMode();
+    await withCandidateSlot(async () => {
+      await standbySlot.sandbox.load(DEFAULT_VISUALIZER_HTML, { viewport: currentViewport(), readyTimeoutMs: 2000 });
+      standbySlot.sandbox.setPaused(visualPaused);
+      await standbySlot.sandbox.waitForPlayback(visualPaused);
+      standbySlot.sandbox.setPresentation('promoting');
+      activeSlot.sandbox.setPresentation('retiring');
+      await new Promise(resolve => setTimeout(resolve, 180));
+      swapSlots();
+      activeSlot.sandbox.enterPassiveMode();
+    });
     currentHtml = DEFAULT_VISUALIZER_HTML;
     currentGeneration = null;
     currentDiagnosticId = '';
+    currentDreamKey = 'featured:calibration-bloom';
     fallbackHtml = DEFAULT_VISUALIZER_HTML;
     fallbackGeneration = null;
     restoreBuiltInIdentity();
+    renderFavoriteControl();
     if (failedDiagnosticRecord?.trace?.state === 'closed') {
       failedDiagnosticRecord.trace = recordDreamTraceRollback(failedDiagnosticRecord.trace, {
         failure: event,
@@ -1755,11 +2123,13 @@ async function recoverFromRuntimeFailure(event) {
       finishDiagnostic(recoveryDiagnostic, { status: 'failed', failureCode: failure.code, failureMessage: failure.message });
       await persistDiagnostic(recoveryDiagnostic);
     }
+    await renderLibrary();
     hideCenter();
     showToast('Recovered to the built-in visualizer after a runtime failure.', 6500);
   } finally {
     if (recoveryIdentityToken) discardLiveCandidate(recoveryIdentityToken);
     recovering = false;
+    flushPendingActiveFailure();
   }
 }
 
@@ -1789,6 +2159,9 @@ function installDevApi() {
       await copyText(currentHtml);
       return true;
     },
+    async exportFeatured(generationId = '') {
+      return exportFeaturedCandidate(generationId);
+    },
     async retestCurrent() {
       return retestCurrentVisualizer();
     },
@@ -1816,6 +2189,15 @@ function installDevApi() {
     },
     identity() {
       return identityController.snapshot();
+    },
+    playback() {
+      return playbackController.snapshot();
+    },
+    setPaused(paused) {
+      return playbackController.setPaused(paused);
+    },
+    async probeActive(label = 'developer-active-probe') {
+      return activeSlot.sandbox.probe(label);
     },
     async latestTrace() {
       const record = (await listDiagnosticRecords(1))[0];
@@ -1880,16 +2262,20 @@ function installDevApi() {
 }
 
 function wireEvents() {
+  els.playbackButton?.addEventListener('click', () => {
+    playbackController.toggle();
+    showUi();
+  });
   els.modelButton.addEventListener('click', () => {
     updateConnectionUi();
     renderModels();
     openDrawer(els.modelDrawer);
   });
   els.dreamButton.addEventListener('click', dream);
-  els.dreamCancelButton?.addEventListener('click', () => activeDreamController?.abort());
   els.favoriteButton.addEventListener('click', toggleFavorite);
   els.audioButton.addEventListener('click', toggleAudio);
   els.libraryButton.addEventListener('click', async () => {
+    dreamSwitcher?.close();
     await renderLibrary();
     openDrawer(els.libraryDrawer);
   });
@@ -1950,6 +2336,7 @@ function wireEvents() {
     document.addEventListener(eventName, showUi, { passive: eventName !== 'keydown' });
   }
   document.addEventListener('keydown', event => {
+    if (trapDrawerFocus(event)) return;
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd') {
       event.preventDefault();
       if (devMode) {
@@ -1960,7 +2347,7 @@ function wireEvents() {
         setDevMode(true);
       }
     }
-    if (event.key === 'Escape') closeDrawers();
+    if (event.key === 'Escape' && !document.querySelector('#spendDrawer.is-open')) closeDrawers();
   });
   els.copyLatestDiagnostics?.addEventListener('click', async () => {
     const latest = (await listDiagnosticRecords(1))[0];
@@ -1979,6 +2366,14 @@ function wireEvents() {
     await copyText(currentHtml);
     showToast('Copied the active visualizer HTML.');
   });
+  els.exportFeaturedCandidate?.addEventListener('click', async () => {
+    try {
+      await exportFeaturedCandidate();
+      showToast('Featured candidate package exported for operator review.');
+    } catch (error) {
+      showToast(error?.message || 'No saved Dream is available to package.', 5200);
+    }
+  });
   els.retestCurrent?.addEventListener('click', retestCurrentVisualizer);
   els.transparencySelfTest?.addEventListener('click', () => void runTransparencySelfTest());
   els.pickDiagnosticModel?.addEventListener('click', chooseCheapDiagnosticModel);
@@ -1996,13 +2391,44 @@ async function initialize() {
   devMode = devModeFromLocation();
   setDevMode(devMode);
   installDevApi();
+  mountDreamJobView({
+    controller: dreamJobController,
+    onCancel: () => activeDreamController?.abort(),
+    onOpen: snapshot => { void openReadyJob(snapshot); },
+    onFavorite: snapshot => { void toggleReadyJobFavorite(snapshot); },
+  });
+  try {
+    featuredDreams = await loadFeaturedDreams();
+  } catch (error) {
+    console.warn('Featured manifest could not load from its static HTML path:', error);
+    featuredDreams = await loadFeaturedDreams({ fetchImpl: null });
+  }
+  currentDreamKey = featuredDreams.find(item => item.startup)?.key || currentDreamKey;
+  dreamSwitcher = mountDreamSwitcher({
+    onOpen: item => { void openSwitcherItem(item); },
+    onFavorite: item => { void toggleSwitcherFavorite(item); },
+    onVisibilityChange: open => {
+      if (open && dreamJobController.snapshot().expanded) dreamJobController.collapse();
+    },
+  });
+  renderFavoriteControl();
   wireEvents();
   updateConnectionUi();
 
-  await activeSlot.sandbox.load(DEFAULT_VISUALIZER_HTML, {
+  const startupFeatured = featuredDreams.find(item => item.startup);
+  currentHtml = startupFeatured?.html || DEFAULT_VISUALIZER_HTML;
+  await activeSlot.sandbox.load(currentHtml, {
     viewport: currentViewport(),
     readyTimeoutMs: 2200,
   });
+  if (startupFeatured) {
+    const startupArtifact = featuredArtifact(startupFeatured);
+    const startupToken = stageLiveCandidate(liveIdentityForGeneration(startupArtifact, { kind: 'featured' }));
+    commitLiveCandidate(startupToken);
+    currentGeneration = startupArtifact;
+    currentDreamKey = startupFeatured.key;
+  }
+  renderFavoriteControl();
   activeSlot.sandbox.setPresentation('active');
   activeSlot.sandbox.enterPassiveMode();
   standbySlot.sandbox.setPresentation('standby');
@@ -2017,20 +2443,25 @@ async function initialize() {
 
   try {
     models = await fetchModels();
+    modelCatalogError = '';
     const storedModelId = localStorage.getItem('ai-visualizer.selected-model');
     const storedModel = models.find(model => model.id === storedModelId);
     if (storedModel) setSelectedModel(storedModel);
     else renderModels();
   } catch (error) {
-    showToast(error?.message || 'The model catalog could not be loaded.', 6500);
+    console.warn('The model catalog could not be loaded:', error);
+    modelCatalogError = 'AI choices could not load. Check your connection and refresh when you are ready to Dream.';
+    renderModels();
   }
 
   await renderLibrary();
+  const readyArtifact = (await store.list()).find(generation => generation.openStatus === 'ready-to-open');
+  if (readyArtifact) dreamJobController.restoreReady(readyArtifact);
   requestAnimationFrame(hostLoop);
   scheduleUiHide();
 
   setInterval(() => {
-    if (document.hidden || generating || recovering || reopening || deletingGeneration || promotion || !activeSlot.sandbox.ready) return;
+    if (document.hidden || visualPaused || recovering || reopening || deletingGeneration || promotion || !activeSlot.sandbox.ready) return;
     if (activeSlot.sandbox.heartbeatAgeMs() > 8000) {
       queueRuntimeRecovery({
         code: FAILURE_CODES.RUNTIME_STALLED,

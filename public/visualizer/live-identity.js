@@ -62,22 +62,30 @@ function normalizeLive(identity, at) {
   const modelName = requiredText(identity.modelName ?? identity.name ?? modelId, 'LIVE model name');
   const generationId = String(identity.generationId ?? '').trim();
   const traceId = String(identity.traceId ?? '').trim();
-  const sourceId = generationId || traceId;
-  if (!sourceId) throw new TypeError('A generated LIVE identity requires a generationId or traceId.');
+  const artifactId = String(identity.artifactId ?? '').trim();
+  const sourceId = generationId || traceId || artifactId;
+  if (!sourceId) throw new TypeError('A generated or Featured LIVE identity requires an artifact, generation, or trace ID.');
   const marker = identityMarker(sourceId);
+  const kind = identity.kind === 'saved'
+    ? 'saved'
+    : identity.kind === 'featured'
+      ? 'featured'
+      : 'generated';
+  const featuredTitle = kind === 'featured' ? String(identity.title || '').trim() : '';
 
   return {
-    kind: identity.kind === 'saved' ? 'saved' : 'generated',
+    kind,
     modelId,
     modelName,
     providerId: String(identity.providerId ?? ''),
     upstreamProvider: String(identity.upstreamProvider ?? identity.provider ?? ''),
     resolvedModel: String(identity.resolvedModel ?? ''),
     generationId,
+    artifactId,
     traceId,
     diagnosticId: String(identity.diagnosticId ?? ''),
     marker,
-    displayName: `${modelName} · #${marker}`,
+    displayName: featuredTitle || `${modelName} · #${marker}`,
     committedAt: at,
   };
 }

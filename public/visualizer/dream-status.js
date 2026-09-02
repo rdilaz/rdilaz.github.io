@@ -13,34 +13,10 @@ import {
   const OPENROUTER_KEY_STORAGE = 'ai-visualizer.openrouter.key';
   const COMPLETION_RE = /^https:\/\/openrouter\.ai\/api\/v1\/chat\/completions(?:\?|$)/;
   const DREAM_TIMEOUT_MS = 360000;
+  const LIFECYCLE_EVENT = 'visualizer:dream-lifecycle';
   const baseFetch = window.fetch.bind(window);
 
-  const els = {
-    center: document.getElementById('centerStatus'),
-    title: document.getElementById('centerStatusTitle'),
-    detail: document.getElementById('centerStatusDetail'),
-    connection: document.getElementById('dreamStatusConnection'),
-    elapsed: document.getElementById('dreamStatusElapsed'),
-    progress: document.getElementById('dreamStatusProgressFill'),
-    live: document.getElementById('dreamStatusLive'),
-    cancel: document.getElementById('dreamCancelButton'),
-    dreamButton: document.getElementById('dreamButton'),
-    modelName: document.getElementById('selectedModelName'),
-    topStatus: document.getElementById('topStatus'),
-    steps: [...document.querySelectorAll('[data-dream-step]')],
-  };
-
-  const phases = {
-    preparing: { progress: 10, step: 0 },
-    sent: { progress: 26, step: 1 },
-    working: { progress: 38, step: 1 },
-    receiving: { progress: 54, step: 1 },
-    response: { progress: 66, step: 2 },
-    repair: { progress: 54, step: 2 },
-    checking: { progress: 78, step: 3 },
-    opening: { progress: 92, step: 4 },
-    done: { progress: 100, step: 4 },
-  };
+  const dreamButton = document.getElementById('dreamButton');
 
   const state = {
     active: false,
@@ -55,6 +31,8 @@ import {
     userCancelled: false,
     timedOut: false,
     bodyComplete: false,
+    slowBand: 0,
+    externalAbortCleanup: null,
   };
 
   function isCompletion(input) {
@@ -77,26 +55,19 @@ import {
     return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
   }
 
-  function setSteps(current) {
-    els.steps.forEach((step, index) => {
-      step.classList.toggle('is-done', index < current);
-      step.classList.toggle('is-current', index === current);
-    });
-  }
-
-  function setPhase(phase, { title, detail, live, progress } = {}) {
-    if (!els.center) return;
+  function setPhase(phase, { title, detail, live } = {}) {
     state.phase = phase;
-    const config = phases[phase] || phases.preparing;
-    els.center.classList.add('dream-active');
-    els.center.dataset.dreamPhase = phase;
-    els.center.hidden = false;
-    if (els.progress) els.progress.style.width = `${progress ?? config.progress}%`;
-    setSteps(config.step);
-    if (title && els.title) els.title.textContent = title;
-    if (detail && els.detail) els.detail.textContent = detail;
-    if (live && els.live) els.live.textContent = live;
-    if (els.cancel) els.cancel.disabled = ['response', 'checking', 'opening', 'done'].includes(phase) || !state.controller;
+    const publicPhase = ({ sent: 'sending', repair: 'sending', response: 'checking', opening: 'checking', done: 'ready' })[phase] || phase;
+    window.dispatchEvent(new CustomEvent(LIFECYCLE_EVENT, {
+      detail: {
+        phase: publicPhase,
+        modelId: state.modelId,
+        modelName: state.modelName,
+        startedAt: state.startedAt,
+        requestStartedAt: state.requestStartedAt,
+        message: detail || live || title || '',
+      },
+    }));
   }
 
   function startClock() {
@@ -104,14 +75,12 @@ import {
     state.tick = setInterval(() => {
       if (!state.active) return;
       const now = performance.now();
-      const elapsed = now - state.startedAt;
-      if (els.elapsed) els.elapsed.textContent = elapsedLabel(elapsed);
       if (!['sent', 'working', 'receiving'].includes(state.phase)) return;
       const waiting = now - state.requestStartedAt;
-      if (state.phase === 'receiving') {
-        if (els.live) els.live.textContent = `Response stream open · ${elapsedLabel(waiting)} total request time`;
-        return;
-      }
+      if (state.phase === 'receiving') return;
+      const slowBand = waiting >= 300000 ? 5 : waiting >= 180000 ? 4 : waiting >= 90000 ? 3 : waiting >= 45000 ? 2 : waiting >= 20000 ? 1 : 0;
+      if (!slowBand || slowBand === state.slowBand) return;
+      state.slowBand = slowBand;
       if (waiting >= 300000) {
         setPhase('working', {
           title: `${state.modelName} is very slow, but still connected`,
@@ -154,7 +123,7 @@ import {
   function beginPreparation() {
     const key = sessionStorage.getItem(OPENROUTER_KEY_STORAGE) || '';
     const modelId = localStorage.getItem('ai-visualizer.selected-model') || '';
-    if (!key || !modelId || els.dreamButton?.disabled) return;
+    if (!key || !modelId || dreamButton?.disabled) return;
     state.active = true;
     state.startedAt = performance.now();
     state.requestStartedAt = 0;
@@ -164,8 +133,7 @@ import {
     state.userCancelled = false;
     state.timedOut = false;
     state.bodyComplete = false;
-    if (els.connection) els.connection.textContent = 'OpenRouter connected';
-    if (els.elapsed) els.elapsed.textContent = '0:00';
+    state.slowBand = 0;
     setPhase('preparing', {
       title: `Preparing ${state.modelName}`,
       detail: 'Checking your spend guard and preparing the exact model request.',
@@ -184,12 +152,20 @@ import {
     state.userCancelled = false;
     state.timedOut = false;
     state.bodyComplete = false;
-    if (els.connection) els.connection.textContent = `OpenRouter connected · ${state.modelName}`;
+    state.slowBand = 0;
     setPhase(repair ? 'repair' : 'sent', {
       title: repair ? `${state.modelName} is repairing its dream` : `${state.modelName} is generating the visualizer`,
       detail: repair ? 'The first output needed a fix. A bounded repair request was sent to the same model.' : 'Request sent successfully. Waiting for the model to return its visualizer code.',
       live: repair ? 'Repair request sent ✓' : 'Request sent ✓ · model working',
     });
+    setTimeout(() => {
+      if (!state.active || state.controller !== controller || !['sent', 'repair'].includes(state.phase)) return;
+      setPhase('working', {
+        title: `${state.modelName} is working`,
+        detail: 'The request remains open while the model creates the visualizer.',
+        live: 'Request live · model working',
+      });
+    }, 650);
     startClock();
   }
 
@@ -208,6 +184,7 @@ import {
     state.bodyComplete = true;
     captureResponseBodyComplete(traceContext);
     clearRequestTimer();
+    clearExternalAbort();
     state.controller = null;
     setPhase('response', {
       title: `${state.modelName} response received`,
@@ -282,65 +259,25 @@ import {
     state.timeout = 0;
   }
 
-  function finishLifecycle({ hide = true, delay = 120 } = {}) {
+  function clearExternalAbort() {
+    state.externalAbortCleanup?.();
+    state.externalAbortCleanup = null;
+  }
+
+  function finishLifecycle({ delay = 0 } = {}) {
     clearRequestTimer();
+    clearExternalAbort();
     state.controller = null;
     setTimeout(() => {
       if (!state.active) return;
       state.active = false;
       clearInterval(state.tick);
       state.tick = 0;
-      els.center?.classList.remove('dream-active');
-      if (els.center) {
-        delete els.center.dataset.dreamPhase;
-        if (hide) els.center.hidden = true;
-      }
     }, delay);
   }
 
-  function cancelDream() {
-    if (!state.active || !state.controller) return;
-    state.userCancelled = true;
-    if (els.cancel) els.cancel.disabled = true;
-    if (els.title) els.title.textContent = 'Cancelling Dream…';
-    if (els.detail) els.detail.textContent = 'Stopping the in-flight browser request. Your current visualizer will stay in place.';
-    if (els.live) els.live.textContent = 'Cancelling locally…';
-    state.controller.abort();
-  }
-
-  els.dreamButton?.addEventListener('click', beginPreparation);
-  els.cancel?.addEventListener('click', cancelDream);
-
-  const titleObserver = new MutationObserver(() => {
-    if (!state.active) return;
-    const title = els.title?.textContent || '';
-    if (/repairing/i.test(title)) {
-      setPhase('repair', { live: 'First output needed repair · preparing same-model retry' });
-    } else if (/opening the dream/i.test(title)) {
-      setPhase('opening', {
-        title: 'Testing and launching',
-        detail: 'The visualizer is running in the hidden sandbox first. If it survives, it replaces the current one.',
-        live: 'Code checked ✓ · sandbox test running',
-      });
-    }
-  });
-  if (els.title) titleObserver.observe(els.title, { childList: true, characterData: true, subtree: true });
-
-  const hiddenObserver = new MutationObserver(() => {
-    if (!state.active || !els.center?.hidden) return;
-    const succeeded = els.topStatus?.textContent?.includes('just dreamed');
-    if (succeeded) {
-      setPhase('done', {
-        title: `${state.modelName} is live`,
-        detail: 'Generation, validation and sandbox testing completed successfully.',
-        live: 'Dream launched ✓',
-      });
-      finishLifecycle({ hide: true, delay: 900 });
-    } else {
-      finishLifecycle({ hide: true, delay: 20 });
-    }
-  });
-  if (els.center) hiddenObserver.observe(els.center, { attributes: true, attributeFilter: ['hidden'] });
+  dreamButton?.addEventListener('click', beginPreparation);
+  window.addEventListener('visualizer:dream-job-terminal', () => finishLifecycle());
 
   window.fetch = async function dreamLifecycleFetch(input, init = {}) {
     if (!isCompletion(input)) return baseFetch(input, init);
@@ -352,8 +289,10 @@ import {
     const controller = new AbortController();
     const externalSignal = init?.signal;
     const forwardAbort = () => controller.abort(externalSignal?.reason);
+    clearExternalAbort();
     if (externalSignal?.aborted) forwardAbort();
     else externalSignal?.addEventListener?.('abort', forwardAbort, { once: true });
+    state.externalAbortCleanup = () => externalSignal?.removeEventListener?.('abort', forwardAbort);
 
     requestSent(body.model, repair, controller, traceContext);
     clearRequestTimer();
@@ -362,30 +301,32 @@ import {
       controller.abort();
     }, DREAM_TIMEOUT_MS);
 
+    let responseHandedOff = false;
     try {
       const response = await baseFetch(input, { ...stripTraceContext(init), signal: controller.signal });
       responseHeaders(response, repair, traceContext);
+      responseHandedOff = true;
       return wrapResponseBody(response, repair, traceContext);
     } catch (error) {
       clearRequestTimer();
       state.controller = null;
       if (state.timedOut) {
-        if (els.live) els.live.textContent = 'Timed out · request stopped';
+        window.dispatchEvent(new CustomEvent(LIFECYCLE_EVENT, { detail: { phase: 'failed', modelId: state.modelId, modelName: state.modelName } }));
         const timeoutError = dreamTimeoutError();
         captureTraceError(traceContext, timeoutError, { stage: 'dream-lifecycle-timeout' });
         throw timeoutError;
       }
       if (state.userCancelled || controller.signal.aborted) {
-        if (els.live) els.live.textContent = 'Cancelled · previous visualizer preserved';
+        window.dispatchEvent(new CustomEvent(LIFECYCLE_EVENT, { detail: { phase: 'cancelled', modelId: state.modelId, modelName: state.modelName } }));
         const cancellationError = new Error('Dream cancelled. Your previous visualizer is still running. OpenRouter may still bill work completed before cancellation.');
         captureTraceError(traceContext, cancellationError, { stage: 'dream-lifecycle-cancelled' });
         throw cancellationError;
       }
-      if (els.live) els.live.textContent = 'Request failed before a usable response';
+      window.dispatchEvent(new CustomEvent(LIFECYCLE_EVENT, { detail: { phase: 'failed', modelId: state.modelId, modelName: state.modelName } }));
       captureTraceError(traceContext, error, { stage: 'dream-lifecycle-fetch' });
       throw error;
     } finally {
-      externalSignal?.removeEventListener?.('abort', forwardAbort);
+      if (!responseHandedOff) clearExternalAbort();
     }
   };
 })();

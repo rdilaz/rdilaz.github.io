@@ -14,14 +14,12 @@ const SANDBOX_CSP = [
   "form-action 'none'",
 ].join('; ');
 
-const HOST_CHANNEL = 'visualizer-host-v1';
-const SANDBOX_CHANNEL = 'visualizer-sandbox-v2';
+const BRIDGE_INIT_CHANNEL = 'visualizer-private-bridge-v1';
 
 function sandboxBootstrap(sessionId) {
   'use strict';
 
-  const HOST_CHANNEL_INNER = 'visualizer-host-v1';
-  const SANDBOX_CHANNEL_INNER = 'visualizer-sandbox-v2';
+  const BRIDGE_INIT_CHANNEL_INNER = 'visualizer-private-bridge-v1';
   const MAX_EVENTS = 80;
   const MAX_TEXT = 2200;
   const originalRAF = window.requestAnimationFrame.bind(window);
@@ -33,11 +31,19 @@ function sandboxBootstrap(sessionId) {
     warn: console.warn.bind(console),
     log: console.log.bind(console),
   };
+  const bridgeChannel = new MessageChannel();
+  const bridgePort = bridgeChannel.port1;
+  const bridgePost = bridgePort.postMessage.bind(bridgePort);
+  bridgePort.start();
+  parent.postMessage({ channel: BRIDGE_INIT_CHANNEL_INNER, sessionId }, '*', [bridgeChannel.port2]);
 
   const state = {
     startedAt: performance.now(),
     readyAt: 0,
     mode: 'full',
+    paused: false,
+    pausedAt: 0,
+    totalPausedMs: 0,
     hostFrames: 0,
     lastHostFrameAt: 0,
     frameReads: 0,
@@ -70,6 +76,10 @@ function sandboxBootstrap(sessionId) {
   const contextByCanvas = new WeakMap();
   const contextRecords = [];
   const intensiveRestores = [];
+  const pendingAnimationFrames = new Map();
+  const hostPausedAnimations = new Set();
+  let animationFrameSequence = 0;
+  let hostAnimationOperation = false;
   let currentFrame = {
     version: 'visualizer-audio-v1',
     time: 0,
@@ -97,13 +107,10 @@ function sandboxBootstrap(sessionId) {
 
   function post(type, payload = {}) {
     try {
-      parent.postMessage({
-        channel: SANDBOX_CHANNEL_INNER,
-        sessionId,
-        type,
-        ...payload,
-      }, '*');
-    } catch {}
+      bridgePost({ type, ...payload });
+    } catch {
+      // A detached parent may stop accepting diagnostics during teardown.
+    }
   }
 
   function compactText(value) {
@@ -161,7 +168,9 @@ function sandboxBootstrap(sessionId) {
         try {
           if (descriptor) Object.defineProperty(target, name, descriptor);
           else target[name] = original;
-        } catch {}
+        } catch {
+          // Non-configurable browser functions cannot always be restored.
+        }
       };
       if (restoreBucket) restoreBucket.push(restore);
       return restore;
@@ -183,20 +192,143 @@ function sandboxBootstrap(sessionId) {
     return Reflect.apply(original, console, args);
   });
 
-  const originalWindowRAF = window.requestAnimationFrame;
-  try {
-    window.requestAnimationFrame = function instrumentedRequestAnimationFrame(callback) {
-      state.rafRequests += 1;
-      return originalRAF(timestamp => {
-        state.rafCallbacks += 1;
-        state.lastActivityAt = performance.now();
-        return callback(timestamp);
-      });
-    };
-    intensiveRestores.push(() => {
-      try { window.requestAnimationFrame = originalWindowRAF; } catch {}
+  function scheduleAnimationFrame(id, record) {
+    if (state.paused || record.cancelled || record.nativeId) return;
+    record.nativeId = originalRAF(timestamp => {
+      record.nativeId = 0;
+      if (record.cancelled) {
+        pendingAnimationFrames.delete(id);
+        return;
+      }
+      if (state.paused) return;
+      pendingAnimationFrames.delete(id);
+      state.rafCallbacks += 1;
+      state.lastActivityAt = performance.now();
+      record.callback(timestamp - state.totalPausedMs);
     });
-  } catch {}
+  }
+
+  try {
+    window.requestAnimationFrame = function pausableRequestAnimationFrame(callback) {
+      if (typeof callback !== 'function') throw new TypeError('requestAnimationFrame callback must be a function.');
+      state.rafRequests += 1;
+      animationFrameSequence += 1;
+      const id = animationFrameSequence;
+      const record = { callback, nativeId: 0, cancelled: false };
+      pendingAnimationFrames.set(id, record);
+      scheduleAnimationFrame(id, record);
+      return id;
+    };
+    window.cancelAnimationFrame = function pausableCancelAnimationFrame(id) {
+      const record = pendingAnimationFrames.get(Number(id));
+      if (!record) return;
+      record.cancelled = true;
+      if (record.nativeId) originalCancelRAF(record.nativeId);
+      pendingAnimationFrames.delete(Number(id));
+    };
+  } catch {
+    // A locked-down browser may reject replacing animation-frame globals.
+  }
+
+  if (typeof Animation !== 'undefined') {
+    for (const name of ['pause', 'cancel', 'finish']) {
+      replaceFunction(Animation.prototype, name, original => function (...args) {
+        if (!hostAnimationOperation) hostPausedAnimations.delete(this);
+        return Reflect.apply(original, this, args);
+      });
+    }
+    for (const name of ['play', 'reverse']) {
+      replaceFunction(Animation.prototype, name, original => function (...args) {
+        const result = Reflect.apply(original, this, args);
+        if (state.paused && !hostAnimationOperation) pauseAnimation(this);
+        return result;
+      });
+    }
+  }
+
+  if (typeof Element !== 'undefined') {
+    replaceFunction(Element.prototype, 'animate', original => function (...args) {
+      const animation = Reflect.apply(original, this, args);
+      if (state.paused) pauseAnimation(animation);
+      return animation;
+    });
+  }
+
+  function pauseAnimation(animation) {
+    if (!animation || (animation.playState !== 'running' && animation.playState !== 'pending')) return;
+    try {
+      hostAnimationOperation = true;
+      animation.pause();
+      hostPausedAnimations.add(animation);
+    } catch {
+      // Animation pausing is best-effort across browser-native media.
+    } finally {
+      hostAnimationOperation = false;
+    }
+  }
+
+  function pauseCurrentAnimations() {
+    let animations = [];
+    try { animations = document.getAnimations(); } catch {
+      // Web Animations inspection is optional in older browser engines.
+    }
+    for (const animation of animations) {
+      pauseAnimation(animation);
+    }
+  }
+
+  function pauseGeneratedPlayback() {
+    if (state.paused) return;
+    state.paused = true;
+    state.pausedAt = performance.now();
+    for (const record of pendingAnimationFrames.values()) {
+      if (!record.nativeId) continue;
+      originalCancelRAF(record.nativeId);
+      record.nativeId = 0;
+    }
+    pauseCurrentAnimations();
+    post('playback-state', {
+      playback: {
+        paused: true,
+        queuedAnimationFrames: pendingAnimationFrames.size,
+        hostPausedAnimations: hostPausedAnimations.size,
+      },
+    });
+  }
+
+  function resumeGeneratedPlayback() {
+    if (!state.paused) return;
+    state.totalPausedMs += Math.max(0, performance.now() - state.pausedAt);
+    state.pausedAt = 0;
+    state.paused = false;
+    for (const animation of hostPausedAnimations) {
+      try {
+        if (animation.playState === 'paused') {
+          hostAnimationOperation = true;
+          animation.play();
+        }
+      } catch {
+        // Cancelled or detached animations are intentionally not recreated.
+      } finally {
+        hostAnimationOperation = false;
+      }
+    }
+    hostPausedAnimations.clear();
+    pendingAnimationFrames.forEach((record, id) => scheduleAnimationFrame(id, record));
+    post('playback-state', {
+      playback: {
+        paused: false,
+        queuedAnimationFrames: pendingAnimationFrames.size,
+        hostPausedAnimations: 0,
+      },
+    });
+  }
+
+  for (const eventName of ['animationstart', 'transitionrun']) {
+    addEventListener(eventName, () => {
+      if (state.paused) originalSetTimeout(pauseCurrentAnimations, 0);
+    }, true);
+  }
 
   function contextRecord(canvas, type, context) {
     let record = contextByCanvas.get(canvas);
@@ -228,6 +360,9 @@ function sandboxBootstrap(sessionId) {
         };
         recordList(state.contextLosses, item);
         recordEvent('error', 'WEBGL_CONTEXT_LOST', `WebGL context lost${item.statusMessage ? `: ${item.statusMessage}` : '.'}`, item);
+        originalSetTimeout(() => {
+          if (!item.restored) recordEvent('fatal', 'WEBGL_CONTEXT_LOST', 'WebGL context did not recover after being lost.', item);
+        }, 500);
       });
       canvas.addEventListener('webglcontextrestored', () => {
         const item = [...state.contextLosses].reverse().find(candidate => candidate.canvasId === record.id && !candidate.restored);
@@ -241,7 +376,7 @@ function sandboxBootstrap(sessionId) {
   const originalGetContext = HTMLCanvasElement.prototype.getContext;
   try {
     HTMLCanvasElement.prototype.getContext = function instrumentedGetContext(type, ...args) {
-      let context = null;
+      let context;
       try {
         context = Reflect.apply(originalGetContext, this, [type, ...args]);
       } catch (error) {
@@ -258,7 +393,9 @@ function sandboxBootstrap(sessionId) {
       }
       return context;
     };
-  } catch {}
+  } catch {
+    // A locked-down browser may reject replacing getContext.
+  }
 
   function bumpContext(context, field) {
     const record = contextByObject.get(context);
@@ -315,7 +452,9 @@ function sandboxBootstrap(sessionId) {
           recordList(state.shaderFailures, item);
           recordEvent('error', 'SHADER_COMPILE_FAILED', item.log, item);
         }
-      } catch {}
+      } catch {
+        // Driver status inspection is best-effort after the native call.
+      }
       return result;
     });
     replaceFunction(Prototype, 'linkProgram', original => function (program) {
@@ -334,7 +473,9 @@ function sandboxBootstrap(sessionId) {
           recordList(state.programFailures, item);
           recordEvent('error', 'PROGRAM_LINK_FAILED', item.log, item);
         }
-      } catch {}
+      } catch {
+        // Driver status inspection is best-effort after the native call.
+      }
       return result;
     });
   }
@@ -562,7 +703,7 @@ function sandboxBootstrap(sessionId) {
     let styleHash = 2166136261;
     const collected = collectDomElements();
 
-    const recordEvidence = ({ element, label, rect, style, text = '', coverage, rootSurface = false, substantive = true }) => {
+    const recordEvidence = ({ label, rect, style, text = '', coverage, rootSurface = false, substantive = true }) => {
       meaningfulNodes += 1;
       if (rootSurface) rootSurfaceNodes += 1;
       if (substantive) substantiveNodes += 1;
@@ -614,7 +755,9 @@ function sandboxBootstrap(sessionId) {
     let animations = 0;
     try {
       animations = document.getAnimations().filter(animation => animation.playState !== 'finished').length;
-    } catch {}
+    } catch {
+      // Animation evidence is optional in older browser engines.
+    }
 
     const rootSurfaceHash = styleHash;
     if (state.lastDomStyleHash && state.lastDomStyleHash !== rootSurfaceHash && rootSurfaceNodes > 0) {
@@ -691,6 +834,12 @@ function sandboxBootstrap(sessionId) {
         rafCallbacks: state.rafCallbacks,
         mutations: state.mutations,
         monitor: monitorSummary(),
+        playback: {
+          paused: state.paused,
+          queuedAnimationFrames: pendingAnimationFrames.size,
+          hostPausedAnimations: hostPausedAnimations.size,
+          totalPausedMs: Math.round(state.totalPausedMs + (state.paused ? performance.now() - state.pausedAt : 0)),
+        },
       },
       renderer: {
         types: rendererTypes,
@@ -726,10 +875,14 @@ function sandboxBootstrap(sessionId) {
     if (state.mode === 'passive') return;
     state.mode = 'passive';
     monitorActive = false;
-    try { mutationObserver.disconnect(); } catch {}
+    try { mutationObserver.disconnect(); } catch {
+      // A detached document can already have discarded the observer.
+    }
     while (intensiveRestores.length) {
       const restore = intensiveRestores.pop();
-      try { restore(); } catch {}
+      try { restore(); } catch {
+        // Restoration is best-effort for browser-native prototypes.
+      }
     }
     post('mode', { mode: state.mode });
   }
@@ -764,11 +917,22 @@ function sandboxBootstrap(sessionId) {
     writable: false,
   });
 
-  addEventListener('message', async event => {
+  bridgePort.addEventListener('message', async event => {
     const message = event.data;
-    if (!message || message.channel !== HOST_CHANNEL_INNER || message.sessionId !== sessionId) return;
+    if (!message || typeof message.type !== 'string') return;
+
+    if (message.type === 'host-pause') {
+      pauseGeneratedPlayback();
+      return;
+    }
+
+    if (message.type === 'host-resume') {
+      resumeGeneratedPlayback();
+      return;
+    }
 
     if (message.type === 'frame') {
+      if (state.paused) return;
       state.hostFrames += 1;
       state.lastHostFrameAt = performance.now();
       currentFrame = message.frame;
@@ -856,6 +1020,7 @@ function sandboxBootstrap(sessionId) {
     post('heartbeat', {
       heartbeat: {
         atMs: Math.round(performance.now() - state.startedAt),
+        paused: state.paused,
         monitor: monitorSummary(),
         contextLosses: state.contextLosses.length,
         runtimeErrors: state.runtimeErrors.length,
@@ -874,24 +1039,28 @@ function sandboxBootstrap(sessionId) {
   });
 
   // Preserve the originals in case a generated visualizer intentionally references them.
-  void originalCancelRAF;
   void originalConsole;
 }
 
-function bridgeSource(sessionId) {
-  return `<script>;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)});<\/script>`;
-}
-
 function injectRuntime(html, sessionId) {
-  const clean = String(html || '')
-    .replace(/<base\b[^>]*>/gi, '')
-    .replace(/<meta\s+http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP.replaceAll('"', '&quot;')}">`;
-  const baseStyle = '<style data-visualizer-host-style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}</style>';
-  const bridge = bridgeSource(sessionId);
-  if (/<head[\s>]/i.test(clean)) return clean.replace(/<head([^>]*)>/i, `<head$1>${meta}${baseStyle}${bridge}`);
-  if (/<html[\s>]/i.test(clean)) return clean.replace(/<html([^>]*)>/i, `<html$1><head>${meta}${baseStyle}${bridge}</head>`);
-  return `<!doctype html><html><head>${meta}${baseStyle}${bridge}</head><body>${clean}</body></html>`;
+  const parser = new DOMParser();
+  const document = parser.parseFromString(String(html || ''), 'text/html');
+  document.querySelectorAll('base').forEach(element => element.remove());
+  document.querySelectorAll('meta[http-equiv]').forEach(element => {
+    if (element.httpEquiv.toLowerCase() === 'content-security-policy') element.remove();
+  });
+
+  const meta = document.createElement('meta');
+  meta.httpEquiv = 'Content-Security-Policy';
+  meta.content = SANDBOX_CSP;
+  const baseStyle = document.createElement('style');
+  baseStyle.dataset.visualizerHostStyle = '';
+  baseStyle.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}';
+  const bridge = document.createElement('script');
+  bridge.dataset.visualizerHostBridge = '';
+  bridge.textContent = `;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)});`.replace(/<\/script/gi, '<\\/script');
+  document.head.prepend(meta, baseStyle, bridge);
+  return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
 
 export function validateVisualizerHtml(html) {
@@ -932,13 +1101,16 @@ export class VisualizerSandbox {
     this.ready = false;
     this.readyDetail = null;
     this.events = [];
+    this.paused = false;
+    this.reportedPaused = false;
+    this.playbackDetail = null;
     this.lastHeartbeatAt = 0;
     this.lastHeartbeat = null;
     this.pendingProbes = new Map();
-    this.messageHandler = event => {
-      if (event.source !== this.iframe.contentWindow) return;
+    this.bridgePort = null;
+    this.bridgeMessageHandler = event => {
       const message = event.data;
-      if (!message || message.channel !== SANDBOX_CHANNEL || message.sessionId !== this.sessionId) return;
+      if (!message || typeof message.type !== 'string') return;
       if (message.type === 'ready') {
         this.ready = true;
         this.readyDetail = message.ready || null;
@@ -946,6 +1118,11 @@ export class VisualizerSandbox {
       if (message.type === 'heartbeat') {
         this.lastHeartbeatAt = performance.now();
         this.lastHeartbeat = message.heartbeat || null;
+      }
+      if (message.type === 'playback-state') {
+        this.paused = Boolean(message.playback?.paused);
+        this.reportedPaused = this.paused;
+        this.playbackDetail = message.playback || null;
       }
       if (message.type === 'diagnostic-event' && message.event) {
         this.events.push(message.event);
@@ -960,7 +1137,33 @@ export class VisualizerSandbox {
       }
       this.onEvent(message);
     };
+    this.messageHandler = event => {
+      if (event.source !== this.iframe.contentWindow || this.bridgePort) return;
+      const message = event.data;
+      const port = event.ports?.[0];
+      if (!message || message.channel !== BRIDGE_INIT_CHANNEL || message.sessionId !== this.sessionId || !port) return;
+      this.bridgePort = port;
+      port.addEventListener('message', this.bridgeMessageHandler);
+      port.start();
+    };
     window.addEventListener('message', this.messageHandler);
+  }
+
+  sendHost(message) {
+    if (!this.bridgePort) return false;
+    try {
+      this.bridgePort.postMessage(message);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  closeBridge() {
+    if (!this.bridgePort) return;
+    this.bridgePort.removeEventListener('message', this.bridgeMessageHandler);
+    this.bridgePort.close();
+    this.bridgePort = null;
   }
 
   setPresentation(state) {
@@ -984,10 +1187,14 @@ export class VisualizerSandbox {
     signal,
   } = {}) {
     if (signal?.aborted) throw abortError();
+    this.closeBridge();
     this.sessionId = crypto.randomUUID();
     this.ready = false;
     this.readyDetail = null;
     this.events = [];
+    this.paused = false;
+    this.reportedPaused = false;
+    this.playbackDetail = null;
     this.lastHeartbeatAt = performance.now();
     this.lastHeartbeat = null;
     for (const pending of this.pendingProbes.values()) pending.reject(new Error('Sandbox was reloaded.'));
@@ -1012,16 +1219,37 @@ export class VisualizerSandbox {
   }
 
   sendFrame(frame) {
-    this.iframe.contentWindow?.postMessage({
-      channel: HOST_CHANNEL,
-      sessionId: this.sessionId,
+    this.sendHost({
       type: 'frame',
       frame,
-    }, '*');
+    });
+  }
+
+  setPaused(paused) {
+    const next = Boolean(paused);
+    if (!this.sessionId || !this.bridgePort || this.paused === next) return false;
+    this.paused = next;
+    this.sendHost({
+      type: next ? 'host-pause' : 'host-resume',
+    });
+    return true;
+  }
+
+  isPaused() {
+    return this.paused;
+  }
+
+  async waitForPlayback(paused, timeoutMs = 320) {
+    const expected = Boolean(paused);
+    const started = performance.now();
+    while (this.reportedPaused !== expected && performance.now() - started < timeoutMs) {
+      await wait(10);
+    }
+    return this.reportedPaused === expected;
   }
 
   async probe(label = 'probe', { timeoutMs = 2200, signal } = {}) {
-    if (!this.sessionId) throw new Error('Sandbox has not been loaded.');
+    if (!this.sessionId || !this.bridgePort) throw new Error('Sandbox bridge is not ready.');
     if (signal?.aborted) throw abortError();
     const probeId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
@@ -1042,23 +1270,19 @@ export class VisualizerSandbox {
         this.pendingProbes.delete(probeId);
         finishReject(abortError());
       }, { once: true });
-      this.iframe.contentWindow?.postMessage({
-        channel: HOST_CHANNEL,
-        sessionId: this.sessionId,
+      this.sendHost({
         type: 'probe',
         probeId,
         label,
-      }, '*');
+      });
     });
   }
 
   enterPassiveMode() {
-    this.iframe.contentWindow?.postMessage({
-      channel: HOST_CHANNEL,
-      sessionId: this.sessionId,
+    this.sendHost({
       type: 'mode',
       mode: 'passive',
-    }, '*');
+    });
   }
 
   fatalEvents(since = 0) {
@@ -1070,9 +1294,13 @@ export class VisualizerSandbox {
   }
 
   clear() {
+    this.closeBridge();
     this.sessionId = '';
     this.ready = false;
     this.events = [];
+    this.paused = false;
+    this.reportedPaused = false;
+    this.playbackDetail = null;
     this.iframe.srcdoc = '<!doctype html><html><body style="margin:0;background:#050506"></body></html>';
   }
 

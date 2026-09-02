@@ -1,12 +1,12 @@
 # Visualizer development
 
-This guide is for working on Dream transparency in VS Code on Windows. The normal product remains browser-only; Node and Vite are development tools, not part of the user flow.
+This guide is for working on the Visualizer product shell, reliability, and Dream transparency in VS Code on Windows. The normal product remains browser-only; Node and Vite are development tools, not part of the user flow.
 
 ## Windows setup
 
 1. Open `C:\Users\Ryo\Documents\GitHub\rdilaz.github.io` in VS Code.
 2. Open a PowerShell terminal with `Terminal` -> `New Terminal`.
-3. Confirm that `git branch --show-current` prints `milestone/dream-transparency-v1`.
+3. Confirm that `git branch --show-current` prints your current milestone branch and not `main`.
 4. Install the locked dependencies:
 
 ```powershell
@@ -31,11 +31,13 @@ PowerShell can resolve `npm` to the `npm.ps1` shim. A restrictive script executi
 
 Read these files in order for the shortest path through a Dream:
 
-1. `public/visualizer/app.js` - orchestration, state, promotion, rollback, Library, and developer tools.
-2. `public/visualizer/prompt.js` - the versioned generation and repair messages.
-3. `public/visualizer/provider-runtime.js` - provider contract, OpenRouter request, response normalization, and HTML extraction.
-4. `public/visualizer/cost-guard.js` - the last browser boundary before a paid request is sent.
-5. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
+1. `public/visualizer/app.js` - composition, promotion/rollback orchestration, Library, and developer tools.
+2. `public/visualizer/playback-state.js`, `dream-job.js`, and `dream-switcher.js` - focused product state and shell views.
+3. `public/visualizer/featured-dreams.js` and `featured/manifest.js` - curated static Dream loading and pending-review export.
+4. `public/visualizer/prompt.js` - the versioned generation and repair messages.
+5. `public/visualizer/provider-runtime.js` - provider contract, OpenRouter request, response normalization, and HTML extraction.
+6. `public/visualizer/cost-guard.js` - the last browser boundary before a paid request is sent.
+7. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
 
 ## Architecture map
 
@@ -48,24 +50,30 @@ prompt
   -> OpenRouter response
   -> extracted HTML
   -> candidate sandbox
-  -> reliability
-  -> promotion or rollback
-  -> Library plus diagnostic record with nested trace storage
+  -> full reliability preflight
+  -> durable ready artifact plus diagnostic record
+  -> explicit user Open
+  -> safe reopen and reversible launch watchdog
+  -> LIVE commit or rollback
 ```
 
 `prompt.js` creates the canonical messages. `provider-runtime.js` prepares the provider request. `cost-guard.js` applies the final budget decision and request limits, so the trace must describe the request at that final app boundary rather than an earlier draft.
 
-OpenRouter returns response material that the browser app can observe, and the provider runtime extracts the candidate HTML. The candidate runs in the sandbox while `reliability.js` checks it. `app.js` either promotes it or preserves/restores the last-known-good visualizer.
+OpenRouter returns response material that the browser app can observe, and the provider runtime extracts the candidate HTML. The candidate runs in the sandbox while `reliability.js` checks it. Passing HTML is saved with `ready-to-open` state and does not alter LIVE. Only a later explicit Open transaction may promote it.
 
-Afterward, a successful visualizer is available in the Library. Attempt evidence is kept in its diagnostic record, with the Dream Trace nested as the request/response and lifecycle view rather than as an unrelated second record.
+Ready and opened visualizers are available in Recent and the full Library. Attempt evidence is kept in the generation diagnostic, while Open/reopen gets a separate local launch diagnostic. Dream Trace remains the request/response and lifecycle view rather than an unrelated provider record.
 
 ## File ownership
 
-- `public/visualizer/app.js`: owns top-level UI and Dream orchestration, LIVE/NEXT identity, generation and repair coordination, candidate promotion/rollback, Library wiring, diagnostic persistence, and `window.VIZ_DEV`.
+- `public/visualizer/app.js`: owns top-level composition, LIVE/NEXT integration, candidate-slot serialization, promotion/rollback, Library wiring, diagnostic persistence, and `window.VIZ_DEV`.
+- `public/visualizer/playback-state.js`: owns trusted visual playing/paused product state. Sandbox enforcement remains in `sandbox.js`.
+- `public/visualizer/dream-job.js`: owns the single background-job lifecycle and the collapsible job panel/pill presentation.
+- `public/visualizer/dream-switcher.js`: owns deterministic Featured/Favorites/Recent selection and keyboard navigation.
+- `public/visualizer/featured-dreams.js` and `public/visualizer/featured/manifest.js`: own static Featured metadata/HTML loading and pending-operator-review curation export.
 - `public/visualizer/prompt.js`: owns the canonical prompt version and generation/repair messages. Prompt changes require deliberate versioning.
 - `public/visualizer/provider-runtime.js`: owns the provider adapter contract, OpenRouter authentication/catalog calls, live request/response normalization, returned text, and HTML extraction.
 - `public/visualizer/cost-guard.js`: owns browser-side estimates, confirmations, caps, final completion-request limits, and usage/cost accounting. It is the final request boundary before OpenRouter.
-- `public/visualizer/dream-status.js`: owns truthful request lifecycle UI, including not-sent, sent, response-started, body-complete, cancellation, and timeout states.
+- `public/visualizer/dream-status.js`: observes the fetch lifecycle and emits truthful sent, model-working, response-started, body-complete, cancellation, and timeout events. `dream-job.js` owns product job state/UI.
 - `public/visualizer/model-eligibility.js`: owns the pure live-Dream model eligibility rules used by catalogs and the final availability check.
 - `public/visualizer/audio-engine.js`: owns local tab/window/system audio capture and normalized audio features supplied to the trusted host. It does not own model requests.
 - `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the injected `window.VIZ` bridge, CSP, runtime instrumentation, heartbeats, and probes.
@@ -79,7 +87,7 @@ Afterward, a successful visualizer is available in the Library. Attempt evidence
 
 ## LIVE and NEXT
 
-`LIVE` identifies the visualizer currently on screen. It begins as the built-in `Calibration Bloom` and changes only when another artifact is actually promoted or a saved Library artifact is opened.
+`LIVE` identifies the visualizer currently on screen. It begins as the built-in Featured `Calibration Bloom` and changes only after a saved/Featured artifact passes the explicit Open watchdog and commits.
 
 `NEXT` identifies the selected model for the next Dream. Selecting another model changes NEXT only; it must not relabel the currently visible artwork. A Dream keeps the model identity captured when that Dream began, even if NEXT changes while the request is in flight. Failed candidates and rollbacks leave LIVE truthful.
 
@@ -140,6 +148,11 @@ The transparency additions are:
 - `exportTrace(id)` downloads that trace as JSON.
 - `retestTrace(id)` locally retests its extracted HTML.
 - `runTransparencySelfTest()` runs the no-cost local transparency demo.
+- `playback()` and `setPaused(value)` inspect/control trusted visual playback for local testing.
+- `probeActive(label)` requests a sanitized trusted probe from the active sandbox.
+- `exportFeatured(generationId)` downloads a local candidate package marked pending operator review.
+
+`exportFeatured()` is packaging, not approval. Before adding an exported Dream to `featured/manifest.js`, an operator must review the art, place its HTML under `featured/`, assign a positive order, record exact model/request/prompt/trace provenance, add an approval record, and run the real reliability corpus. The loader rejects pending packages, missing evidence, digest drift, external paths, and regression-fixture paths.
 
 Use an ID returned by `latestTrace()` or `listTraces()` for the ID-based methods.
 
@@ -186,6 +199,12 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --test --test-concurrency=1 tests/dream-transparency.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+node --test --test-concurrency=1 tests/product-shell.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/debug-bundle.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 npm.cmd run build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -208,7 +227,7 @@ Never develop, commit, or push directly on `main`. Use the milestone branch and 
 1. Before editing, verify the branch and inspect existing work:
 
 ```powershell
-git switch milestone/dream-transparency-v1
+git switch milestone/product-shell-core-ux-v1
 git branch --show-current
 git status --short --branch
 ```
@@ -226,14 +245,14 @@ git pull --ff-only
 ```powershell
 git diff --cached --check
 git diff --cached
-git commit -m "Dream Transparency v1"
+git commit -m "Product Shell Core UX v1"
 ```
 
 6. Push only the milestone branch and open a PR into `main`:
 
 ```powershell
-git push --set-upstream origin milestone/dream-transparency-v1
-gh pr create --base main --head milestone/dream-transparency-v1 --fill
+git push --set-upstream origin milestone/product-shell-core-ux-v1
+gh pr create --base main --head milestone/product-shell-core-ux-v1 --fill
 ```
 
 7. Let the required checks pass and merge through the PR. Never run `git push origin main` for this work.
@@ -242,7 +261,7 @@ gh pr create --base main --head milestone/dream-transparency-v1 --fill
 
 Stored locally:
 
-- successful Library visualizer HTML and its model/version/health metadata;
+- ready and opened Library visualizer HTML and its model/prompt/version/health/open metadata;
 - diagnostic and nested trace evidence such as the final app-boundary request, retained provider response material, provider-exposed reasoning when returned, extracted HTML, timings, usage/cost when available, validation, reliability, promotion, and rollback results;
 - a session-scoped OpenRouter credential in trusted host `sessionStorage`, separate from Library, diagnostics, and traces.
 

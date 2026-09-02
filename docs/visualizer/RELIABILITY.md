@@ -17,13 +17,35 @@ The product owns two sandbox slots:
 1. the active, last-known-good visualizer;
 2. a hidden candidate visualizer.
 
-The active slot keeps playing while the candidate is generated and tested. Promotion is atomic:
+The active slot keeps playing while a background candidate is generated and tested. Readiness and launch are separate transactions:
 
-`model output → static compatibility → boot → synthetic VIZ exercise → visible-output proof → actual-viewport canary → candidate visible with rollback armed → commit`
+`model output → static compatibility → boot → synthetic VIZ exercise → visible-output proof → actual-viewport canary → persist ready artifact`
+
+Nothing changes LIVE at this point. When the user chooses Open, the host performs a lighter actual-device safe reopen, makes the candidate visible with rollback armed, runs the post-launch watchdog, and commits LIVE only on success:
+
+`ready artifact → safe reopen → candidate visible with rollback armed → watchdog → commit LIVE`
 
 The previous slot remains warm throughout the post-launch watchdog. A fatal runtime error, context loss, probe failure, or heartbeat stall causes immediate rollback instead of a blank stage.
 
 After the watchdog passes, high-frequency instrumentation is removed from the promoted iframe so the verification system does not become a permanent rendering tax.
+
+Stored artifacts with current ready/verified evidence use the shorter safe-reopen probe instead of repeating the full generation preflight. They still execute only in the opaque-origin sandbox and still pass the visible launch watchdog. A failed Open preserves the prior LIVE Dream and keeps the ready artifact/evidence with `failed-to-open` state for later inspection.
+
+The host inserts CSP and the trusted bridge structurally into the actual parsed document head. Host commands and sandbox evidence travel over a closure-private `MessageChannel`; generated code cannot read probe IDs or impersonate readiness, pause, or resume through window messages. All hidden candidate work, including developer retests, shares one serialized standby-slot lease. Active failures during Open/recovery are latched and processed afterward if that failed session is still LIVE.
+
+## Trusted visual pause
+
+Visual pause is enforced by the injected host bridge, not by generated-model cooperation and not by presentation blur:
+
+- active host VIZ delivery stops before audio sampling;
+- generated `requestAnimationFrame` callbacks are queued without destroying Canvas/WebGL/WebGPU state;
+- RAF callback time excludes the paused duration so resume does not create a large artificial time jump;
+- running CSS/Web Animations are paused where the browser exposes them, and only host-paused animations are resumed;
+- trusted heartbeat and diagnostic timers continue, so intentional pause is not mistaken for renderer death;
+- hidden generation preflight and deterministic synthetic candidate frames continue;
+- a Dream opened or switched while globally paused becomes LIVE in the paused state.
+
+Multiple pause/resume commands are idempotent. `Element.animate()` and replayed Web Animations are covered by the trusted pause layer. Timer and `setInterval` loops that do not use RAF may continue in v1; the host does not constrain generated art solely to make those loops perfectly freezable.
 
 ## What the injected flight recorder observes
 
@@ -103,4 +125,4 @@ Developer mode is intentionally hidden from normal users:
 
 ## Regression corpus
 
-CI runs real Chromium tests for Canvas 2D, DOM/SVG, broken WebGL shaders, a DOMContentLoaded-but-blank page, intentionally black valid WebGL, delayed post-launch failure, and the real Gemini 3.7 Flash `AETHERIA :: Resonant Topology` output that exposed the original blank-screen false positive.
+CI runs real Chromium tests for Canvas 2D, DOM/SVG, broken WebGL shaders, a DOMContentLoaded-but-blank page, intentionally black valid WebGL, trusted visual pause/resume, shipped Calibration Bloom Featured art, explicit-Open failure, delayed post-launch failure, and the real Gemini 3.7 Flash `AETHERIA :: Resonant Topology` output that exposed the original blank-screen false positive.

@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="./model-guide.css" />
     <link rel="stylesheet" href="./dream-status.css" />
     <link rel="stylesheet" href="./reliability.css" />
+    <link rel="stylesheet" href="./product-shell.css" />
   </head>
   <body>
     <main class="app" id="app">
@@ -18,6 +19,7 @@
         <iframe id="visualizerFrame" class="visualizer-frame" title="Generated audio visualizer" sandbox="allow-scripts" allow="fullscreen" referrerpolicy="no-referrer"></iframe>
         <iframe id="preflightFrame" class="preflight-frame" title="Visualizer candidate sandbox" sandbox="allow-scripts" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
         <div id="uiRevealSurface" aria-hidden="true" style="position:absolute;inset:0;z-index:10;pointer-events:none;background:transparent"></div>
+        <div class="pause-overlay" id="pauseOverlay" aria-hidden="true" hidden><span id="pauseMessage">Visual paused</span></div>
         <header class="top-chrome chrome" aria-label="Visualizer status">
           <div class="identity">
             <span class="identity__mark">◌</span>
@@ -29,49 +31,67 @@
           </div>
           <div class="top-actions">
             <button class="icon-button diagnostics-button" id="diagnosticsButton" type="button" aria-label="Open developer diagnostics" title="Developer diagnostics" hidden>DEV</button>
-            <button class="icon-button spend-button" id="spendButton" type="button" aria-label="Open spend protection" title="Spend protection"><span class="spend-button__label">Spent</span><span id="spendButtonValue">$0.00</span></button>
             <button class="icon-button" id="infoButton" type="button" aria-label="About this experiment" title="About">i</button>
           </div>
         </header>
 
-        <div class="center-status" id="centerStatus" role="status" aria-live="polite" hidden>
-          <span class="dream-orbit" aria-hidden="true"></span>
-          <div class="dream-status__head">
-            <div class="dream-status__identity">
-              <span class="dream-status__connection" id="dreamStatusConnection">OpenRouter connected</span>
-              <strong id="centerStatusTitle">Dreaming…</strong>
-            </div>
-            <time class="dream-status__elapsed" id="dreamStatusElapsed">0:00</time>
-          </div>
-          <div class="dream-status__progress" aria-hidden="true"><span class="dream-status__progress-fill" id="dreamStatusProgressFill"></span></div>
-          <div class="dream-status__steps" aria-label="Dream progress">
-            <span class="dream-status__step" data-dream-step>Connected</span>
-            <span class="dream-status__step" data-dream-step>Generating</span>
-            <span class="dream-status__step" data-dream-step>Received</span>
-            <span class="dream-status__step" data-dream-step>Checking</span>
-            <span class="dream-status__step" data-dream-step>Launching</span>
-          </div>
-          <span id="centerStatusDetail"></span>
-          <div class="dream-status__footer">
-            <span class="dream-status__live" id="dreamStatusLive">Preparing request…</span>
-            <button class="dream-status__cancel" id="dreamCancelButton" type="button">Cancel</button>
-          </div>
+        <div class="center-status" id="transientStatus" hidden>
+          <strong id="transientStatusTitle">Connecting</strong>
+          <span id="transientStatusDetail">The current visual stays live.</span>
         </div>
 
+        <div class="dream-job-pill" id="dreamJobPill" hidden>
+          <button class="dream-job-pill__main" id="dreamJobPillButton" type="button" aria-label="Open Dream details" aria-expanded="false" aria-controls="dreamJobPanel">
+            <span class="dream-job-pill__signal" aria-hidden="true"></span>
+            <span class="dream-job-pill__copy"><strong id="dreamJobPillPhase">Preparing</strong><small id="dreamJobPillModel"></small></span>
+            <time id="dreamJobPillElapsed" aria-hidden="true">0:00</time>
+          </button>
+          <button class="dream-job-pill__open" id="dreamJobPillOpen" type="button" hidden>Open</button>
+        </div>
+
+        <section class="dream-job-panel" id="dreamJobPanel" aria-labelledby="dreamJobPhase" aria-hidden="true" hidden tabindex="-1">
+          <div class="dream-job-panel__head">
+            <div><span class="eyebrow">NEW DREAM</span><h2 id="dreamJobPhase">Preparing</h2></div>
+            <time id="dreamJobElapsed" aria-hidden="true">0:00</time>
+          </div>
+          <strong class="dream-job-panel__model" id="dreamJobModel"></strong>
+          <p id="dreamJobDetail">Your current Dream keeps playing while the model works.</p>
+          <div class="dream-job-panel__actions">
+            <button class="pill-button" id="dreamJobOpen" type="button" hidden>Open Dream</button>
+            <button class="job-action" id="dreamJobFavorite" type="button" aria-pressed="false" hidden>♡ Save</button>
+            <button class="job-action" id="dreamCancelButton" type="button" hidden>Cancel</button>
+            <button class="job-action" id="dreamJobDismiss" type="button" hidden>Dismiss</button>
+            <button class="job-action" id="dreamJobCollapse" type="button">Collapse</button>
+          </div>
+          <span class="sr-only" id="dreamJobAnnouncement" aria-live="polite" aria-atomic="true"></span>
+        </section>
+
+        <section class="dream-switcher" id="dreamSwitcherPanel" aria-labelledby="dreamSwitcherTitle" aria-hidden="true" hidden tabindex="-1">
+          <header class="dream-switcher__head">
+            <div><span class="eyebrow">DREAMS</span><h2 id="dreamSwitcherTitle">Pick the next scene.</h2></div>
+            <button id="dreamSwitcherClose" type="button" aria-label="Close Dream switcher">×</button>
+          </header>
+          <div class="dream-switcher__groups" id="dreamSwitcherGroups"></div>
+          <footer class="dream-switcher__foot"><span>Featured stays with the site. Favorites and Recent stay on this device.</span><button class="text-button" id="libraryButton" type="button">Full Library</button></footer>
+        </section>
+
         <nav class="controls chrome" id="controls" aria-label="Visualizer controls">
-          <button class="control control--model" id="modelButton" type="button" aria-labelledby="nextModelLabel selectedModelName"><span class="control__hint" id="nextModelLabel">NEXT</span><strong id="selectedModelName" aria-live="polite">Choose a model</strong></button>
-          <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model"><span class="control__icon">✦</span><span>Dream</span><small class="dream-cost" id="dreamCost"></small></button>
-          <button class="control control--icon" id="favoriteButton" type="button" aria-label="Favorite this visualizer" title="Favorite">♡</button>
+          <button class="control control--icon control--playback" id="playbackButton" type="button" aria-label="Pause visual" aria-pressed="false" title="Pause visual">⏸</button>
           <button class="control control--audio" id="audioButton" type="button"><span class="audio-dot" id="audioDot" aria-hidden="true"></span><span id="audioButtonLabel">Connect audio</span></button>
-          <button class="control control--icon" id="libraryButton" type="button" aria-label="Open saved visualizers" title="Library">▦</button>
+          <button class="control control--switcher" id="switcherButton" type="button" aria-expanded="false" aria-controls="dreamSwitcherPanel"><span class="control__hint">DREAMS</span><strong id="switcherCurrent">Calibration Bloom</strong></button>
+          <button class="control control--model" id="modelButton" type="button" aria-labelledby="nextModelLabel selectedModelName"><span class="control__hint" id="nextModelLabel">NEXT</span><strong id="selectedModelName" aria-live="polite">Choose a model</strong></button>
+          <button class="control control--prompt" id="promptLabButton" type="button" aria-label="Edit creative prompt"><span class="control__hint">PROMPT</span><strong>Neutral</strong></button>
+          <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model"><span class="control__icon">✦</span><span>Dream</span><small class="dream-cost" id="dreamCost"></small></button>
+          <button class="control control--icon" id="favoriteButton" type="button" aria-label="Save current Dream to favorites" aria-pressed="false" title="Favorite">♡</button>
           <button class="control control--icon" id="fullscreenButton" type="button" aria-label="Enter fullscreen" title="Fullscreen">⛶</button>
         </nav>
       </section>
     </main>
 
-    <aside class="drawer" id="modelDrawer" aria-hidden="true" aria-label="Choose a model">
+    <aside class="drawer" id="modelDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Choose a model" inert>
       <div class="drawer__head"><div><span class="eyebrow">MODELS</span><h2>Choose a mind.</h2><p>You do not need to understand the whole catalog. Start with one good choice and see what happens.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="connection-card" id="connectionCard"><div><strong id="connectionTitle">Connect OpenRouter</strong><p id="connectionCopy">Authorize a session-only key to dream with hundreds of models.</p></div><button class="pill-button" id="connectOpenRouterButton" type="button">Connect</button></div>
+      <button class="model-spend-link" id="spendButton" type="button" aria-label="Open spend protection"><span>Spend protection</span><strong id="spendButtonValue">$0.00 this session</strong></button>
 
       <section class="model-guide" aria-labelledby="model-guide-heading">
         <div class="model-guide__hero">
@@ -89,14 +109,14 @@
       </div>
     </aside>
 
-    <aside class="drawer" id="libraryDrawer" aria-hidden="true" aria-label="Visualizer library">
-      <div class="drawer__head"><div><span class="eyebrow">LIBRARY</span><h2>Your favorite dreams.</h2><p>Every successful generation is kept on this device. Heart the ones worth coming back to.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
+    <aside class="drawer" id="libraryDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Visualizer library" inert>
+      <div class="drawer__head"><div><span class="eyebrow">FULL LIBRARY</span><h2>Your saved Dreams.</h2><p>Ready and opened generations stay on this device. Heart the ones worth coming back to.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="library-actions"><button class="pill-button" id="battleButton" type="button">⚔ Battle</button><button class="text-button" id="favoritesOnlyButton" type="button" aria-pressed="false">Favorites only</button></div>
       <section class="battle" id="battlePanel" hidden aria-label="Visualizer battle"><div class="battle__head"><span class="eyebrow">BATTLE</span><button class="text-button" id="endBattleButton" type="button">End</button></div><p>Same music. Two dreams. Pick the one with more wow.</p><div class="battle__models"><button id="battleAButton" type="button"></button><span>vs</span><button id="battleBButton" type="button"></button></div><div class="battle__vote"><button class="pill-button" id="voteAButton" type="button">A wins</button><button class="pill-button" id="voteBButton" type="button">B wins</button></div></section>
       <div class="library-list" id="libraryList"></div>
     </aside>
 
-    <aside class="drawer drawer--spend" id="spendDrawer" aria-hidden="true" aria-label="Spend protection">
+    <aside class="drawer drawer--spend" id="spendDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Spend protection" inert>
       <div class="drawer__head"><div><span class="eyebrow">SPEND</span><h2>Know before you Dream.</h2><p>Estimates before generation, exact OpenRouter cost after, and caps that stop accidental runaway spend.</p></div><button class="drawer__close" id="closeSpendDrawer" type="button" aria-label="Close">×</button></div>
       <div class="spend-source"><span>Billing source</span><strong id="billingSource">Your OpenRouter credits</strong></div>
       <div class="spend-grid">
@@ -122,17 +142,18 @@
       <p class="spend-note">App caps are enforced in this browser by reducing the model output-token ceiling or refusing the request. If OpenRouter reports a key limit above, that limit is provider-enforced and stronger. Account-wide balance is not exposed to this session key. <a href="https://openrouter.ai/activity" target="_blank" rel="noopener noreferrer">Open OpenRouter Activity ↗</a></p>
     </aside>
 
-    <aside class="drawer drawer--about" id="aboutDrawer" aria-hidden="true" aria-label="About the visualizer">
+    <aside class="drawer drawer--about" id="aboutDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="About the visualizer" inert>
       <div class="drawer__head"><div><span class="eyebrow">THE IDEA</span><h2>One blank canvas. Every model.</h2></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v1</code>. Runtime: <code>visualizer-audio-v1</code>. Reliability: <code>dream-reliability-v1</code>. Candidates must prove they boot, render, consume VIZ, survive standardized synthetic music, handle the real viewport, and remain alive through an automatic rollback window. The harness never prescribes an aesthetic or rendering technology.</p></details></div>
     </aside>
 
-    <aside class="drawer drawer--diagnostics" id="diagnosticsDrawer" aria-hidden="true" aria-label="Developer diagnostics">
+    <aside class="drawer drawer--diagnostics" id="diagnosticsDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Developer diagnostics" inert>
       <div class="drawer__head"><div><span class="eyebrow">DEV MODE</span><h2>Dream diagnostics.</h2><p>Local flight-recorder data for generation, rendering, repairs, promotion, rollback and runtime health. No music, audio arrays or provider credentials are stored.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="diagnostics-toolbar">
         <button id="copyLatestDiagnostics" type="button">Copy latest JSON</button>
         <button id="exportDiagnostics" type="button">Export all</button>
         <button id="copyCurrentHtml" type="button">Copy active HTML</button>
+        <button id="exportFeaturedCandidate" type="button">Package Featured candidate</button>
         <button id="retestCurrent" type="button">Retest active</button>
         <button id="transparencySelfTest" type="button">Load no-cost trace demo</button>
         <button id="pickDiagnosticModel" type="button">Pick cheap test model</button>

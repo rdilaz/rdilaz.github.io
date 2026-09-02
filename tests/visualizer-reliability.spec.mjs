@@ -68,6 +68,65 @@ test('a delayed post-launch crash is caught by the rollback watchdog', async ({ 
   expect(['RUNTIME_ERROR', 'UNHANDLED_REJECTION']).toContain(result.watchdog.failure.code);
 });
 
+test('trusted pause suspends generated RAF and host frames without reloading', async ({ page }) => {
+  const result = await run(page, await fixture('pause-observable.html'), 'runPauseFixture');
+  expect(result.boot.ready).toBe(true);
+  expect(result.sessionUnchanged).toBe(true);
+  expect(result.firstPause).toBe(true);
+  expect(result.repeatedPause).toBe(false);
+  expect(result.firstResume).toBe(true);
+  expect(result.repeatedResume).toBe(false);
+  expect(result.paused.runtime.playback.paused).toBe(true);
+  expect(result.paused.runtime.playback.queuedAnimationFrames).toBe(1);
+  expect(result.paused.runtime.playback.hostPausedAnimations).toBeGreaterThan(0);
+  expect(result.paused.runtime.rafCallbacks).toBe(result.pauseApplied.runtime.rafCallbacks);
+  expect(result.paused.viz.hostFrames).toBe(result.pauseApplied.viz.hostFrames);
+  expect(result.pausedHeartbeatAgeMs).toBeLessThan(1300);
+  expect(result.resumed.runtime.playback.paused).toBe(false);
+  expect(result.resumed.runtime.playback.hostPausedAnimations).toBe(0);
+  expect(result.resumed.runtime.rafCallbacks).toBe(result.pauseApplied.runtime.rafCallbacks + 1);
+  expect(result.resumed.viz.hostFrames).toBeGreaterThan(result.paused.viz.hostFrames);
+});
+
+test('shipped Calibration Bloom Featured art passes without provider authentication', async ({ page }) => {
+  const html = await readFile(new URL('../public/visualizer/featured/calibration-bloom.html', import.meta.url), 'utf8');
+  const result = await run(page, html);
+  expect(result.passed).toBe(true);
+  expect(result.summary.visible).toBe(true);
+  expect(result.summary.vizConsumed).toBe(true);
+  expect(result.summary.rendererTypes).toContain('2d');
+});
+
+test('hostile head comments cannot displace CSP or allow generated network access', async ({ page }) => {
+  let networkRequests = 0;
+  await page.route('https://attacker.invalid/**', async route => {
+    networkRequests += 1;
+    await route.abort('blockedbyclient');
+  });
+  const result = await run(page, await fixture('hostile-comment-csp.html'));
+  expect(result.passed).toBe(true);
+  expect(networkRequests).toBe(0);
+  const finalReport = result.stages.at(-1).report;
+  expect(finalReport.logs.securityViolations.length).toBeGreaterThan(0);
+});
+
+test('generated window messages cannot forge bridge resume or readiness', async ({ page }) => {
+  const result = await run(page, await fixture('bridge-forgery.html'), 'runPauseFixture');
+  expect(result.boot.ready).toBe(true);
+  expect(result.boot.readyDetail.forged).not.toBe(true);
+  expect(result.paused.runtime.playback.paused).toBe(true);
+  expect(result.paused.runtime.rafCallbacks).toBe(result.pauseApplied.runtime.rafCallbacks);
+  expect(result.paused.viz.hostFrames).toBe(result.pauseApplied.viz.hostFrames);
+});
+
+test('Web Animations created or replayed during pause remain host-paused', async ({ page }) => {
+  const result = await run(page, await fixture('waapi-during-pause.html'), 'runPauseFixture');
+  expect(result.paused.runtime.playback.paused).toBe(true);
+  expect(result.paused.runtime.playback.hostPausedAnimations).toBeGreaterThanOrEqual(2);
+  expect(result.paused.runtime.rafCallbacks).toBe(result.pauseApplied.runtime.rafCallbacks);
+  expect(result.resumed.runtime.playback.hostPausedAnimations).toBe(0);
+});
+
 test('real Gemini AETHERIA output can never silently pass as a blank Dream', async ({ page }) => {
   const result = await run(page, await fixture('aetheria-gemini-3.7-flash.html'));
   if (result.passed) {

@@ -48,6 +48,47 @@
       return { preflight, watchdog };
     };
 
+    window.runPauseFixture = async html => {
+      const viewport = { width: 640, height: 360, dpr: 1 };
+      const boot = await sandbox.load(html, { viewport });
+      const sessionId = sandbox.sessionId;
+      const started = performance.now();
+      let frameIndex = 0;
+      const timer = setInterval(() => {
+        sandbox.sendFrame(createSyntheticFrame(frameIndex++, performance.now() - started, viewport));
+      }, 16);
+      await new Promise(resolve => setTimeout(resolve, 40));
+      const before = await sandbox.probe('pause-before');
+      const firstPause = sandbox.setPaused(true);
+      const repeatedPause = sandbox.setPaused(true);
+      await sandbox.waitForPlayback(true);
+      const pauseApplied = await sandbox.probe('pause-applied');
+      await new Promise(resolve => setTimeout(resolve, 1150));
+      const paused = await sandbox.probe('pause-held');
+      const pausedHeartbeatAgeMs = sandbox.heartbeatAgeMs();
+      const firstResume = sandbox.setPaused(false);
+      const repeatedResume = sandbox.setPaused(false);
+      await sandbox.waitForPlayback(false);
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const resumed = await sandbox.probe('pause-resumed');
+      clearInterval(timer);
+      const result = {
+        boot,
+        sessionUnchanged: sandbox.sessionId === sessionId,
+        firstPause,
+        repeatedPause,
+        firstResume,
+        repeatedResume,
+        pausedHeartbeatAgeMs,
+        before,
+        pauseApplied,
+        paused,
+        resumed,
+      };
+      sandbox.clear();
+      return result;
+    };
+
     window.__reliabilityHarnessReady = true;
   </script>
 </body>
