@@ -38,11 +38,13 @@ import {
   captureRequestDispatched,
   captureResponseBodyComplete,
   captureResponseHeaders,
+  captureStreamTransport,
   captureTraceError,
   consumeTraceCapture,
   discardTraceCapture,
   stripTraceContext,
   traceContextFromInit,
+  traceCaptureIdentity,
   traceDisplayName,
 } from '../public/visualizer/trace-bridge.js';
 import { buildGenerationMessages, buildRepairMessages } from '../public/visualizer/prompt.js';
@@ -573,6 +575,7 @@ test('safe-header sanitizer keeps an Authorization marker only', () => {
     Authorization: 'Bearer SENTINEL_SECRET_HEADER',
     'Content-Type': 'application/json',
     'X-Request-Id': 'request-safe',
+    'X-Generation-Id': 'gen-safe',
     Cookie: 'session=secret',
     'X-Api-Key': 'plain-secret',
   });
@@ -580,6 +583,7 @@ test('safe-header sanitizer keeps an Authorization marker only', () => {
     authorization: REDACTED,
     'content-type': 'application/json',
     'x-request-id': 'request-safe',
+    'x-generation-id': 'gen-safe',
   });
 });
 
@@ -680,8 +684,78 @@ test('bridge attaches correlation with a private Symbol and strips it before fet
 test('bridge exposes display name only while a correlation is active', () => {
   const context = bridgeContext('display');
   assert.equal(traceDisplayName(context), 'Display display');
+  assert.deepEqual(traceCaptureIdentity(context), {
+    correlationId: 'capture:correlation-display:1',
+    traceId: 'trace-display',
+    attemptId: 'attempt-display',
+    displayName: 'Display display',
+  });
   assert.equal(discardTraceCapture(context), true);
   assert.equal(traceDisplayName(context), '');
+  assert.equal(traceCaptureIdentity(context), null);
+});
+
+test('bridge preserves exact SSE separately from its normalized aggregate and transport evidence', () => {
+  const context = bridgeContext('stream');
+  finalBridgeRequest(context);
+  captureRequestDispatched(context, { dispatchedAt: 2010 });
+  captureResponseHeaders(context, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'X-Request-Id': 'request-stream',
+      'X-Generation-Id': 'gen-stream',
+    },
+  }, { headersAt: 2020 });
+  const transport = {
+    schema: 'openrouter-chat-sse-v1',
+    streamed: true,
+    outcome: 'completed',
+    chunkCount: 4,
+    eventCount: 3,
+    commentCount: 1,
+    doneReceived: true,
+    usageReceived: true,
+    providerGenerationId: 'gen-stream',
+    firstActivityAt: 2021,
+    firstEventAt: 2022,
+    firstReasoningDeltaAt: 2023,
+    firstContentDeltaAt: 2024,
+    lastActivityAt: 2025,
+    streamCompletedAt: 2026,
+    terminatedAt: 2026,
+  };
+  captureStreamTransport(context, transport);
+  captureResponseBodyComplete(context, { completedAt: 2026, protocolComplete: true });
+  const aggregate = {
+    id: 'gen-stream',
+    model: `${MODEL.id}:resolved`,
+    choices: [{ message: { role: 'assistant', content: '<html></html>', reasoning: 'visible' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, cost: 0.01 },
+  };
+  const raw = `: OPENROUTER PROCESSING\n\ndata: ${JSON.stringify(aggregate)}\n\ndata: [DONE]\n\n`;
+  captureProviderResponse(context, {
+    response: { status: 200, headers: {} },
+    rawBodyText: raw,
+    parsedPayload: null,
+    streamAggregate: aggregate,
+    assistantText: '<html></html>',
+    extractedHtml: '<html></html>',
+    resolvedModel: aggregate.model,
+    requestId: 'request-stream',
+    providerGenerationId: 'gen-stream',
+    usage: aggregate.usage,
+    transport,
+  });
+  const capture = consumeTraceCapture(context);
+  assert.equal(capture.response.rawBody, raw);
+  assert.equal(capture.response.payload, null);
+  assert.deepEqual(capture.response.streamAggregate, aggregate);
+  assert.equal(capture.response.providerGenerationId, 'gen-stream');
+  assert.equal(capture.response.transport.outcome, 'completed');
+  assert.equal(capture.response.reasoning.text, 'visible');
+  assert.equal(capture.timing.firstContentDeltaAt, 2024);
+  assert.equal(capture.timing.streamCompletedAt, 2026);
 });
 
 test('bridge captures exact final request after spend mutation', () => {

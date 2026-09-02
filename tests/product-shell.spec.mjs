@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { openRouterSseBody, openRouterSseHeaders } from './helpers/openrouter-sse.mjs';
 
 const MODEL_ID = 'moonshotai/kimi-k3';
 const MODEL_NAME = 'Kimi K3';
@@ -10,7 +11,7 @@ const busyActiveCrashHtml = await readFile(new URL('./fixtures/busy-active-crash
 const openWatchdogCrashHtml = await readFile(new URL('./fixtures/open-watchdog-crash.html', import.meta.url), 'utf8');
 const corsHeaders = {
   'access-control-allow-origin': '*',
-  'access-control-expose-headers': 'x-request-id',
+  'access-control-expose-headers': 'x-request-id, x-generation-id',
   'content-type': 'application/json',
 };
 const catalog = {
@@ -64,6 +65,14 @@ function providerPayload(html) {
     model: MODEL_ID,
     choices: [{ index: 0, message: { role: 'assistant', content: html }, finish_reason: 'stop' }],
     usage: { prompt_tokens: 100, completion_tokens: 200, total_tokens: 300, cost: 0 },
+  };
+}
+
+function streamedCompletion(html, requestId = '') {
+  const payload = providerPayload(html);
+  return {
+    headers: { ...corsHeaders, ...openRouterSseHeaders(payload, requestId) },
+    body: openRouterSseBody(payload),
   };
 }
 
@@ -218,8 +227,7 @@ test('slow background job collapses, survives pause and switching, persists Read
     await completionGate;
     await route.fulfill({
       status: 200,
-      headers: { ...corsHeaders, 'x-request-id': 'product-shell-request' },
-      body: JSON.stringify(providerPayload(validHtml)),
+      ...streamedCompletion(validHtml, 'product-shell-request'),
     });
   });
 
@@ -318,7 +326,7 @@ test('cancellation is terminal, truthful, single-request, and never changes LIVE
     requests += 1;
     requestStarted = true;
     await new Promise(resolve => setTimeout(resolve, 1200));
-    await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(providerPayload(validHtml)) });
+    await route.fulfill({ status: 200, ...streamedCompletion(validHtml) });
   });
   await page.goto('/visualizer/index.html');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
@@ -349,7 +357,7 @@ test('unavailable durable storage blocks paid generation before dispatch', async
   let completionRequests = 0;
   await routeOpenRouter(page, async route => {
     completionRequests += 1;
-    await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(providerPayload(validHtml)) });
+    await route.fulfill({ status: 200, ...streamedCompletion(validHtml) });
   });
   await page.goto('/visualizer/index.html');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);

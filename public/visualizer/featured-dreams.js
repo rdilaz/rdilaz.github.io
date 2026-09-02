@@ -25,7 +25,7 @@ export function validateFeaturedEntry(entry) {
   if (entry.provenance?.generatedByModel && (
     entry.provenance.curationStatus !== 'operator-approved'
     || !entry.provenance.generationTraceId
-    || !entry.requestId
+    || (!entry.requestId && !entry.providerGenerationId)
     || !entry.promptVersion
     || entry.promptProfileId === 'not-captured'
   )) throw new TypeError(`Model-generated Featured Dream ${entry.id} requires approved model, request, prompt, and trace provenance.`);
@@ -87,8 +87,9 @@ function slug(value) {
 }
 
 export async function createFeaturedExportPackage(generation, { title = '' } = {}) {
-  const required = ['id', 'html', 'modelId', 'resolvedModel', 'promptProfileId', 'promptVersion', 'audioApiVersion', 'traceId', 'requestId'];
-  if (required.some(field => !String(generation?.[field] || '').trim()) || !generation?.preflightEvidence?.passed || !['ready', 'verified'].includes(generation?.healthStatus)) {
+  const required = ['id', 'html', 'modelId', 'resolvedModel', 'promptProfileId', 'promptVersion', 'audioApiVersion', 'traceId'];
+  const hasProviderIdentity = Boolean(String(generation?.providerGenerationId || generation?.requestId || '').trim());
+  if (required.some(field => !String(generation?.[field] || '').trim()) || !hasProviderIdentity || !generation?.preflightEvidence?.passed || !['ready', 'verified'].includes(generation?.healthStatus)) {
     throw new TypeError('A ready local Dream with exact model, request, prompt, trace, and preflight evidence is required for Featured export.');
   }
   const id = `${slug(title || generation.modelName)}-${String(generation.id).replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase()}`;
@@ -112,6 +113,7 @@ export async function createFeaturedExportPackage(generation, { title = '' } = {
       order: null,
       startup: false,
       requestId: generation.requestId,
+      providerGenerationId: generation.providerGenerationId || '',
       reliability: {
         status: 'pending-ci-verification',
         contract: 'dream-reliability-v1',

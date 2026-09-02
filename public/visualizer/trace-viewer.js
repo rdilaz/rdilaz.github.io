@@ -767,6 +767,11 @@ export class DreamTraceViewer {
       this._appendFact(body, 'Finish reason', firstPresent(response.finishReason, 'Not recorded'));
       this._appendFact(body, 'Resolved model', firstPresent(resolvedModel(attempt), 'Not recorded'));
       this._appendFact(body, 'Provider request ID', firstPresent(providerRequestId(attempt), 'Not recorded'));
+      this._appendFact(body, 'OpenRouter generation ID', firstPresent(response.providerGenerationId, attempt?.identity?.providerGenerationId, 'Not recorded'));
+      this._appendFact(body, 'Stream outcome', firstPresent(response.transport?.outcome, 'Not recorded'));
+      if (isRecord(response.transport)) {
+        this._appendFact(body, 'Stream activity', `${firstPresent(response.transport.chunkCount, 0)} chunks · ${firstPresent(response.transport.eventCount, 0)} events · ${firstPresent(response.transport.commentCount, 0)} keep-alives`);
+      }
       this._appendFact(body, 'Usage', formatUsage(response.usage));
       this._appendFact(body, 'Reported cost', formatCost(firstPresent(response.reportedCost, response.cost, response.usage?.cost)));
 
@@ -776,6 +781,10 @@ export class DreamTraceViewer {
       if (isPresent(parsedPayload)) {
         this._appendTextBlock(body, 'Parsed provider payload', parsedPayload);
       }
+      if (isPresent(response.streamAggregate)) {
+        this._appendTextBlock(body, 'Normalized stream aggregate', response.streamAggregate);
+      }
+      if (isPresent(response.transport)) this._appendTextBlock(body, 'Stream transport evidence', response.transport);
       const assistant = assistantCapture(attempt);
       if (assistant.present) this._appendTextBlock(body, 'Assistant text', assistant.value);
       const rawVisualizerOutput = firstPresent(response.rawVisualizerOutput, response.rawOutput);

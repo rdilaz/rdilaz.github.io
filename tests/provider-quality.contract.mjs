@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   OPENROUTER_MODEL_NORMALIZATION_VERSION,
   buildOpenRouterCompletionRequest,
+  categorizedTransportError,
   normalizeOpenRouterModel,
   shouldBlockStaleReasoningRepair,
 } from '../public/visualizer/provider-runtime.js';
@@ -68,6 +69,22 @@ test('catalog normalization preserves exact reasoning, provider limits, pricing,
   assert.equal(model.reasoningMetadata.source.supportedEfforts, 'model.reasoning.supported_efforts');
 });
 
+test('an established local timeout outranks a later user abort while ordinary abort remains cancellation', () => {
+  const controller = new AbortController();
+  controller.abort();
+  const timeout = Object.assign(new Error('idle first'), {
+    name: 'DreamTimeoutError',
+    code: 'DREAM_IDLE_TIMEOUT',
+    timeoutKind: 'idle',
+  });
+  const classifiedTimeout = categorizedTransportError(timeout, { signal: controller.signal });
+  assert.equal(classifiedTimeout.code, 'PROVIDER_TIMEOUT');
+  assert.equal(classifiedTimeout.timeoutKind, 'idle');
+
+  const classifiedCancel = categorizedTransportError(new TypeError('body stream aborted'), { signal: controller.signal });
+  assert.equal(classifiedCancel.name, 'AbortError');
+});
+
 test('Default omits reasoning while explicit effort uses the exact enforceable OpenRouter shape', () => {
   const model = normalizeOpenRouterModel(RAW_MODEL);
   const nativeDefault = buildOpenRouterCompletionRequest({ model, messages: MESSAGES });
@@ -84,6 +101,7 @@ test('Default omits reasoning while explicit effort uses the exact enforceable O
   });
   assert.deepEqual(explicit.body.reasoning, { effort: 'max' });
   assert.deepEqual(explicit.body.provider, { require_parameters: true });
+  assert.equal(explicit.body.stream, true);
   assert.equal(explicit.policy.nativeDefaultUsed, false);
   assert.deepEqual(explicit.policy.dispatchedReasoning, { effort: 'max' });
 

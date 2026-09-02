@@ -59,6 +59,12 @@ import {
   favoriteTargetForArrow,
   globalArrowCommand,
 } from './keyboard-transport.js';
+import { createImmersiveUiController } from './immersive-ui.js';
+import {
+  createCadenceGate,
+  createRenderQualityController,
+  resolveRenderQuality,
+} from './render-quality.js';
 import {
   addDiagnosticTimeline,
   applyProviderResult,
@@ -114,6 +120,8 @@ const els = {
   sensitivityValue: $('#sensitivityValue'),
   resetSensitivity: $('#resetSensitivity'),
   sensitivityHud: $('#sensitivityHud'),
+  renderQualityInputs: [...document.querySelectorAll('input[name="renderQuality"]')],
+  renderQualityDetail: $('#renderQualityDetail'),
   favoriteOpeningStatus: $('#favoriteOpeningStatus'),
   libraryButton: $('#libraryButton'),
   fullscreenButton: $('#fullscreenButton'),
@@ -181,18 +189,22 @@ let currentDiagnosticId = '';
 let fallbackGeneration = null;
 let fallbackHtml = DEFAULT_VISUALIZER_HTML;
 let pointer = { x: 0.5, y: 0.5, active: false, down: false };
-let lastHostFrame = 0;
-let hideUiTimer = 0;
 let toastTimer = 0;
 let diagnosticsRenderTimer = 0;
 let favoritesOnly = false;
 let battle = null;
 let wakeLock = null;
+let wakeLockRequest = null;
+let wakeLockRevision = 0;
 let generating = false;
 let recovering = false;
 let reopening = false;
 let deletingGeneration = false;
 let activeDreamController = null;
+let activeDreamTraceId = '';
+let immersiveUiController = null;
+let lastKeyboardUiActivityAt = -Infinity;
+let dprMediaQuery = null;
 let promotion = null;
 let devMode = false;
 let runtimeRecoveryQueued = false;
@@ -207,6 +219,7 @@ const playbackController = createPlaybackController();
 const dreamJobController = createDreamJobController();
 const reasoningSelectionStore = createReasoningSelectionStore({ storage: localSettingsStorage });
 const sensitivityController = createAudioSensitivityController({ storage: localSettingsStorage });
+const renderQualityController = createRenderQualityController({ storage: localSettingsStorage });
 const modelFitEvidenceStore = createModelFitEvidenceStore({ storage: localSettingsStorage });
 const fixtureDiagnostics = new Map();
 let dreamSwitcher = null;
@@ -218,6 +231,15 @@ let sensitivityHudTimer = 0;
 let openingStatusTimer = 0;
 let openingStatusRevision = 0;
 let sensitivityPercent = sensitivityController.snapshot().sensitivityPercent;
+let renderQuality = resolveRenderQuality(renderQualityController.snapshot().mode, devicePixelRatio || 1);
+const audioAnalysisGate = createCadenceGate(60);
+const vizDeliveryGate = createCadenceGate(renderQuality.maxFps);
+let latestAudioSample = null;
+let lastDeliveredFrameAt = 0;
+let audioAnalysisSamples = 0;
+let vizFrameDeliveries = 0;
+activeSlot.sandbox.setRenderQuality(renderQuality);
+standbySlot.sandbox.setRenderQuality(renderQuality);
 
 function renderIdentity(snapshot = identityController.snapshot()) {
   els.liveIdentityName.textContent = snapshot.live.displayName;
@@ -328,8 +350,46 @@ function currentViewport() {
   return {
     width: Math.max(1, els.stage.clientWidth || innerWidth),
     height: Math.max(1, els.stage.clientHeight || innerHeight),
-    dpr: Math.min(devicePixelRatio || 1, 2),
+    dpr: renderQuality.effectiveDpr,
   };
+}
+
+function renderQualityControl() {
+  for (const input of els.renderQualityInputs) input.checked = input.value === renderQuality.mode;
+  if (els.renderQualityDetail) {
+    const dpr = Number.isInteger(renderQuality.effectiveDpr)
+      ? String(renderQuality.effectiveDpr)
+      : renderQuality.effectiveDpr.toFixed(1);
+    els.renderQualityDetail.textContent = `${renderQuality.label} · up to ${renderQuality.maxFps} FPS · ${dpr}× effective DPR`;
+  }
+}
+
+function applyRenderQuality(snapshot = renderQualityController.snapshot()) {
+  renderQuality = resolveRenderQuality(snapshot.mode, devicePixelRatio || 1);
+  vizDeliveryGate.setMaxFps(renderQuality.maxFps);
+  activeSlot.sandbox.setRenderQuality(renderQuality);
+  standbySlot.sandbox.setRenderQuality(renderQuality);
+  renderQualityControl();
+  window.dispatchEvent(new CustomEvent('visualizer:render-quality-changed', {
+    detail: {
+      mode: renderQuality.mode,
+      maxFps: renderQuality.maxFps,
+      effectiveDpr: renderQuality.effectiveDpr,
+    },
+  }));
+  return renderQuality;
+}
+
+function nativeDprMediaChanged() {
+  applyRenderQuality(renderQualityController.snapshot());
+  watchNativeDpr();
+}
+
+function watchNativeDpr() {
+  if (typeof matchMedia !== 'function') return;
+  dprMediaQuery?.removeEventListener?.('change', nativeDprMediaChanged);
+  dprMediaQuery = matchMedia(`(resolution: ${devicePixelRatio || 1}dppx)`);
+  dprMediaQuery.addEventListener?.('change', nativeDprMediaChanged, { once: true });
 }
 
 function updateConnectionUi() {
@@ -343,6 +403,9 @@ function updateConnectionUi() {
 
 function renderPlayback(snapshot = playbackController.snapshot()) {
   visualPaused = snapshot.paused;
+  audioAnalysisGate.reset();
+  vizDeliveryGate.reset();
+  if (!visualPaused) lastDeliveredFrameAt = 0;
   document.body.classList.toggle('visual-paused', visualPaused);
   els.stage.classList.toggle('is-visual-paused', visualPaused);
   if (els.playbackButton) {
@@ -361,6 +424,7 @@ function renderPlayback(snapshot = playbackController.snapshot()) {
   if (promotion?.candidate && promotion.candidate !== activeSlot.sandbox) {
     promotion.candidate.setPaused(visualPaused);
   }
+  immersiveUiController?.sync();
 }
 
 function updateAudioState(state) {
@@ -476,10 +540,12 @@ function endOpeningStatus(revision) {
 }
 
 sensitivityController.subscribe(renderSensitivity);
+renderQualityController.subscribe(applyRenderQuality);
 
 playbackController.subscribe(renderPlayback);
 
 function dreamLifecycleDetail(phase, eventDetail = {}) {
+  if (eventDetail.message) return eventDetail.message;
   if (phase === DREAM_JOB_PHASES.SENDING) return 'Request sent. Keep watching or collapse this panel.';
   if (phase === DREAM_JOB_PHASES.WORKING) {
     const waitingMs = performance.now() - Number(eventDetail.requestStartedAt || performance.now());
@@ -503,6 +569,7 @@ window.addEventListener('visualizer:dream-lifecycle', event => {
   if (!phase) return;
   const job = dreamJobController.snapshot();
   if (!job.id || !generating || (detail.modelId && detail.modelId !== job.modelId)) return;
+  if (detail.traceId && activeDreamTraceId && detail.traceId !== activeDreamTraceId) return;
   try {
     const patch = { detail: dreamLifecycleDetail(phase, detail) };
     if (phase === DREAM_JOB_PHASES.CHECKING) patch.cancellable = false;
@@ -528,7 +595,7 @@ function flushPendingActiveFailure() {
 function pushLiveDiagnostic(source, message) {
   if (!devMode) return;
   const event = message?.event || message?.heartbeat || message?.ready || null;
-  if (!event && message?.type !== 'mode') return;
+  if (!event && !['mode', 'render-quality-applied'].includes(message?.type)) return;
   liveDiagnosticEvents.push({
     at: Date.now(),
     source,
@@ -549,6 +616,16 @@ function handleSandboxEvent(sandbox, message) {
 
   if (message.type === 'pointer' && (sandbox === activeSlot.sandbox || promotion?.candidate === sandbox)) {
     pointer = { ...pointer, ...message.pointer };
+    if (message.trustedActivity === true) {
+      const mode = performance.now() - lastKeyboardUiActivityAt < 200 ? 'keyboard' : 'pointer';
+      showUi('iframe-pointer', mode);
+    }
+  }
+
+  if (message.type === 'user-activity' && (sandbox === activeSlot.sandbox || promotion?.candidate === sandbox)) {
+    const kind = ['keyboard', 'wheel', 'touch'].includes(message.kind) ? message.kind : 'pointer';
+    if (kind === 'keyboard') lastKeyboardUiActivityAt = performance.now();
+    showUi(`iframe-${kind}`, kind === 'keyboard' ? 'keyboard' : 'pointer');
   }
 
   if (promotion?.candidate === sandbox && isFatalEvent(message)) {
@@ -601,8 +678,7 @@ function openDrawer(drawer) {
   });
   els.stage.inert = true;
   els.drawerScrim.hidden = false;
-  document.body.classList.remove('ui-hidden');
-  clearTimeout(hideUiTimer);
+  showUi('drawer-open');
   queueMicrotask(() => drawer.querySelector('button:not(:disabled), input:not(:disabled), summary, [tabindex]:not([tabindex="-1"])')?.focus());
 }
 
@@ -652,22 +728,47 @@ function trapDrawerFocus(event) {
 }
 
 function anyDrawerOpen() {
-  return drawerElements.some(drawer => drawer.classList.contains('is-open'));
+  return Boolean(document.querySelector('.drawer.is-open'));
 }
 
-function showUi() {
-  document.body.classList.remove('ui-hidden');
-  scheduleUiHide();
+function visibleHostDialog() {
+  if (document.querySelector('dialog[open]')) return 'dialog-open';
+  for (const selector of ['#costConfirmBackdrop:not([hidden])', '#audioPicker:not([hidden])']) {
+    if (document.querySelector(selector)) return selector.slice(1).split(':')[0];
+  }
+  return '';
+}
+
+function keyboardFocusPinsUi() {
+  if (immersiveUiController?.snapshot().inputMode !== 'keyboard') return false;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body) return false;
+  return true;
+}
+
+function immersiveUiBlocker() {
+  if (anyDrawerOpen()) return 'drawer-open';
+  if (dreamSwitcher?.isOpen()) return 'dream-switcher-open';
+  if (visualPaused) return 'playback-paused';
+  const dialog = visibleHostDialog();
+  if (dialog) return dialog;
+  if (keyboardFocusPinsUi()) return 'keyboard-focus';
+  return '';
+}
+
+immersiveUiController = createImmersiveUiController({
+  getBlocker: immersiveUiBlocker,
+  onChange(snapshot) {
+    document.body.classList.toggle('ui-hidden', snapshot.hidden);
+  },
+});
+
+function showUi(reason = 'host-activity', mode = immersiveUiController.snapshot().inputMode) {
+  immersiveUiController.wake(reason, { mode });
 }
 
 function scheduleUiHide() {
-  clearTimeout(hideUiTimer);
-  if (anyDrawerOpen() || dreamSwitcher?.isOpen() || visualPaused || dreamJobController.snapshot().expanded) return;
-  hideUiTimer = setTimeout(() => {
-    if (!document.activeElement?.matches('input, button, summary')) {
-      document.body.classList.add('ui-hidden');
-    }
-  }, 3000);
+  immersiveUiController.sync();
 }
 
 function renderModels() {
@@ -808,6 +909,7 @@ function absorbTraceCapture(diagnostic, attempt, result = null) {
       extractedHtml: result.html || '',
       resolvedModel: result.resolvedModel || patch.response?.resolvedModel || '',
       requestId: result.requestId || patch.response?.requestId || '',
+      providerGenerationId: result.providerGenerationId || patch.response?.providerGenerationId || '',
       usage: result.usage || patch.response?.usage || null,
     };
   }
@@ -1032,6 +1134,7 @@ async function evaluateCandidate(result, diagnostic, attemptNumber, signal, trac
   }
 
   const candidateSandbox = standbySlot.sandbox;
+  candidateSandbox.setPaused(false);
   const harness = createHarness(candidateSandbox, diagnostic, traceAttempt);
   const health = await (quickReopen ? harness.reopen(result.html, {
     viewport: currentViewport(),
@@ -1363,6 +1466,7 @@ async function dream() {
     liveSnapshot: identityAtStart,
     nextSnapshot: identityAtStart.next,
   });
+  activeDreamTraceId = diagnostic.trace.id;
   diagnostic.promptVersion = PROMPT_VERSION;
   diagnostic.promptProfile = sanitizeTraceValue(promptProfile);
   diagnostic.audioApiVersion = AUDIO_API_VERSION;
@@ -1403,6 +1507,7 @@ async function dream() {
     applyProviderResult(diagnostic, result);
     addDiagnosticTimeline(diagnostic, 'generation:response-complete', {
       requestId: result.requestId || '',
+      providerGenerationId: result.providerGenerationId || '',
       resolvedModel: result.resolvedModel || requestedModel.id,
       outputBytes: diagnostic.outputBytes,
     });
@@ -1441,6 +1546,7 @@ async function dream() {
           providerId: 'openrouter',
           resolvedModel: result.resolvedModel,
           requestId: result.requestId || '',
+          providerGenerationId: result.providerGenerationId || '',
           promptVersion: PROMPT_VERSION,
           promptProfileId: promptProfile.id,
           promptProfileName: promptProfile.name,
@@ -1519,10 +1625,10 @@ async function dream() {
       traceAttempt = repair.traceAttempt;
     }
   } catch (error) {
-    const cancelled = error?.name === 'AbortError' || error?.code === 'CANCELLED' || /cancel/i.test(error?.message || '');
+    const cancelled = error?.name === 'AbortError' || error?.code === 'CANCELLED';
     const failureCode = cancelled
       ? GENERATION_FAILURE_CATEGORIES.CANCELLED
-      : error?.code === 'DREAM_TIMEOUT'
+      : ['DREAM_TIMEOUT', 'DREAM_IDLE_TIMEOUT', 'DREAM_HARD_TIMEOUT'].includes(error?.code)
         ? GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT
         : error?.code || 'PROVIDER_OR_PIPELINE_FAILURE';
     const failure = error instanceof DreamReliabilityError
@@ -1571,6 +1677,7 @@ async function dream() {
   } finally {
     window.dispatchEvent(new CustomEvent('visualizer:dream-job-terminal'));
     activeDreamController = null;
+    activeDreamTraceId = '';
     generating = false;
     els.dreamButton.disabled = false;
     scheduleUiHide();
@@ -1987,38 +2094,81 @@ async function exportFeaturedCandidate(generationId = '') {
 
 async function toggleFullscreen() {
   showUi();
+  if (document.body.classList.contains('pseudo-fullscreen')) {
+    document.body.classList.remove('pseudo-fullscreen');
+    syncFullscreenControl();
+    return;
+  }
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
-    else await document.documentElement.requestFullscreen();
+    else {
+      await document.documentElement.requestFullscreen();
+      document.body.classList.remove('pseudo-fullscreen');
+    }
   } catch {
-    document.body.classList.toggle('pseudo-fullscreen');
+    document.body.classList.add('pseudo-fullscreen');
+    syncFullscreenControl();
   }
 }
 
 async function requestWakeLock() {
-  if (!('wakeLock' in navigator) || !document.fullscreenElement) return;
+  if (!('wakeLock' in navigator)
+    || !document.fullscreenElement
+    || document.visibilityState !== 'visible'
+    || wakeLock
+    || wakeLockRequest) return;
+  const revision = ++wakeLockRevision;
+  let request;
+  let reacquire = false;
   try {
-    wakeLock = await navigator.wakeLock.request('screen');
+    request = navigator.wakeLock.request('screen');
+    wakeLockRequest = request;
+    const sentinel = await request;
+    if (revision !== wakeLockRevision || !document.fullscreenElement || document.visibilityState !== 'visible') {
+      await sentinel.release().catch(() => {});
+      reacquire = Boolean(document.fullscreenElement && document.visibilityState === 'visible');
+      return;
+    }
+    wakeLock = sentinel;
+    sentinel.addEventListener?.('release', () => {
+      if (wakeLock === sentinel) wakeLock = null;
+    }, { once: true });
   } catch {
     // Wake lock support is optional and must not interrupt the visualizer.
+    reacquire = revision !== wakeLockRevision
+      && Boolean(document.fullscreenElement && document.visibilityState === 'visible');
+  } finally {
+    if (request && wakeLockRequest === request) wakeLockRequest = null;
+    if (reacquire && !wakeLock) queueMicrotask(() => void requestWakeLock());
   }
 }
 
 async function releaseWakeLock() {
+  wakeLockRevision += 1;
+  const sentinel = wakeLock;
+  wakeLock = null;
   try {
-    await wakeLock?.release();
+    await sentinel?.release();
   } catch {
     // A lost wake lock has already been released by the browser.
   }
-  wakeLock = null;
 }
 
-function composeHostFrame(timestamp) {
-  const sample = applyAudioSensitivity(audio.sample(timestamp), sensitivityPercent);
+function syncFullscreenControl() {
+  const active = Boolean(document.fullscreenElement || document.body.classList.contains('pseudo-fullscreen'));
+  els.fullscreenButton.textContent = active ? '×' : '⛶';
+  els.fullscreenButton.setAttribute('aria-label', active ? 'Exit fullscreen' : 'Enter fullscreen');
+  els.fullscreenButton.setAttribute('aria-pressed', String(active));
+}
+
+function composeHostFrame(timestamp, sample) {
+  const deliveryDeltaTime = lastDeliveredFrameAt
+    ? Math.min(0.12, Math.max(0, (timestamp - lastDeliveredFrameAt) / 1000))
+    : sample.deltaTime;
   return {
     version: AUDIO_API_VERSION,
     time: sample.time,
-    deltaTime: sample.deltaTime,
+    deltaTime: deliveryDeltaTime,
     audio: {
       connected: sample.connected,
       silence: sample.silence,
@@ -2043,9 +2193,14 @@ function composeHostFrame(timestamp) {
 function hostLoop(timestamp) {
   requestAnimationFrame(hostLoop);
   if (visualPaused) return;
-  if (timestamp - lastHostFrame < 1000 / 60) return;
-  lastHostFrame = timestamp;
-  const frame = composeHostFrame(timestamp);
+  if (audioAnalysisGate.shouldRun(timestamp) || !latestAudioSample) {
+    latestAudioSample = applyAudioSensitivity(audio.sample(timestamp), sensitivityPercent);
+    audioAnalysisSamples += 1;
+  }
+  if (!vizDeliveryGate.shouldRun(timestamp)) return;
+  const frame = composeHostFrame(timestamp, latestAudioSample);
+  lastDeliveredFrameAt = timestamp;
+  vizFrameDeliveries += 1;
   activeSlot.sandbox.sendFrame(frame);
   if (promotion?.candidate && promotion.candidate !== activeSlot.sandbox) {
     promotion.candidate.sendFrame(frame);
@@ -2200,6 +2355,15 @@ function runtimeSummary() {
     heartbeatAgeMs: heartbeatAge,
     audioConnected: Boolean(audio.connected),
     sensitivityPercent,
+    renderQuality: {
+      ...renderQuality,
+      audioAnalysisTargetFps: 60,
+      audioAnalysisSamples,
+      vizFrameDeliveries,
+      deliveryGate: vizDeliveryGate.snapshot(),
+    },
+    immersive: immersiveUiController.snapshot(),
+    generationTransport: window.VIZ_DREAM_STATUS?.snapshot?.() || null,
     reasoningSelection: selectedReasoningSelection,
     generationEnvelope: window.VIZ_COST_GUARD?.currentPreview?.envelope || null,
     generating,
@@ -2210,6 +2374,7 @@ function runtimeSummary() {
     playback: playbackController.snapshot(),
     job: dreamJobController.snapshot(),
     activeSessionId: activeSlot.sandbox.sessionId,
+    sandboxRenderQuality: activeSlot.sandbox.appliedRenderQuality,
     activeEvents: activeSlot.sandbox.events.slice(-10),
   };
 }
@@ -2577,6 +2742,16 @@ function installDevApi() {
     playback() {
       return playbackController.snapshot();
     },
+    quality() {
+      return structuredClone(renderQuality);
+    },
+    setQuality(mode) {
+      renderQualityController.setMode(mode);
+      return structuredClone(renderQuality);
+    },
+    immersive() {
+      return immersiveUiController.snapshot();
+    },
     setPaused(paused) {
       return playbackController.setPaused(paused);
     },
@@ -2646,6 +2821,7 @@ function installDevApi() {
 }
 
 function wireEvents() {
+  syncFullscreenControl();
   els.playbackButton?.addEventListener('click', () => {
     playbackController.toggle();
     showUi();
@@ -2668,6 +2844,13 @@ function wireEvents() {
     const snapshot = sensitivityController.reset();
     showSensitivityHud(snapshot);
   });
+  for (const input of els.renderQualityInputs) {
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      const selected = renderQualityController.setMode(input.value);
+      showToast(`${selected.profile.label} render quality applied. The Dream and AI output are unchanged.`);
+    });
+  }
   els.libraryButton.addEventListener('click', async () => {
     dreamSwitcher?.close();
     await renderLibrary();
@@ -2717,18 +2900,36 @@ function wireEvents() {
     pointer.down = false;
   });
   document.addEventListener('fullscreenchange', async () => {
-    els.fullscreenButton.textContent = document.fullscreenElement ? '×' : '⛶';
-    els.fullscreenButton.setAttribute('aria-label', document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen');
+    if (document.fullscreenElement) document.body.classList.remove('pseudo-fullscreen');
+    syncFullscreenControl();
     if (document.fullscreenElement) await requestWakeLock();
     else await releaseWakeLock();
     showUi();
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && document.fullscreenElement) void requestWakeLock();
+    else if (document.visibilityState !== 'visible') void releaseWakeLock();
   });
-  for (const eventName of ['pointermove', 'pointerdown', 'keydown', 'touchstart']) {
-    document.addEventListener(eventName, showUi, { passive: eventName !== 'keydown' });
+  window.addEventListener('resize', () => applyRenderQuality(renderQualityController.snapshot()), { passive: true });
+  watchNativeDpr();
+  for (const eventName of ['pointermove', 'pointerdown', 'touchstart', 'wheel']) {
+    document.addEventListener(eventName, event => {
+      if (event.isTrusted) showUi(`host-${eventName}`, 'pointer');
+    }, { passive: true, capture: true });
   }
+  document.addEventListener('keydown', event => {
+    if (!event.isTrusted) return;
+    lastKeyboardUiActivityAt = performance.now();
+    showUi('host-keyboard', 'keyboard');
+  }, { capture: true });
+  document.addEventListener('focusin', event => {
+    if (event.isTrusted) showUi('host-focus', immersiveUiController.snapshot().inputMode);
+  }, { capture: true });
+  document.addEventListener('focusout', () => queueMicrotask(scheduleUiHide), { capture: true });
+  const blockerObserver = new MutationObserver(scheduleUiHide);
+  document.querySelectorAll('.drawer, dialog, #costConfirmBackdrop, #audioPicker').forEach(element => {
+    blockerObserver.observe(element, { attributes: true, attributeFilter: ['class', 'hidden', 'open'] });
+  });
   document.addEventListener('keydown', event => {
     if (trapDrawerFocus(event)) return;
     const transportCommand = globalArrowCommand(event, { document });
@@ -2838,6 +3039,8 @@ async function initialize() {
     onFavorite: item => { void toggleSwitcherFavorite(item); },
     onVisibilityChange: open => {
       if (open && dreamJobController.snapshot().expanded) dreamJobController.collapse();
+      if (open) showUi('dream-switcher-open');
+      else scheduleUiHide();
     },
   });
   renderFavoriteControl();

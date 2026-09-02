@@ -43,7 +43,7 @@ jobs:
 
       - name: Check visualizer JavaScript syntax
         run: |
-          for file in public/visualizer/*.js public/visualizer/featured/*.js scripts/visualizer-static-check.mjs tests/*.mjs playwright.config.mjs; do
+          for file in public/visualizer/*.js public/visualizer/featured/*.js scripts/visualizer-static-check.mjs tests/*.mjs tests/helpers/*.mjs playwright.config.mjs; do
             node --check "$file"
           done
 
@@ -79,6 +79,15 @@ jobs:
 
       - name: Verify audio sensitivity contract
         run: node --test --test-concurrency=1 tests/audio-sensitivity.contract.mjs
+
+      - name: Verify streaming transport contract
+        run: node --test --test-concurrency=1 tests/streaming-transport.contract.mjs
+
+      - name: Verify render quality contract
+        run: node --test --test-concurrency=1 tests/render-quality.contract.mjs
+
+      - name: Verify immersive UI contract
+        run: node --test --test-concurrency=1 tests/immersive-ui.contract.mjs
 
       - name: Install portfolio dependencies
         run: npm ci

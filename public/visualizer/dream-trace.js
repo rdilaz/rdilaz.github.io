@@ -35,6 +35,7 @@ const SAFE_HEADERS = new Set([
   'server',
   'vary',
   'x-openrouter-title',
+  'x-generation-id',
   'x-request-id',
   'request-id',
   'cf-ray',
@@ -421,6 +422,7 @@ function emptyAttempt({ trace, input, id, timestamp }) {
       upstreamProvider: text(input.upstreamProvider, selected.upstreamProvider),
       resolvedModel: '',
       requestId: '',
+      providerGenerationId: '',
       diagnosticId: text(input.diagnosticId, trace.diagnosticId),
       generationId: '',
     },
@@ -431,6 +433,13 @@ function emptyAttempt({ trace, input, id, timestamp }) {
       requestPreparedAt: null,
       requestDispatchedAt: null,
       responseHeadersAt: null,
+      firstStreamActivityAt: null,
+      firstStreamEventAt: null,
+      firstReasoningDeltaAt: null,
+      firstContentDeltaAt: null,
+      lastStreamActivityAt: null,
+      streamCompletedAt: null,
+      streamTerminatedAt: null,
       responseBodyCompleteAt: null,
       providerDurationMs: null,
       artifactValidationStartedAt: null,
@@ -459,6 +468,7 @@ function emptyAttempt({ trace, input, id, timestamp }) {
       headers: {},
       rawBody: '',
       payload: null,
+      streamAggregate: null,
       assistantText: '',
       rawOutput: '',
       extractedHtml: '',
@@ -467,11 +477,13 @@ function emptyAttempt({ trace, input, id, timestamp }) {
       native_finish_reason: '',
       resolvedModel: '',
       requestId: '',
+      providerGenerationId: '',
       usage: null,
       cost: null,
       costDetails: null,
       reasoning: extractProviderReasoning(null, null),
       error: null,
+      transport: null,
     },
     artifact: {
       staticValidation: null,
@@ -545,14 +557,18 @@ function applyProjection(trace) {
     || attempt.response?.assistantText
     || attempt.response?.resolvedModel
     || attempt.response?.requestId
+    || attempt.response?.providerGenerationId
     || attempt.response?.usage
+    || attempt.response?.transport
     || attempt.response?.error
   )) || trace.attempts.at(-1) || null;
   const finalResolvedModel = finalAttempt?.response?.resolvedModel
     || finalAttempt?.identity?.resolvedModel
     || '';
   const usage = usageProjection(trace.attempts);
-  const exactReportedCost = costs.length ? costs.reduce((sum, value) => sum + value, 0) : null;
+  const knownReportedCostSubtotal = costs.length ? costs.reduce((sum, value) => sum + value, 0) : null;
+  const reportedCostComplete = requestCountKnown && dispatched.length > 0 && costs.length === dispatched.length;
+  const exactReportedCost = reportedCostComplete ? knownReportedCostSubtotal : null;
 
   trace.providerRequestCount = requestCountKnown ? dispatched.length : null;
   trace.requestCount = requestCountKnown ? dispatched.length : null;
@@ -561,10 +577,13 @@ function applyProjection(trace) {
   trace.usage = usage;
   trace.exactReportedCost = exactReportedCost;
   trace.totalReportedCost = exactReportedCost;
-  trace.reportedCostComplete = requestCountKnown && dispatched.length > 0 && costs.length === dispatched.length;
+  trace.knownReportedCostSubtotal = knownReportedCostSubtotal;
+  trace.reportedCostComplete = reportedCostComplete;
   trace.finalResolvedModel = finalResolvedModel;
   trace.resolvedModel = finalResolvedModel;
   trace.requestId = finalAttempt?.response?.requestId || finalAttempt?.identity?.requestId || '';
+  trace.providerGenerationId = finalAttempt?.response?.providerGenerationId || '';
+  trace.streamTransport = finalAttempt?.response?.transport || null;
   trace.rawOutput = finalAttempt?.response?.rawOutput || finalAttempt?.response?.assistantText || '';
   trace.html = finalAttempt?.response?.extractedHtml || '';
   trace.requestPolicy = finalAttempt?.request?.policy || null;
@@ -576,12 +595,15 @@ function applyProjection(trace) {
     providerRequestCount: trace.providerRequestCount,
     usage,
     exactReportedCost,
+    knownReportedCostSubtotal,
     reportedCostComplete: trace.reportedCostComplete,
     finalResolvedModel,
     finalFinishReason: trace.finalFinishReason,
     finalNativeFinishReason: trace.finalNativeFinishReason,
     requestPolicy: trace.requestPolicy,
     repairUsed: trace.repairUsed,
+    providerGenerationId: trace.providerGenerationId,
+    streamTransport: trace.streamTransport,
   };
   return trace;
 }
@@ -749,6 +771,7 @@ export function patchDreamAttempt(trace, attemptId, patch = {}, {
 
   attempt.identity.resolvedModel = text(attempt.response.resolvedModel, attempt.identity.resolvedModel);
   attempt.identity.requestId = text(attempt.response.requestId, attempt.identity.requestId);
+  attempt.identity.providerGenerationId = text(attempt.response.providerGenerationId, attempt.identity.providerGenerationId);
   if (attempt.timing.providerDurationMs == null) {
     const start = numeric(attempt.timing.requestDispatchedAt);
     const end = numeric(attempt.timing.responseBodyCompleteAt);
@@ -894,6 +917,7 @@ export function legacyDiagnosticToTrace(diagnostic = {}) {
         upstreamProvider: text(safe.upstreamProvider),
         resolvedModel: responseBelongsHere ? text(safe.resolvedModel) : '',
         requestId: responseBelongsHere ? text(safe.requestId) : '',
+        providerGenerationId: '',
         diagnosticId: id,
         generationId: text(safe.generationId),
       },
@@ -920,6 +944,7 @@ export function legacyDiagnosticToTrace(diagnostic = {}) {
         headers: {},
         rawBody: '',
         payload: null,
+        streamAggregate: null,
         assistantText: responseBelongsHere ? legacyRawOutput : '',
         rawOutput: responseBelongsHere ? legacyRawOutput : '',
         extractedHtml: responseBelongsHere ? legacyHtml : '',
@@ -928,11 +953,13 @@ export function legacyDiagnosticToTrace(diagnostic = {}) {
         native_finish_reason: '',
         resolvedModel: responseBelongsHere ? text(safe.resolvedModel) : '',
         requestId: responseBelongsHere ? text(safe.requestId) : '',
+        providerGenerationId: '',
         usage: responseBelongsHere ? safe.usage ?? null : null,
         cost: responseBelongsHere ? firstNumeric(safe.cost, safe.usage?.cost) : null,
         costDetails: null,
         reasoning: { status: 'not-captured', exposed: false, hasText: false, label: LEGACY_NOT_CAPTURED, text: '', details: [], tokenCount: null },
         error: responseBelongsHere && safe.failureMessage ? { name: 'LegacyDiagnosticError', message: safe.failureMessage, code: safe.failureCode || '' } : null,
+        transport: null,
       },
       artifact: {
         staticValidation: legacyAttempt.staticValidation ?? safe.staticValidation ?? null,
