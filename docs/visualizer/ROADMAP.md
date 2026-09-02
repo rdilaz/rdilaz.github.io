@@ -47,7 +47,7 @@ Everything else is progressive disclosure.
 
 # Stage 1 — Product Shell / Core UX v1
 
-This is the current priority.
+Implementation is present on the current milestone branch, but deployment and product acceptance are not claimed. Repeated real-browser checks, operator model/catalog review, curated content, and mobile acceptance remain.
 
 Goal: make the working system feel like a product rather than a lab.
 
@@ -376,7 +376,7 @@ These are explicitly below the core product path:
 
 # Immediate milestone order
 
-Unless new evidence changes the priority, implement in this order:
+Unless new evidence changes the priority, close and validate milestones in this order:
 
 1. **Product Shell / Core UX v1**
    - Featured Dreams
@@ -401,6 +401,8 @@ Unless new evidence changes the priority, implement in this order:
    - transitions
    - first-use onboarding
    - latency/progress wording
+
+A later deep HCDD/UX polish pass should be driven by observed first-use, model-choice, spend-confirmation, and failed-Dream behavior after the evidence campaign; it is not a substitute for current milestone verification.
 
 5. **Sharing discovery**
 

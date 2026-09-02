@@ -109,7 +109,7 @@ export function createDreamJobController({
     return current;
   }
 
-  function start({ model, promptProfile, id = idFactory(), detail = '' } = {}) {
+  function start({ model, promptProfile, reasoningSelection = null, generationConfiguration = null, id = idFactory(), detail = '' } = {}) {
     if (isExecutingDreamJob(state) || state.phase === DREAM_JOB_PHASES.OPENING) {
       throw new Error('Only one Dream job can execute at a time.');
     }
@@ -123,7 +123,7 @@ export function createDreamJobController({
       phase: DREAM_JOB_PHASES.PREPARING,
       modelId,
       modelName,
-      input: clone({ model, promptProfile }),
+      input: clone({ model, promptProfile, reasoningSelection, generationConfiguration }),
       detail,
       cancellable: true,
       expanded: true,
@@ -222,6 +222,7 @@ export function mountDreamJobView({
   onCancel = () => {},
   onOpen = () => {},
   onFavorite = () => {},
+  onSpend = () => {},
   onDismiss = () => {},
 } = {}) {
   if (!controller?.subscribe) throw new TypeError('Dream job view requires a controller.');
@@ -243,6 +244,7 @@ export function mountDreamJobView({
     cancel: element('dreamCancelButton'),
     open: element('dreamJobOpen'),
     favorite: element('dreamJobFavorite'),
+    spend: element('dreamJobSpend'),
     dismiss: element('dreamJobDismiss'),
   };
   let current = controller.snapshot();
@@ -286,6 +288,7 @@ export function mountDreamJobView({
       els.favorite.setAttribute('aria-pressed', String(favorite));
     }
     if (els.dismiss) els.dismiss.hidden = !terminal;
+    if (els.spend) els.spend.hidden = snapshot.failure?.code !== 'INSUFFICIENT_PRACTICAL_ENVELOPE';
     if (els.collapse) els.collapse.hidden = idle;
     if (els.announcement && snapshot.phase !== lastAnnouncedPhase) {
       const terminalDetail = ['failed', 'failed-open', 'cancelled'].includes(snapshot.phase) && snapshot.detail
@@ -306,6 +309,7 @@ export function mountDreamJobView({
   els.open?.addEventListener('click', () => onOpen(controller.snapshot()));
   els.pillOpen?.addEventListener('click', () => onOpen(controller.snapshot()));
   els.favorite?.addEventListener('click', () => onFavorite(controller.snapshot()));
+  els.spend?.addEventListener('click', () => onSpend(controller.snapshot()));
   els.dismiss?.addEventListener('click', () => {
     onDismiss(controller.snapshot());
     controller.dismiss();

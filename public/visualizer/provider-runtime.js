@@ -1,10 +1,24 @@
-import { PROMPT_VERSION, buildGenerationMessages, buildRepairMessages } from './prompt.js';
+import { AUDIO_API_VERSION, PROMPT_VERSION, buildGenerationMessages, buildRepairMessages } from './prompt.js';
 import { filterLiveDreamModels, liveDreamEligibility, MODEL_ELIGIBILITY_VERSION } from './model-eligibility.js';
+import { GENERATION_ENVELOPE_VERSION } from './generation-envelope.js';
+import {
+  GENERATION_FAILURE_CATEGORIES,
+  classifyGenerationFailure,
+  generationFailureCopy,
+} from './generation-failure.js';
+import {
+  createReasoningRequestConfiguration,
+  createReasoningSelectionStore,
+  normalizeReasoningMetadata,
+  normalizeReasoningSelection,
+} from './reasoning-settings.js';
 import {
   attachTraceContext,
+  attachRequestPolicy,
   captureAvailabilityEnd,
   captureAvailabilityStart,
   captureProviderResponse,
+  captureRequestPolicy,
   captureTraceError,
 } from './trace-bridge.js';
 
@@ -98,11 +112,44 @@ export function repairProviderVisualizer(options) {
 
 const KEY_STORAGE = 'ai-visualizer.openrouter.key';
 const VERIFIER_STORAGE = 'ai-visualizer.openrouter.pkce-verifier';
-const MODELS_CACHE = 'ai-visualizer.openrouter.models-cache.v2';
+export const OPENROUTER_MODEL_NORMALIZATION_VERSION = 'openrouter-model-normalization-v3';
+
+const MODELS_CACHE = 'ai-visualizer.openrouter.models-cache.v3';
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
 const OPENROUTER_KEY_EXCHANGE_URL = 'https://openrouter.ai/api/v1/auth/keys';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const OPENROUTER_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
+
+function safeSessionStorage() {
+  const values = new Map();
+  try {
+    const storage = globalThis.sessionStorage;
+    if (storage?.getItem && storage?.setItem && storage?.removeItem) {
+      return {
+        getItem(key) {
+          try { return storage.getItem(key) ?? values.get(String(key)) ?? null; } catch { return values.get(String(key)) ?? null; }
+        },
+        setItem(key, value) {
+          values.set(String(key), String(value));
+          try { storage.setItem(key, value); } catch { /* Session memory remains available. */ }
+        },
+        removeItem(key) {
+          values.delete(String(key));
+          try { storage.removeItem(key); } catch { /* Session memory is already cleared. */ }
+        },
+      };
+    }
+  } catch {
+    // A memory fallback keeps the built-in product usable when storage is denied.
+  }
+  return {
+    getItem: key => values.get(String(key)) ?? null,
+    setItem: (key, value) => { values.set(String(key), String(value)); },
+    removeItem: key => { values.delete(String(key)); },
+  };
+}
+
+const sessionStore = safeSessionStorage();
 
 function base64Url(bytes) {
   let binary = '';
@@ -122,18 +169,18 @@ async function challengeFor(verifier) {
 }
 
 function getOpenRouterCredential() {
-  return sessionStorage.getItem(KEY_STORAGE) || '';
+  return sessionStore.getItem(KEY_STORAGE) || '';
 }
 
 function disconnectOpenRouterCredential() {
-  sessionStorage.removeItem(KEY_STORAGE);
-  sessionStorage.removeItem(VERIFIER_STORAGE);
+  sessionStore.removeItem(KEY_STORAGE);
+  sessionStore.removeItem(VERIFIER_STORAGE);
 }
 
 async function beginOpenRouterAuth(callbackUrl = `${location.origin}${location.pathname}`) {
   const verifier = randomVerifier();
   const challenge = await challengeFor(verifier);
-  sessionStorage.setItem(VERIFIER_STORAGE, verifier);
+  sessionStore.setItem(VERIFIER_STORAGE, verifier);
   const url = new URL(OPENROUTER_AUTH_URL);
   url.searchParams.set('callback_url', callbackUrl);
   url.searchParams.set('code_challenge', challenge);
@@ -154,7 +201,7 @@ async function consumeOpenRouterCallback() {
 
   const code = params.get('code');
   if (!code) return { connected: Boolean(getOpenRouterCredential()), changed: false, providerId: DEFAULT_PROVIDER_ID };
-  const verifier = sessionStorage.getItem(VERIFIER_STORAGE);
+  const verifier = sessionStore.getItem(VERIFIER_STORAGE);
   if (!verifier) throw new Error('OpenRouter returned without the browser PKCE verifier. Press Connect and try again.');
 
   const response = await fetch(OPENROUTER_KEY_EXCHANGE_URL, {
@@ -167,19 +214,63 @@ async function consumeOpenRouterCallback() {
     throw new Error(payload?.error?.message || payload?.message || 'OpenRouter authorization could not be completed.');
   }
 
-  sessionStorage.setItem(KEY_STORAGE, payload.key);
-  sessionStorage.removeItem(VERIFIER_STORAGE);
+  sessionStore.setItem(KEY_STORAGE, payload.key);
+  sessionStore.removeItem(VERIFIER_STORAGE);
   params.delete('code');
   const nextSearch = params.toString();
   history.replaceState({}, '', `${location.pathname}${nextSearch ? `?${nextSearch}` : ''}${location.hash}`);
   return { connected: true, changed: true, providerId: DEFAULT_PROVIDER_ID };
 }
 
-function normalizeModel(model) {
+const hasOwn = (value, key) => value != null && Object.prototype.hasOwnProperty.call(value, key);
+
+function positiveInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : null;
+}
+
+function publishedPrice(value) {
+  if ((typeof value !== 'number' && typeof value !== 'string') || (typeof value === 'string' && !value.trim())) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function exactCatalogFields(source, fields) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+  const output = {};
+  for (const field of fields) {
+    if (!hasOwn(source, field)) continue;
+    const value = source[field];
+    output[field] = Array.isArray(value) ? [...value] : value;
+  }
+  return output;
+}
+
+export function normalizeOpenRouterModel(model = {}) {
   const upstreamProvider = String(model.id || '').split('/')[0] || 'model';
   const supportedParameters = Array.isArray(model.supported_parameters) ? [...model.supported_parameters] : [];
   const outputModalities = model?.architecture?.output_modalities || [];
-  return {
+  const rawPricing = exactCatalogFields(model?.pricing, ['prompt', 'completion', 'request', 'internal_reasoning', 'overrides']) || {};
+  const rawReasoning = exactCatalogFields(model?.reasoning, [
+    'mandatory',
+    'default_enabled',
+    'supported_efforts',
+    'default_effort',
+    'supports_max_tokens',
+    'defaultEnabled',
+    'supportedEfforts',
+    'defaultEffort',
+    'supportsMaxTokens',
+  ]);
+  const rawTopProvider = exactCatalogFields(model?.top_provider, [
+    'max_completion_tokens',
+    'context_length',
+    'is_moderated',
+  ]) || {};
+  const rootContextLength = positiveInteger(model?.context_length);
+  const topProviderContextLength = positiveInteger(model?.top_provider?.context_length);
+  const maxCompletionTokens = positiveInteger(model?.top_provider?.max_completion_tokens);
+  const normalized = {
     id: model.id,
     name: model.name || model.id,
     provider: upstreamProvider,
@@ -189,19 +280,38 @@ function normalizeModel(model) {
     expirationDate: model.expiration_date || null,
     eligibilityVersion: MODEL_ELIGIBILITY_VERSION,
     description: model.description || '',
-    contextLength: model.context_length || 0,
+    contextLength: rootContextLength || topProviderContextLength || 0,
+    rootContextLength: rootContextLength || 0,
+    topProviderContextLength: topProviderContextLength || 0,
+    maxCompletionTokens: maxCompletionTokens || 0,
     created: model.created || 0,
-    inputPrice: Number(model?.pricing?.prompt || 0),
-    outputPrice: Number(model?.pricing?.completion || 0),
+    inputPrice: publishedPrice(model?.pricing?.prompt) ?? 0,
+    outputPrice: publishedPrice(model?.pricing?.completion) ?? 0,
+    pricing: rawPricing,
+    top_provider: rawTopProvider,
+    topProvider: {
+      maxCompletionTokens: maxCompletionTokens || 0,
+      contextLength: topProviderContextLength || 0,
+    },
+    reasoning: rawReasoning,
     architecture: model.architecture || null,
     supportedParameters,
+    metadataSource: {
+      catalog: 'openrouter.models',
+      contextLength: hasOwn(model, 'context_length') ? 'model.context_length' : null,
+      topProvider: model?.top_provider ? 'model.top_provider' : null,
+      pricing: model?.pricing ? 'model.pricing' : null,
+      reasoning: model?.reasoning ? 'model.reasoning' : null,
+    },
     capabilities: {
       textOutput: !outputModalities.length || outputModalities.includes('text'),
-      reasoning: supportedParameters.includes('reasoning'),
+      reasoning: supportedParameters.includes('reasoning') || Boolean(rawReasoning),
       structuredOutput: supportedParameters.includes('response_format'),
-      maxOutputTokens: Number(model?.top_provider?.max_completion_tokens || 0),
+      maxOutputTokens: maxCompletionTokens || 0,
     },
   };
+  normalized.reasoningMetadata = normalizeReasoningMetadata(normalized);
+  return normalized;
 }
 
 async function fetchRawOpenRouterCatalog({ fresh = false, signal } = {}) {
@@ -213,20 +323,31 @@ async function fetchRawOpenRouterCatalog({ fresh = false, signal } = {}) {
 
 function normalizeEligibleModels(rawModels) {
   return filterLiveDreamModels(rawModels)
-    .map(normalizeModel)
+    .map(normalizeOpenRouterModel)
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
 }
 
+function publishModelCatalog(models, savedAt = Date.now()) {
+  if (typeof globalThis.dispatchEvent !== 'function' || typeof globalThis.CustomEvent !== 'function') return;
+  globalThis.dispatchEvent(new globalThis.CustomEvent('visualizer:model-catalog-updated', {
+    detail: { models, savedAt },
+  }));
+}
+
 async function fetchOpenRouterModels() {
-  const cached = sessionStorage.getItem(MODELS_CACHE);
+  const cached = sessionStore.getItem(MODELS_CACHE);
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
       if (
         parsed.eligibilityVersion === MODEL_ELIGIBILITY_VERSION
+        && parsed.normalizationVersion === OPENROUTER_MODEL_NORMALIZATION_VERSION
         && Date.now() - parsed.savedAt < 15 * 60 * 1000
         && Array.isArray(parsed.models)
-      ) return parsed.models;
+      ) {
+        publishModelCatalog(parsed.models, parsed.savedAt);
+        return parsed.models;
+      }
     } catch {
       // A stale or malformed session cache is ignored in favor of the live catalog.
     }
@@ -234,11 +355,14 @@ async function fetchOpenRouterModels() {
 
   const rawModels = await fetchRawOpenRouterCatalog();
   const models = normalizeEligibleModels(rawModels);
-  sessionStorage.setItem(MODELS_CACHE, JSON.stringify({
-    savedAt: Date.now(),
+  const savedAt = Date.now();
+  sessionStore.setItem(MODELS_CACHE, JSON.stringify({
+    savedAt,
     eligibilityVersion: MODEL_ELIGIBILITY_VERSION,
+    normalizationVersion: OPENROUTER_MODEL_NORMALIZATION_VERSION,
     models,
   }));
+  publishModelCatalog(models, savedAt);
   return models;
 }
 
@@ -248,6 +372,7 @@ function modelEligibilityError(modelId, reason) {
     EXPIRED: 'This model has expired in the current OpenRouter catalog.',
     NO_TEXT_OUTPUT: 'This model does not provide the text output required to return visualizer HTML.',
     OUTPUT_TOO_SMALL: 'This model cannot return enough output for the Visualizer runtime contract.',
+    OUTPUT_LIMIT_UNENFORCEABLE: 'This model does not expose an enforceable completion limit for spend protection.',
     NOT_IN_CURRENT_CATALOG: 'This model is no longer in OpenRouter’s current live catalog.',
   }[reason] || 'This model is not currently compatible with live Dreams.';
   const error = new Error(`${reasonCopy} Choose another model. No generation request was sent.`);
@@ -272,17 +397,17 @@ async function assertCurrentOpenRouterModel(modelId, { signal, traceContext } = 
 
   const raw = rawModels.find(model => model?.id === modelId);
   if (!raw) {
-    sessionStorage.removeItem(MODELS_CACHE);
+    sessionStore.removeItem(MODELS_CACHE);
     captureAvailabilityEnd(traceContext, { modelId, status: 'failed', code: 'NOT_IN_CURRENT_CATALOG' });
     throw modelEligibilityError(modelId, 'NOT_IN_CURRENT_CATALOG');
   }
   const eligibility = liveDreamEligibility(raw);
   if (!eligibility.eligible) {
-    sessionStorage.removeItem(MODELS_CACHE);
+    sessionStore.removeItem(MODELS_CACHE);
     captureAvailabilityEnd(traceContext, { modelId, status: 'failed', code: eligibility.reason });
     throw modelEligibilityError(modelId, eligibility.reason);
   }
-  const normalized = normalizeModel(raw);
+  const normalized = normalizeOpenRouterModel(raw);
   captureAvailabilityEnd(traceContext, { modelId, status: 'succeeded', resolvedModel: normalized.id });
   return normalized;
 }
@@ -305,58 +430,241 @@ export function extractHtml(raw) {
   return value.trim();
 }
 
+function normalizedRequestModel(model) {
+  return model?.eligibilityVersion === MODEL_ELIGIBILITY_VERSION
+    && model?.metadataSource?.catalog === 'openrouter.models'
+    ? model
+    : normalizeOpenRouterModel(model || {});
+}
+
+function modelContextCapacity(model) {
+  const values = [model?.rootContextLength, model?.topProviderContextLength, model?.contextLength]
+    .map(positiveInteger)
+    .filter(value => value !== null);
+  return values.length ? Math.min(...values) : null;
+}
+
+function reasoningSelectionIntent(selection, fallback) {
+  if (!selection || typeof selection !== 'object' || Array.isArray(selection)) return { ...fallback };
+  return {
+    schema: typeof selection.schema === 'string' ? selection.schema : fallback.schema,
+    modelId: String(selection.modelId ?? fallback.modelId),
+    mode: String(selection.mode ?? ''),
+    effort: selection.effort == null ? null : String(selection.effort),
+    selectedAt: Number.isFinite(Number(selection.selectedAt)) ? Number(selection.selectedAt) : null,
+    staleFallback: selection.staleFallback === true,
+  };
+}
+
+function staleSelectionReason(requested, applied) {
+  if (!applied.staleFallback) return '';
+  if (requested?.modelId && String(requested.modelId) !== applied.modelId) return 'MODEL_CHANGED';
+  if (requested?.mode === 'explicit') return 'EFFORT_NO_LONGER_SUPPORTED';
+  return 'SELECTION_INVALID_OR_STALE';
+}
+
+export function buildOpenRouterCompletionRequest({
+  model,
+  messages,
+  reasoningSelection = null,
+  promptProfile = null,
+  attemptKind = 'generation',
+} = {}) {
+  const currentModel = normalizedRequestModel(model);
+  const appliedReasoningSelection = normalizeReasoningSelection(currentModel, reasoningSelection);
+  const requestedReasoningSelection = reasoningSelectionIntent(reasoningSelection, appliedReasoningSelection);
+  const dispatchedReasoning = createReasoningRequestConfiguration(currentModel, appliedReasoningSelection);
+  const maxCompletionTokens = positiveInteger(currentModel.maxCompletionTokens);
+  const reasoningFacts = normalizeReasoningMetadata(currentModel);
+  const supportedParameters = new Set(currentModel.supportedParameters || []);
+  const declaredParameters = supportedParameters.size > 0;
+  const maxTokenParameter = supportedParameters.has('max_tokens') || !declaredParameters
+    ? 'max_tokens'
+    : supportedParameters.has('max_completion_tokens')
+      ? 'max_completion_tokens'
+      : null;
+  const body = {
+    model: currentModel.id,
+    messages: Array.isArray(messages) ? messages : [],
+    ...(!declaredParameters || supportedParameters.has('temperature') ? { temperature: 1 } : {}),
+    ...(maxCompletionTokens === null || !maxTokenParameter ? {} : { [maxTokenParameter]: maxCompletionTokens }),
+    stream: false,
+    provider: { require_parameters: true },
+    ...(dispatchedReasoning === undefined ? {} : { reasoning: dispatchedReasoning }),
+  };
+  const policy = {
+    userReasoningSelection: requestedReasoningSelection,
+    appliedReasoningSelection,
+    nativeDefaultUsed: dispatchedReasoning === undefined,
+    dispatchedReasoning: dispatchedReasoning ?? null,
+    modelReasoningFacts: reasoningFacts,
+    metadataSource: {
+      model: currentModel.metadataSource,
+      reasoning: reasoningFacts.source,
+    },
+    catalogModel: {
+      id: currentModel.id,
+      name: currentModel.name,
+      source: currentModel.source,
+      contextLength: currentModel.contextLength,
+      rootContextLength: currentModel.rootContextLength,
+      topProviderContextLength: currentModel.topProviderContextLength,
+      maxCompletionTokens: currentModel.maxCompletionTokens,
+      top_provider: currentModel.top_provider,
+      topProvider: currentModel.topProvider,
+      pricing: currentModel.pricing,
+      reasoning: currentModel.reasoning,
+    },
+    modelMaximumCompletionTokens: maxCompletionTokens,
+    maxTokenParameter,
+    modelContextCapacityTokens: modelContextCapacity(currentModel),
+    generationEnvelopeVersion: GENERATION_ENVELOPE_VERSION,
+    finalMaxTokens: null,
+    finalRequestCostCeiling: null,
+    attemptKind: attemptKind === 'repair' ? 'repair' : 'generation',
+    prompt: {
+      profileId: String(promptProfile?.id || ''),
+      version: PROMPT_VERSION,
+      hash: String(promptProfile?.briefHash || ''),
+      audioApiVersion: AUDIO_API_VERSION,
+    },
+    staleReason: staleSelectionReason(requestedReasoningSelection, appliedReasoningSelection),
+  };
+  return {
+    body,
+    policy,
+    reasoningSelection: appliedReasoningSelection,
+    reasoningSelectionStale: Boolean(policy.staleReason),
+  };
+}
+
+let browserReasoningSelectionStore = null;
+const activeDreamReasoningSelections = new Map();
+
+function currentReasoningSelection(model) {
+  if (!browserReasoningSelectionStore) {
+    const storage = (() => {
+      try { return globalThis.localStorage || null; } catch { return null; }
+    })();
+    browserReasoningSelectionStore = createReasoningSelectionStore({ storage });
+  }
+  return browserReasoningSelectionStore.snapshot(model);
+}
+
+function selectionForAttempt(model, suppliedSelection, attemptKind) {
+  if (suppliedSelection !== undefined) return suppliedSelection;
+  if (attemptKind === 'repair' && activeDreamReasoningSelections.has(model.id)) {
+    return activeDreamReasoningSelections.get(model.id);
+  }
+  return currentReasoningSelection(model);
+}
+
+function emitStaleReasoningSelection(prepared) {
+  if (!prepared.reasoningSelectionStale || typeof globalThis.dispatchEvent !== 'function' || typeof globalThis.CustomEvent !== 'function') return;
+  globalThis.dispatchEvent(new globalThis.CustomEvent('visualizer:reasoning-selection-stale', {
+    detail: Object.freeze({
+      modelId: prepared.policy.catalogModel.id,
+      requested: Object.freeze({ ...prepared.policy.userReasoningSelection }),
+      applied: prepared.reasoningSelection,
+      reason: prepared.policy.staleReason,
+      supportedEfforts: Object.freeze([...prepared.policy.modelReasoningFacts.supportedEfforts]),
+      metadataSource: Object.freeze({ ...prepared.policy.metadataSource }),
+    }),
+  }));
+}
+
+export function shouldBlockStaleReasoningRepair(attemptKind, requestedSelection, prepared) {
+  return attemptKind === 'repair'
+    && requestedSelection?.mode === 'explicit'
+    && prepared?.reasoningSelectionStale === true;
+}
+
 function providerMessage(payload) {
-  return payload?.error?.message || payload?.error?.metadata?.raw || payload?.message || '';
+  return payload?.error?.message
+    || payload?.error?.metadata?.raw
+    || payload?.choices?.[0]?.error?.message
+    || payload?.choices?.[0]?.error?.metadata?.raw
+    || payload?.message
+    || '';
 }
 
-function openRouterError(response, payload, modelId) {
+function providerFailureCopy(category, status) {
+  if (category === GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT) return generationFailureCopy(category);
+  if (status === 401 || status === 403) return 'The AI service rejected this connection. Reconnect OpenRouter and try again. Your current Dream is still here.';
+  if (status === 402) return 'This Dream could not be funded. Check your OpenRouter balance or key limit. Your current Dream is still here.';
+  if (status === 404) return 'This exact model became unavailable. Choose another model; your current Dream is still here.';
+  if (status === 429) return 'This model is temporarily rate-limited. Wait a moment or choose another model. Your current Dream is still here.';
+  if (status >= 500) return 'AI service unavailable. Try again later or choose another model. Your current Dream is still here.';
+  return generationFailureCopy(category);
+}
+
+function generationFailureError(category, { status = null, payload = null, cause = null } = {}) {
+  const numericStatus = Number(status);
+  const error = new Error(providerFailureCopy(category, Number.isFinite(numericStatus) ? numericStatus : null));
+  error.name = 'GenerationFailureError';
+  error.code = category;
+  if (Number.isFinite(Number(status))) error.status = Number(status);
   const detail = providerMessage(payload);
-  const suffix = detail ? ` ${String(detail).slice(0, 320)}` : '';
-  if (response.status === 401 || response.status === 403) {
-    return new Error(`OpenRouter rejected this connection. Reconnect OpenRouter and try again.${suffix}`);
-  }
-  if (response.status === 402) {
-    return new Error(`OpenRouter could not fund this Dream. Check your OpenRouter balance or key limit before trying again.${suffix}`);
-  }
-  if (response.status === 404) {
-    return new Error(`The selected model became unavailable after the live catalog check. Choose another model.${suffix}`);
-  }
-  if (response.status === 408 || response.status === 504) {
-    return new Error(`The selected model timed out before returning a complete visualizer. No automatic retry was sent.${suffix}`);
-  }
-  if (response.status === 429) {
-    return new Error(`OpenRouter or ${modelId} is temporarily rate-limited. Wait a moment or choose another model.${suffix}`);
-  }
-  if (response.status >= 500) {
-    return new Error(`OpenRouter or the selected model provider had a temporary problem. Your current visualizer is still safe.${suffix}`);
-  }
-  return new Error(detail || `OpenRouter model request failed (${response.status}).`);
+  if (detail) error.providerDetail = String(detail).slice(0, 320);
+  if (cause) error.cause = cause;
+  return error;
 }
 
-async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxTokens = 14000, signal, traceContext }) {
-  await assertCurrentOpenRouterModel(modelId, { signal, traceContext });
+function categorizedTransportError(error) {
+  const category = classifyGenerationFailure({ error });
+  return category === GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT
+    ? generationFailureError(category, { cause: error })
+    : error;
+}
+
+async function requestOpenRouterCompletion({
+  modelId,
+  apiKey,
+  messages,
+  signal,
+  traceContext,
+  reasoningSelection,
+  promptProfile,
+  attemptKind = 'generation',
+}) {
+  const currentModel = await assertCurrentOpenRouterModel(modelId, { signal, traceContext });
+  const selectedReasoning = selectionForAttempt(currentModel, reasoningSelection, attemptKind);
+  const prepared = buildOpenRouterCompletionRequest({
+    model: currentModel,
+    messages,
+    reasoningSelection: selectedReasoning,
+    promptProfile,
+    attemptKind,
+  });
+  if (attemptKind === 'generation') {
+    activeDreamReasoningSelections.set(modelId, prepared.reasoningSelection);
+  }
+  captureRequestPolicy(traceContext, prepared.policy);
+  emitStaleReasoningSelection(prepared);
+  if (shouldBlockStaleReasoningRepair(attemptKind, selectedReasoning, prepared)) {
+    const error = new Error('The selected reasoning level is no longer supported for this repair. No repair request was sent, and your current Dream is still here.');
+    error.name = 'ReasoningSelectionError';
+    error.code = 'REASONING_SELECTION_UNAVAILABLE_FOR_REPAIR';
+    captureTraceError(traceContext, error, { stage: 'reasoning-revalidation' });
+    throw error;
+  }
   let response;
   try {
-    response = await fetch(OPENROUTER_COMPLETIONS_URL, attachTraceContext({
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': `${location.origin}${location.pathname}`,
-      'X-OpenRouter-Title': 'AI Visualizer',
-    },
-    body: JSON.stringify({
-      model: modelId,
-      messages,
-      temperature: 1,
-      max_tokens: maxTokens,
-      stream: false,
-    }),
-    signal,
-  }, traceContext));
+    response = await fetch(OPENROUTER_COMPLETIONS_URL, attachTraceContext(attachRequestPolicy({
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': `${location.origin}${location.pathname}`,
+        'X-OpenRouter-Title': 'AI Visualizer',
+      },
+      body: JSON.stringify(prepared.body),
+      signal,
+    }, prepared.policy), traceContext));
   } catch (error) {
-    captureTraceError(traceContext, error, { stage: 'provider-fetch' });
-    throw error;
+    const classified = categorizedTransportError(error);
+    captureTraceError(traceContext, classified, { stage: 'provider-fetch' });
+    throw classified;
   }
 
   let rawBodyText;
@@ -365,8 +673,9 @@ async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxToken
   try {
     rawBodyText = await response.text();
   } catch (error) {
-    captureTraceError(traceContext, error, { stage: 'provider-response-body', status: response.status });
-    throw error;
+    const classified = categorizedTransportError(error);
+    captureTraceError(traceContext, classified, { stage: 'provider-response-body', status: response.status });
+    throw classified;
   }
   try {
     payload = rawBodyText ? JSON.parse(rawBodyText) : {};
@@ -374,32 +683,60 @@ async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxToken
     parseError = error;
   }
   const raw = extractText(payload);
+  const finishReason = payload?.choices?.[0]?.finish_reason ?? null;
+  const nativeFinishReason = payload?.choices?.[0]?.native_finish_reason ?? payload?.native_finish_reason ?? null;
+  const requestId = response.headers.get('x-request-id') || payload?.id || null;
   captureProviderResponse(traceContext, {
     response,
     rawBodyText,
     parsedPayload: payload,
     parseError,
     assistantText: raw,
-    finishReason: payload?.choices?.[0]?.finish_reason ?? null,
+    finishReason,
+    nativeFinishReason,
     resolvedModel: payload?.model || modelId,
-    requestId: response.headers.get('x-request-id') || payload?.id || null,
+    requestId,
     usage: payload?.usage || null,
   });
   if (!response.ok) {
-    const error = parseError
-      ? new Error(`OpenRouter returned HTTP ${response.status} with a non-JSON error response. Your current visualizer is still safe.`)
-      : openRouterError(response, payload, modelId);
+    const category = classifyGenerationFailure({ status: response.status, payload, error: null });
+    const error = generationFailureError(
+      category === GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT
+        ? category
+        : GENERATION_FAILURE_CATEGORIES.PROVIDER_EXPLICIT_ERROR,
+      { status: response.status, payload },
+    );
     captureTraceError(traceContext, error, { stage: 'provider-response', status: response.status, payload });
     throw error;
   }
   if (parseError) {
-    const error = new Error('OpenRouter returned a response that was not valid JSON. Your current visualizer is still safe.');
+    const error = generationFailureError(GENERATION_FAILURE_CATEGORIES.PROVIDER_EXPLICIT_ERROR, {
+      status: response.status,
+      cause: parseError,
+    });
     captureTraceError(traceContext, error, { stage: 'provider-response-parse' });
     throw error;
   }
-  if (!raw.trim()) {
-    const error = new Error(`${modelId} returned no visualizer code. Your current visualizer is still safe.`);
-    captureTraceError(traceContext, error, { stage: 'provider-empty-response' });
+  const failureCategory = classifyGenerationFailure({
+    response: {
+      status: response.status,
+      payload,
+      assistantText: raw,
+      extractedHtml: extractHtml(raw),
+      finishReason,
+      nativeFinishReason,
+    },
+  });
+  if (failureCategory) {
+    const error = generationFailureError(failureCategory, { status: response.status, payload });
+    captureTraceError(traceContext, error, {
+      stage: failureCategory === GENERATION_FAILURE_CATEGORIES.EMPTY_PROVIDER_CONTENT
+        ? 'provider-empty-response'
+        : 'provider-incomplete-response',
+      status: response.status,
+      finishReason,
+      nativeFinishReason,
+    });
     throw error;
   }
   return {
@@ -407,12 +744,17 @@ async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxToken
     rawBodyText,
     usage: payload.usage || null,
     resolvedModel: payload.model || modelId,
-    requestId: response.headers.get('x-request-id') || payload.id || null,
+    requestId,
     providerId: DEFAULT_PROVIDER_ID,
+    reasoningSelection: prepared.reasoningSelection,
+    requestPolicy: prepared.policy,
+    finishReason,
+    nativeFinishReason,
+    native_finish_reason: nativeFinishReason,
   };
 }
 
-async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile }) {
+async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile, reasoningSelection }) {
   if (!apiKey) throw new Error('Connect OpenRouter before asking a model to Dream.');
   const result = await requestOpenRouterCompletion({
     modelId,
@@ -420,19 +762,24 @@ async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCre
     messages: buildGenerationMessages(promptProfile),
     signal,
     traceContext,
+    reasoningSelection,
+    promptProfile,
+    attemptKind: 'generation',
   });
   return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 1 };
 }
 
-async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile }) {
+async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile, reasoningSelection }) {
   if (!apiKey) throw new Error('The OpenRouter connection was lost before repair.');
   const result = await requestOpenRouterCompletion({
     modelId,
     apiKey,
     messages: buildRepairMessages(String(raw || '').slice(0, 180000), problem, promptProfile),
-    maxTokens: 14000,
     signal,
     traceContext,
+    reasoningSelection,
+    promptProfile,
+    attemptKind: 'repair',
   });
   return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 2 };
 }
@@ -448,7 +795,8 @@ const openRouterAdapter = {
     modelCatalog: true,
     pricing: true,
     usageAccounting: true,
-    inferenceLevels: false,
+    inferenceLevels: true,
+    reasoningSelection: 'catalog-exact',
     modelEligibility: MODEL_ELIGIBILITY_VERSION,
   }),
   getCredential: getOpenRouterCredential,

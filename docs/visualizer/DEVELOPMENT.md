@@ -35,9 +35,11 @@ Read these files in order for the shortest path through a Dream:
 2. `public/visualizer/playback-state.js`, `dream-job.js`, and `dream-switcher.js` - focused product state and shell views.
 3. `public/visualizer/featured-dreams.js` and `featured/manifest.js` - curated static Dream loading and pending-review export.
 4. `public/visualizer/prompt.js` - the versioned generation and repair messages.
-5. `public/visualizer/provider-runtime.js` - provider contract, OpenRouter request, response normalization, and HTML extraction.
-6. `public/visualizer/cost-guard.js` - the last browser boundary before a paid request is sent.
-7. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
+5. `public/visualizer/provider-runtime.js` and `reasoning-settings.js` - provider normalization, exact reasoning choices, request construction, and HTML extraction.
+6. `public/visualizer/cost-guard.js` and `generation-envelope.js` - the quality-first envelope and last browser boundary before a paid request.
+7. `public/visualizer/model-fit-evidence.js`, `model-product-catalog.js`, and `model-guide.js` - local evidence, operator approval input, and consumer/developer model discovery.
+8. `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js` - safe global arrows and the post-normalization host transform.
+9. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
 
 ## Architecture map
 
@@ -72,7 +74,11 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/featured-dreams.js` and `public/visualizer/featured/manifest.js`: own static Featured metadata/HTML loading and pending-operator-review curation export.
 - `public/visualizer/prompt.js`: owns the canonical prompt version and generation/repair messages. Prompt changes require deliberate versioning.
 - `public/visualizer/provider-runtime.js`: owns the provider adapter contract, OpenRouter authentication/catalog calls, live request/response normalization, returned text, and HTML extraction.
+- `public/visualizer/reasoning-settings.js`: owns catalog-exact reasoning metadata/options, per-model persistence, native Default omission, and stale fallback normalization.
 - `public/visualizer/cost-guard.js`: owns browser-side estimates, confirmations, caps, final completion-request limits, and usage/cost accounting. It is the final request boundary before OpenRouter.
+- `public/visualizer/generation-envelope.js` and `generation-failure.js`: own the quality-first request ceiling and evidence-based provider/artifact failure taxonomy.
+- `public/visualizer/model-fit-evidence.js`, `model-product-catalog.js`, and `model-guide.js`: own bounded local configuration evidence, explicit operator-approved starting ids, and Recommended/Experimental disclosure.
+- `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js`: own safe global arrow routing and the local post-normalization sensitivity transform.
 - `public/visualizer/dream-status.js`: observes the fetch lifecycle and emits truthful sent, model-working, response-started, body-complete, cancellation, and timeout events. `dream-job.js` owns product job state/UI.
 - `public/visualizer/model-eligibility.js`: owns the pure live-Dream model eligibility rules used by catalogs and the final availability check.
 - `public/visualizer/audio-engine.js`: owns local tab/window/system audio capture and normalized audio features supplied to the trusted host. It does not own model requests.
@@ -90,6 +96,32 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 `LIVE` identifies the visualizer currently on screen. It begins as the built-in Featured `Calibration Bloom` and changes only after a saved/Featured artifact passes the explicit Open watchdog and commits.
 
 `NEXT` identifies the selected model for the next Dream. Selecting another model changes NEXT only; it must not relabel the currently visible artwork. A Dream keeps the model identity captured when that Dream began, even if NEXT changes while the request is in flight. Failed candidates and rollbacks leave LIVE truthful.
+
+## Quality-first controls
+
+- Reasoning `Default` is native omission. Explicit choices come only from the exact refreshed model's `reasoning.supported_efforts`; a stale saved choice visibly falls back to Default for a new generation, while a repair blocks if its snapshotted explicit effort disappears. Insufficient spend also blocks without lowering effort. Generation and the optional same-model repair share immutable Dream-start reasoning intent and prompt snapshots, each revalidated against its fresh catalog row.
+- Left/Right selects the previous/next Favorite in the supplied display order and wraps. From a non-Favorite, Right selects the first and Left the last; zero Favorites is a safe no-op. Reopen uses the standby sandbox and commits LIVE only after validation/watchdog success, including while a separate Dream request remains in flight.
+- Up/Down adjusts `visualizer-audio-sensitivity-v1` from 50% through 200% in 10% steps; 100% is the default. The About range/Reset provides pointer, touch, and native keyboard control. Global arrows stand down for inputs, sliders, Prompt Lab, model navigation, the Dream switcher, dialogs, drawers, popovers, modifiers, composition, and repeats.
+- Sensitivity runs after `AudioEngine` adaptive normalization and before host-frame composition. It scales/clamps volume, peak, transient, beat, spectral flux, named bands, spectrum, and symmetric waveform amplitude without changing tempo, tempo confidence, centroid, stereo, connection/silence truth, time, schema, or the source sample. It never changes the creative brief, model request, generated HTML, stored artifact, or VIZ pointer coordinates.
+
+`neutral-v1` remains frozen and unchanged. These host controls and quality policies do not modify its creative brief.
+
+## Model-fit evidence v1
+
+`visualizer-model-fit-v1` records compact local observations by an exact configuration identity: model id, reasoning choice, prompt profile id, prompt version, prompt hash, generation-envelope major version, Audio API version, reliability version, and runtime version. Evidence from any changed identity dimension stays in a separate bucket; model-level status aggregates configurations but does not imply that every reasoning choice is proven.
+
+Status meanings are strict:
+
+- `UNTESTED`: no compatible provider attempt exists.
+- `TESTED`: at least one compatible provider attempt exists without a qualifying Ready or LIVE/Open success. Length exhaustion, ordinary failures, and timeouts stay TESTED.
+- `PROVEN`: at least one compatible Ready or LIVE/Open success exists.
+- `KNOWN_INCOMPATIBLE`: an explicit deterministic model/configuration capability mark, never an inference from an ordinary observed failure.
+
+Default retention is bounded to 96 configurations, 80 global recent observations, 12 recent observations per configuration, 31 samples per metric, and 512 seen observation ids. The store is local under `ai-visualizer.model-fit.v1`; it keeps counts, categories, latency, token usage, artifact bytes, exact billed costs, repairs, and dates, not music or generated artifacts.
+
+Normal mode labels exact operator-catalog or locally PROVEN eligible models as Recommended/Worked here before and keeps automated catalog signals behind Experimental disclosure. Developer mode opens the broad live eligible catalog and shows local statuses. The static `visualizer-model-product-catalog-v1` is intentionally empty until an operator approves exact ids, so local proof alone does not populate the product starting catalog.
+
+In developer mode, `Copy model test matrix` and `window.VIZ_DEV.copyModelTestMatrix()` produce a bounded `visualizer-model-fit-matrix-v1` block. It retains configuration/status/metric evidence but recursively removes credentials, authorization/cookies, music/song/track fields, waveform/spectrum/audio data, raw provider bodies/output, assistant text, and generated HTML. Copying is explicit and moves that sanitized copy outside local storage.
 
 ## Developer mode and Dream Trace
 
@@ -148,6 +180,9 @@ The transparency additions are:
 - `exportTrace(id)` downloads that trace as JSON.
 - `retestTrace(id)` locally retests its extracted HTML.
 - `runTransparencySelfTest()` runs the no-cost local transparency demo.
+- `modelFit()` returns the bounded local `visualizer-model-fit-v1` snapshot.
+- `modelTestMatrix()` returns the sanitized matrix object; `copyModelTestMatrix()` copies the framed matrix block.
+- `theoreticalModelCeilings()` returns developer-only catalog-ceiling diagnostics, never an expected-cost estimate.
 - `playback()` and `setPaused(value)` inspect/control trusted visual playback for local testing.
 - `probeActive(label)` requests a sanitized trusted probe from the active sandbox.
 - `exportFeatured(generationId)` downloads a local candidate package marked pending operator review.
@@ -173,6 +208,33 @@ await window.VIZ_DEV.runTransparencySelfTest();
 
 No OpenRouter connection or balance is required. The demo and retest use local material, the candidate sandbox, and deterministic reliability input.
 
+## No-cost quality browser campaign
+
+The quality-first browser spec mocks the catalog, key status, and completion endpoint. It exercises reasoning, the generation envelope, exact DeepSeek length exhaustion, model-fit statuses/matrix privacy, grounded model discovery, Favorite standby opens, sensitivity ownership, and mobile disclosure without a real key or paid request.
+
+After installing Chromium as shown below, run the exact Windows commands from the repository root:
+
+```powershell
+npm.cmd run build
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+npx.cmd playwright test tests/quality-first-controls.spec.mjs --config=playwright.config.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+```
+
+This fixture campaign is no-cost because Playwright intercepts `https://openrouter.ai/**`; it is contract evidence, not live-provider acceptance.
+
+## Manual 20-30 Dream campaign
+
+The operator-funded campaign is separate from the no-cost suite and does not by itself claim deployment or acceptance:
+
+1. Open `http://localhost:5173/visualizer/index.html?dev=1`, keep `neutral-v1` selected, and copy a baseline model test matrix. The Neutral creative brief remains frozen and unchanged throughout the campaign.
+2. Define 20-30 authorized Dreams across exact live model ids and only their displayed Default/effort choices. Treat each configuration identity separately; record the catalog timestamp and do not substitute a disappeared model.
+3. Set explicit per-Dream, session, and day caps in Spend protection, check the provider key remainder, and approve only the displayed enforced maximum. A real campaign costs the connected operator account.
+4. Run one Dream at a time to a terminal state. Explicitly Open healthy Ready results to collect LIVE/Open evidence; retain safe failures as their exact categories and do not retry merely to turn a failure green.
+5. Copy the sanitized matrix at checkpoints and at completion. Review counts, exact costs, latency, tokens including reasoning, repairs, result categories, and identity versions alongside qualitative art review.
+6. Populate the static operator catalog only through a deliberate reviewed code change after the campaign. `PROVEN` local evidence is an input, not automatic approval; one timeout or output-budget exhaustion is never `KNOWN_INCOMPATIBLE`.
+
 ## Windows verification
 
 Run the milestone checks from the repository root in PowerShell. Stop on the first failure.
@@ -194,6 +256,24 @@ node scripts/visualizer-static-check.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 node tests/model-eligibility.spec.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/reasoning-settings.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/generation-envelope.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/provider-quality.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/model-fit-evidence.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/keyboard-transport.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/audio-sensitivity.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 node --test --test-concurrency=1 tests/dream-transparency.contract.mjs
@@ -227,7 +307,7 @@ Never develop, commit, or push directly on `main`. Use the milestone branch and 
 1. Before editing, verify the branch and inspect existing work:
 
 ```powershell
-git switch milestone/product-shell-core-ux-v1
+git switch milestone/quality-first-model-fit-reasoning-controls-v1
 git branch --show-current
 git status --short --branch
 ```
@@ -245,14 +325,14 @@ git pull --ff-only
 ```powershell
 git diff --cached --check
 git diff --cached
-git commit -m "Product Shell Core UX v1"
+git commit -m "Quality-First Model Fit and User Reasoning Controls v1"
 ```
 
 6. Push only the milestone branch and open a PR into `main`:
 
 ```powershell
-git push --set-upstream origin milestone/product-shell-core-ux-v1
-gh pr create --base main --head milestone/product-shell-core-ux-v1 --fill
+git push --set-upstream origin milestone/quality-first-model-fit-reasoning-controls-v1
+gh pr create --base main --head milestone/quality-first-model-fit-reasoning-controls-v1 --fill
 ```
 
 7. Let the required checks pass and merge through the PR. Never run `git push origin main` for this work.

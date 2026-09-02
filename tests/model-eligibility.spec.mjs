@@ -17,6 +17,8 @@ assert.deepEqual(liveDreamEligibility({ ...live, expiration_date: '2026-08-31' }
 assert.equal(liveDreamEligibility({ ...live, expiration_date: '2026-09-02' }, Date.parse('2026-09-01T12:00:00Z')).eligible, true, 'future expiration must not hide a currently live model');
 assert.deepEqual(liveDreamEligibility({ ...live, architecture: { output_modalities: ['image'] } }).reason, 'NO_TEXT_OUTPUT');
 assert.deepEqual(liveDreamEligibility({ ...live, top_provider: { max_completion_tokens: 1024 } }).reason, 'OUTPUT_TOO_SMALL');
+assert.deepEqual(liveDreamEligibility({ ...live, supported_parameters: ['temperature'] }).reason, 'OUTPUT_LIMIT_UNENFORCEABLE');
+assert.equal(liveDreamEligibility({ ...live, supported_parameters: ['max_completion_tokens'] }).eligible, true, 'max_completion_tokens can enforce the provider ceiling');
 
 const filtered = filterLiveDreamModels([
   live,
