@@ -177,6 +177,7 @@ export function shortDiagnosticId(id) {
 }
 
 export function diagnosticStatusLabel(record) {
+  if (record.status === 'ready') return 'Ready to open';
   if (record.status === 'succeeded') return 'Healthy';
   if (record.status === 'rolled-back') return 'Rolled back';
   if (record.status === 'failed') return 'Failed safely';

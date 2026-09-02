@@ -6,6 +6,7 @@ import {
 } from './trace-bridge.js';
 
 const nativeFetch = window.fetch.bind(window);
+let spendReturnFocus = null;
 
 const OPENROUTER_KEY_STORAGE = 'ai-visualizer.openrouter.key';
 const SETTINGS_STORAGE = 'ai-visualizer.spend.settings.v1';
@@ -160,24 +161,47 @@ function saveSpend() {
   writeJson(localStorage, DAILY_SPEND_STORAGE, daily);
 }
 
-function recordCost({ modelId, cost, usage, repair, estimated = false }) {
-  const amount = Number(cost);
-  if (!Number.isFinite(amount) || amount < 0) return;
-  currentDreamSpent += amount;
-  sessionSpent += amount;
+function adjustSpend(amount) {
+  currentDreamSpent = Math.max(0, currentDreamSpent + amount);
+  sessionSpent = Math.max(0, sessionSpent + amount);
   if (daily.date !== todayKey()) daily = { date: todayKey(), spent: 0 };
-  daily.spent += amount;
+  daily.spent = Math.max(0, daily.spent + amount);
+}
+
+function reserveCost({ modelId, ceiling, repair }) {
+  const amount = Number(ceiling);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  const id = crypto.randomUUID();
+  adjustSpend(amount);
   ledger.unshift({
+    id,
     at: Date.now(),
     modelId,
     modelName: modelCatalog.get(modelId)?.name || modelId,
     cost: amount,
     repair: Boolean(repair),
-    estimated,
-    promptTokens: usage?.prompt_tokens ?? usage?.promptTokens ?? null,
-    completionTokens: usage?.completion_tokens ?? usage?.completionTokens ?? null,
+    estimated: true,
+    uncertain: true,
+    promptTokens: null,
+    completionTokens: null,
   });
   ledger = ledger.slice(0, MAX_LEDGER);
+  saveSpend();
+  render();
+  scheduleKeyRefresh();
+  return id;
+}
+
+function reconcileReservedCost(reservationId, { cost, usage, estimated = false }) {
+  const amount = Number(cost);
+  const entry = ledger.find(candidate => candidate.id === reservationId);
+  if (!entry || !Number.isFinite(amount) || amount < 0) return;
+  adjustSpend(amount - Number(entry.cost || 0));
+  entry.cost = amount;
+  entry.estimated = Boolean(estimated);
+  entry.uncertain = false;
+  entry.promptTokens = usage?.prompt_tokens ?? usage?.promptTokens ?? null;
+  entry.completionTokens = usage?.completion_tokens ?? usage?.completionTokens ?? null;
   saveSpend();
   render();
   scheduleKeyRefresh();
@@ -226,7 +250,7 @@ function renderLedger() {
     const left = document.createElement('span');
     const right = document.createElement('strong');
     left.textContent = `${entry.repair ? 'Repair · ' : ''}${entry.modelName}`;
-    right.textContent = `${entry.estimated ? '~' : ''}${money(entry.cost)}`;
+    right.textContent = entry.uncertain ? `up to ${money(entry.cost)}` : `${entry.estimated ? '~' : ''}${money(entry.cost)}`;
     row.append(left, right);
     els.spendLedger.appendChild(row);
   });
@@ -267,18 +291,33 @@ function render() {
 }
 
 function openSpendDrawer() {
+  spendReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  document.querySelectorAll('.drawer.is-open').forEach(drawer => {
+    if (drawer !== els.spendDrawer) drawer.inert = true;
+  });
   els.spendDrawer?.classList.add('is-open');
   els.spendDrawer?.setAttribute('aria-hidden', 'false');
+  if (els.spendDrawer) els.spendDrawer.inert = false;
+  const stage = document.getElementById('stage');
+  if (stage) stage.inert = true;
   if (els.drawerScrim) els.drawerScrim.hidden = false;
   document.body.classList.remove('ui-hidden');
   refreshKeyInfo();
   render();
+  queueMicrotask(() => els.closeSpend?.focus());
 }
 
 function closeSpendDrawer() {
   els.spendDrawer?.classList.remove('is-open');
   els.spendDrawer?.setAttribute('aria-hidden', 'true');
+  if (els.spendDrawer) els.spendDrawer.inert = true;
+  document.querySelectorAll('.drawer.is-open').forEach(drawer => { drawer.inert = false; });
   if (els.drawerScrim && !document.querySelector('.drawer.is-open')) els.drawerScrim.hidden = true;
+  const stage = document.getElementById('stage');
+  if (stage && !document.querySelector('.drawer.is-open')) stage.inert = false;
+  const target = spendReturnFocus?.isConnected ? spendReturnFocus : document.getElementById('modelButton');
+  queueMicrotask(() => target?.focus());
+  spendReturnFocus = null;
 }
 
 function saveSettingsFromUi() {
@@ -345,7 +384,7 @@ async function executeGuardedCompletion(input, init, traceContext) {
   }
   const remaining = availableBudget();
   if (remaining <= 0.0001) {
-    notice('Spend cap reached. Open $ in the corner to adjust it.', 6500);
+    notice('Spend cap reached. Open NEXT, then Spend protection to adjust it.', 6500);
     throw new Error('Visualizer spend cap reached before this request.');
   }
   const originalMax = Math.max(MIN_VISUALIZER_OUTPUT_TOKENS, Number(body.max_tokens || 14000));
@@ -386,6 +425,7 @@ async function executeGuardedCompletion(input, init, traceContext) {
     serializedBody,
   });
   const nextInit = { ...init, body: serializedBody };
+  const reservationId = reserveCost({ modelId: body.model, ceiling: requestCeiling, repair });
   captureRequestDispatched(traceContext);
   const response = await nativeFetch(input, nextInit);
   if (response.ok) {
@@ -395,7 +435,7 @@ async function executeGuardedCompletion(input, init, traceContext) {
       const exact = Number(usage?.cost);
       const fallback = fallbackUsageCost(body, usage);
       const cost = Number.isFinite(exact) ? exact : fallback;
-      if (Number.isFinite(cost)) recordCost({ modelId: body.model, cost, usage, repair, estimated: !Number.isFinite(exact) });
+      if (Number.isFinite(cost)) reconcileReservedCost(reservationId, { cost, usage, estimated: !Number.isFinite(exact) });
     } catch {
       // Missing usage metadata must not turn a successful provider response into a retry.
     }
