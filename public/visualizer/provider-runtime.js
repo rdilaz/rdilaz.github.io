@@ -412,24 +412,24 @@ async function requestOpenRouterCompletion({ modelId, apiKey, messages, maxToken
   };
 }
 
-async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCredential(), signal, traceContext }) {
+async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile }) {
   if (!apiKey) throw new Error('Connect OpenRouter before asking a model to Dream.');
   const result = await requestOpenRouterCompletion({
     modelId,
     apiKey,
-    messages: buildGenerationMessages(),
+    messages: buildGenerationMessages(promptProfile),
     signal,
     traceContext,
   });
   return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 1 };
 }
 
-async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential(), signal, traceContext }) {
+async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile }) {
   if (!apiKey) throw new Error('The OpenRouter connection was lost before repair.');
   const result = await requestOpenRouterCompletion({
     modelId,
     apiKey,
-    messages: buildRepairMessages(String(raw || '').slice(0, 180000), problem),
+    messages: buildRepairMessages(String(raw || '').slice(0, 180000), problem, promptProfile),
     maxTokens: 14000,
     signal,
     traceContext,

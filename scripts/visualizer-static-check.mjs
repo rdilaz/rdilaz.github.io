@@ -22,12 +22,21 @@ const [
   modelGuide,
   dreamStatus,
   reliabilityCss,
+  productShellCss,
+  playbackState,
+  dreamJob,
+  dreamSwitcher,
+  featuredDreams,
+  featuredManifest,
+  featuredHtml,
   workflow,
   deploy,
   development,
   transparencyContract,
   transparencyBrowser,
   aetheriaFixture,
+  productShellContract,
+  productShellBrowser,
 ] = await Promise.all([
   read('public/visualizer/index.html'),
   read('public/visualizer/app.js'),
@@ -47,12 +56,21 @@ const [
   read('public/visualizer/model-guide.js'),
   read('public/visualizer/dream-status.js'),
   read('public/visualizer/reliability.css'),
+  read('public/visualizer/product-shell.css'),
+  read('public/visualizer/playback-state.js'),
+  read('public/visualizer/dream-job.js'),
+  read('public/visualizer/dream-switcher.js'),
+  read('public/visualizer/featured-dreams.js'),
+  read('public/visualizer/featured/manifest.js'),
+  read('public/visualizer/featured/calibration-bloom.html'),
   read('.github/workflows/visualizer-check.yml'),
   read('.github/workflows/deploy.yml'),
   read('docs/visualizer/DEVELOPMENT.md'),
   read('tests/dream-transparency.contract.mjs'),
   read('tests/dream-transparency.spec.mjs'),
   read('tests/fixtures/aetheria-gemini-3.7-flash.html'),
+  read('tests/product-shell.contract.mjs'),
+  read('tests/product-shell.spec.mjs'),
 ]);
 
 const failures = [];
@@ -65,7 +83,7 @@ expect(audio.includes('getDisplayMedia'), 'Audio engine must use display/system 
 expect(!audio.includes('getUserMedia('), 'Microphone capture is forbidden.');
 expect(audio.includes("audioSelection:'preferred'"), 'Chromium capture must prefer audio-bearing sources.');
 expect(audio.includes('smoothingTimeConstant=.08'), 'Fast analyser smoothing must stay low-latency.');
-expect(prompt.includes('visualizer-prompt-v1') && prompt.includes('There are no aesthetic requirements.'), 'Canonical prompt must remain versioned and aesthetically unconstrained.');
+expect(prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v2'") && prompt.includes('There are no aesthetic requirements.'), 'Canonical prompt must remain versioned and aesthetically unconstrained.');
 expect(prompt.includes('WebGL/WebGL2') && prompt.includes('WebGPU when available') && prompt.includes('SVG'), 'Prompt must preserve broad browser-native creative capability.');
 expect(sandbox.includes("connect-src 'none'"), 'Generated visualizer CSP must block network connections.');
 expect(providerRuntime.includes("billing: 'user'") && providerRuntime.includes('browserOnly: true'), 'Current provider contract must remain browser-only and user-funded.');
@@ -78,6 +96,7 @@ expect(!workflow.includes('windows companion') && !deploy.includes('GOOS=windows
 expect(index.includes('./cost-guard.js') && index.indexOf('./cost-guard.js') < index.indexOf('./app.js'), 'Spend guard must load before the app module.');
 expect(costGuard.includes('perDream: 0.75') && costGuard.includes('session: 5') && costGuard.includes('daily: 10'), 'Default OpenRouter spend caps changed unexpectedly.');
 expect(costGuard.includes('body.max_tokens = allowedMax') && costGuard.includes('include: true'), 'Spend guard must constrain output and request exact usage accounting.');
+expect(costGuard.includes('reserveCost({') && costGuard.includes('reconcileReservedCost') && costGuard.includes('uncertain: true'), 'Dispatched requests must reserve spend before cancellation or uncertain transport can occur.');
 expect(index.includes('Four easy choices.') && modelGuide.includes("label:'Fast + great'"), 'Simple guided model selection must remain available.');
 expect(modelGuide.includes("MODEL_ENDPOINT='https://openrouter.ai/api/v1/models'"), 'Model guide must use the live OpenRouter catalog.');
 
@@ -85,11 +104,12 @@ expect(modelGuide.includes("MODEL_ENDPOINT='https://openrouter.ai/api/v1/models'
 expect(index.includes('./dream-status.js') && index.includes('dreamCancelButton'), 'Dream request lifecycle and cancellation UI must remain loaded.');
 expect(dreamStatus.includes('DREAM_TIMEOUT_MS = 360000'), 'Slow model requests must retain the six-minute inference timeout.');
 expect(dreamStatus.includes('full response body received'), 'Request lifecycle must distinguish response start from complete response body.');
-expect(app.includes('activeDreamController') && app.includes("dreamCancelButton?.addEventListener"), 'Cancellation must continue through artifact checks as well as provider inference.');
+expect(app.includes('activeDreamController') && dreamJob.includes("els.cancel?.addEventListener('click'") && app.includes('activeDreamController?.abort()'), 'Cancellation must continue through artifact checks as well as provider inference.');
 
 // Generic, medium-agnostic reliability harness.
 expect(index.includes('./reliability.css') && app.includes("from './reliability.js'"), 'Dream reliability harness assets must be loaded.');
-expect(sandbox.includes("SANDBOX_CHANNEL = 'visualizer-sandbox-v2'"), 'Instrumented sandbox protocol version is missing.');
+expect(sandbox.includes("BRIDGE_INIT_CHANNEL = 'visualizer-private-bridge-v1'") && sandbox.includes('new MessageChannel()') && sandbox.includes('this.bridgePort'), 'Sandbox communication must use a closure-private MessageChannel.');
+expect(sandbox.includes('new DOMParser()') && sandbox.includes('document.head.prepend(meta, baseStyle, bridge)'), 'CSP and the trusted bridge must be inserted into the structural document head.');
 expect(sandbox.includes("replaceFunction(console, 'error'") && sandbox.includes('CONSOLE_ERROR'), 'Sandbox must capture generated console errors.');
 expect(sandbox.includes("'compileShader'") && sandbox.includes('SHADER_COMPILE_FAILED'), 'Sandbox must capture WebGL shader compiler failures.');
 expect(sandbox.includes("'linkProgram'") && sandbox.includes('PROGRAM_LINK_FAILED'), 'Sandbox must capture WebGL linker failures.');
@@ -98,7 +118,7 @@ expect(sandbox.includes("'webgpu'") && sandbox.includes('GPUCanvasContext') && s
 expect(sandbox.includes('sampleCanvas') && sandbox.includes('inspectDom') && sandbox.includes('visibleProof'), 'Proof-of-life must support canvas plus DOM/SVG/CSS output.');
 expect(sandbox.includes('collectDomElements') && sandbox.includes('document.documentElement') && sandbox.includes('document.body'), 'CSS-only art on html/body and shadow-root descendants must be observable.');
 expect(sandbox.includes("['::before', '::after']") && sandbox.includes('inspectPseudo'), 'CSS pseudo-element art must remain observable.');
-expect(sandbox.includes('data-visualizer-host-style') && sandbox.includes('background:transparent'), 'The host fallback background must not masquerade as generated artwork.');
+expect(sandbox.includes('dataset.visualizerHostStyle') && sandbox.includes('background:transparent'), 'The host fallback background must not masquerade as generated artwork.');
 expect(sandbox.includes('dynamicRootSurface') && sandbox.includes('rootSurfaceEverChanged'), 'VIZ-driven flat root-surface art must be accepted only after observable activity.');
 expect(sandbox.includes("dominantCanvas.coverage >= 0.45") || sandbox.includes("dominantCanvas && dominantCanvas.coverage >= 0.45"), 'A tiny HUD must not hide failure of a dominant canvas.');
 expect(sandbox.includes("state.mode = 'passive'") && sandbox.includes('intensiveRestores'), 'High-frequency instrumentation must be removed after the rollback window.');
@@ -108,11 +128,54 @@ expect(reliability.includes('VIZ_NOT_CONSUMED') && reliability.includes('NO_VISI
 expect(reliability.includes('NO_OBVIOUS_STIMULUS_DELTA') && reliability.includes('diagnostic only; subtle interpretations are allowed'), 'Subtle visual response must remain a warning rather than an aesthetic rejection.');
 expect(reliability.includes('HEAVY_RENDERER') && !reliability.includes("failure: makeFailure(FAILURE_CODES.PERFORMANCE_COLLAPSE"), 'Heavy but functioning art must be observed, not automatically censored.');
 expect(app.includes("setPresentation('promoting')") && app.includes("setPresentation('retiring')") && app.includes('swapSlots()'), 'Promotion must be atomic across two live iframe slots.');
-expect(app.includes('rollback armed') && app.includes('promotion:rolled-back'), 'Post-launch rollback must be explicit and diagnostic.');
+expect(app.includes('promotion:rolled-back') && app.includes('harness.watchdog') && app.includes('activeSlot.sandbox.setPresentation'), 'Post-launch rollback must be explicit and diagnostic.');
 expect(app.includes('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1)'), 'A Dream must permit at most one same-model repair.');
 expect(app.includes('if (attemptNumber === 2 || diagnostic.repairUsed)'), 'A second repair must be impossible.');
 expect(app.includes('1000 / 60'), 'Host audio frames must run at a 60 Hz target instead of the old 30 Hz gate.');
 expect(app.includes('heartbeatAgeMs() > 8000') && app.includes('recoverFromRuntimeFailure'), 'Long-lived visualizers must retain heartbeat-based automatic recovery.');
+
+// Product Shell/Core UX v1: trusted pause, background jobs, explicit Open and fast switching.
+expect(index.includes('id="playbackButton"') && index.includes('aria-pressed="false"') && index.includes('id="pauseOverlay"'), 'Normal product chrome must expose an accessible visual Play/Pause control.');
+expect(playbackState.includes("PLAYBACK_STATE_SCHEMA = 'visualizer-playback-v1'") && playbackState.includes('music source still controlled externally'), 'Playback state must preserve the external-music control boundary.');
+expect(!/music (?:is |was )?paused/i.test(playbackState), 'Product pause copy must never claim externally captured music was paused.');
+expect(sandbox.includes("type: next ? 'host-pause' : 'host-resume'") && sandbox.includes('pauseGeneratedPlayback') && sandbox.includes('resumeGeneratedPlayback'), 'Trusted sandbox pause/resume protocol is missing.');
+expect(sandbox.includes('pendingAnimationFrames') && sandbox.includes('hostPausedAnimations') && sandbox.includes('totalPausedMs'), 'Trusted pause must queue RAF, preserve virtual time and track only host-paused animations.');
+expect(sandbox.includes("Element.prototype, 'animate'") && sandbox.includes("['play', 'reverse']"), 'Web Animations created or replayed during pause must remain host-paused.');
+expect(!/intensiveRestores\.push\([\s\S]{0,180}requestAnimationFrame/.test(sandbox), 'Persistent pause scheduling must not be removed with intensive reliability instrumentation.');
+expect(/function hostLoop\(timestamp\)[\s\S]{0,180}if \(visualPaused\) return;[\s\S]{0,320}sendFrame/.test(app), 'Active host VIZ frame delivery must stop before sampling or sending while paused.');
+expect(app.includes('visualPaused || recovering') && sandbox.includes('paused: state.paused'), 'Heartbeat recovery and diagnostics must understand explicit pause.');
+
+expect(dreamJob.includes("DREAM_JOB_SCHEMA = 'visualizer-dream-job-v1'") && dreamJob.includes("READY: 'ready'") && dreamJob.includes("OPENING: 'opening'"), 'Background Dream job needs explicit ready-before-opening state.');
+expect(index.includes('id="dreamJobPill"') && index.includes('id="dreamJobCollapse"') && index.includes('id="dreamJobOpen"'), 'Background job pill, collapse and explicit Open actions must remain in normal UI.');
+expect(app.includes("healthStatus: 'ready'") && app.includes("openStatus: 'ready-to-open'") && app.includes("openStatus: 'verified-live'"), 'Persisted artifacts must distinguish ready-to-open from verified-live.');
+const dreamStart = app.indexOf('async function dream()');
+const openStart = app.indexOf('async function openGeneration');
+const dreamFlow = app.slice(dreamStart, openStart);
+expect(dreamStart >= 0 && openStart > dreamStart && !dreamFlow.includes('stageLiveCandidate(') && !dreamFlow.includes('promoteCandidate({'), 'Successful background generation must not stage identity or auto-promote LIVE.');
+expect(dreamFlow.indexOf('await store.put(generation)') < dreamFlow.indexOf('DREAM_JOB_PHASES.READY'), 'Ready UI must be published only after durable local artifact persistence.');
+const openFlow = app.slice(openStart, app.indexOf('async function renderLibrary'));
+expect(openFlow.includes('stageLiveCandidate(') && openFlow.includes('promoteCandidate({') && openFlow.includes("DREAM_JOB_PHASES.OPENING"), 'Explicit user Open must own staging, watchdog promotion and opening state.');
+expect(providerRuntime.includes('promptProfile') && providerRuntime.includes('buildGenerationMessages(promptProfile)') && providerRuntime.includes('buildRepairMessages(String(raw || \'\').slice(0, 180000), problem, promptProfile)'), 'Background jobs must snapshot and reuse the exact prompt profile for generation and repair.');
+expect(app.includes('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1)') && !app.includes('attemptNumber <= 3'), 'Background job may make at most one same-model repair.');
+
+expect(index.includes('id="dreamSwitcherPanel"') && index.includes('id="switcherButton"') && index.includes('Full Library'), 'Fast Dream switcher must be first-class while the full Library stays secondary.');
+expect(dreamSwitcher.includes('featured:') && dreamSwitcher.includes('favorites:') && dreamSwitcher.includes('recent:'), 'Switcher must expose Featured, Favorites and Recent selectors.');
+expect(dreamSwitcher.includes('RECENT_DREAM_LIMIT = 8') && dreamSwitcher.includes('b.createdAt - a.createdAt'), 'Recent must remain bounded and deterministic newest-first.');
+expect(app.includes('withCandidateSlot') && app.includes('candidateSessionId') && reliability.includes('async reopen('), 'Stored Dream switching must keep a serialized sandbox lease and lighter safe-reopen path.');
+expect((app.match(/withCandidateSlot\(/g) || []).length >= 5, 'Every candidate-slot user, including developer retests, must serialize access.');
+expect(index.includes('sandbox="allow-scripts"') && !dreamSwitcher.includes('innerHTML'), 'Switcher must never execute stored HTML in the trusted parent.');
+
+expect(featuredManifest.includes("id: 'calibration-bloom'") && featuredManifest.includes("kind: 'host-created'") && featuredManifest.includes('generatedByModel: false'), 'Featured manifest must truthfully identify Calibration Bloom as host-created.');
+expect(!featuredManifest.includes('tests/fixtures') && !featuredManifest.includes('aetheria'), 'Regression fixtures must never enter the Featured manifest.');
+expect(featuredHtml.includes('<canvas') && featuredHtml.includes('VIZ.frame') && !/https?:\/\//.test(featuredHtml), 'Featured startup art must be self-contained, audio-reactive HTML without external assets.');
+expect(featuredDreams.includes('validateFeaturedEntry') && featuredDreams.includes('contentDigest') && featuredDreams.includes("curationStatus !== 'operator-approved'"), 'Featured loading must enforce digest, reliability and operator approval provenance.');
+expect(featuredDreams.includes('pending-operator-review') && featuredDreams.includes('operatorApprovalRecord: null'), 'Featured export must remain pending operator review rather than fabricate approval.');
+
+expect(index.includes('id="promptLabButton"') && index.includes('id="audioButton"') && index.includes('id="fullscreenButton"'), 'Primary product dock must retain Prompt, audio source and fullscreen.');
+expect(!/<div class="top-actions">[\s\S]{0,400}id="spendButton"/.test(index), 'Spend details must not remain primary top chrome.');
+expect(index.includes('class="model-spend-link"') && index.includes('id="spendButton"'), 'Spend protection must remain active and discoverable through progressive disclosure.');
+expect(productShellCss.includes('grid-template-areas:') && productShellCss.includes('max-width: 760px') && productShellBrowser.includes('mobileOverlayGap') && productShellBrowser.includes('desktopOverlayGap'), 'Product shell must provide a compact mobile dock with browser-verified non-overlapping overlays.');
+expect(app.includes('if (!store.persistent)') && productShellBrowser.includes('unavailable durable storage blocks paid generation'), 'Paid generation must not promise reload persistence when IndexedDB is unavailable.');
 
 // Local flight recorder and hidden developer backdoor.
 expect(storage.includes("DIAGNOSTIC_STORE = 'diagnostics'") && storage.includes('DB_VERSION = 2'), 'Diagnostics need their own durable IndexedDB store.');
@@ -149,15 +212,19 @@ expect(index.includes('id="traceViewer"') && index.includes('id="transparencySel
 expect(app.includes('runTransparencySelfTest') && app.includes('latestTrace') && app.includes('identity()'), 'VIZ_DEV must expose identity, traces and the no-cost transparency self-test.');
 expect(development.includes('npm.cmd run dev') && development.includes('LIVE') && development.includes('NEXT') && development.includes('runTransparencySelfTest'), 'VS Code development guide must document setup and Dream Transparency operation.');
 expect(workflow.includes('node --test --test-concurrency=1 tests/dream-transparency.contract.mjs'), 'CI must execute the pure Dream Transparency contract.');
+expect(workflow.includes('node --test --test-concurrency=1 tests/product-shell.contract.mjs'), 'CI must execute the pure Product Shell contract.');
 expect(transparencyContract.includes('DREAM_TRACE_SCHEMA') && transparencyBrowser.includes('runTransparencySelfTest'), 'Deterministic trace contract and real-host browser coverage must remain present.');
+expect(productShellContract.includes('ready is distinct from opening and LIVE') && productShellBrowser.includes('slow background job collapses'), 'Product Shell needs deterministic state contracts and real-host browser coverage.');
 
 // Real regression corpus and browser verification.
 expect(aetheriaFixture.includes('AETHERIA :: Resonant Topology') && aetheriaFixture.includes('gl.compileShader'), 'Real Gemini blank-screen output must remain a regression fixture.');
 expect(workflow.includes('@playwright/test') && workflow.includes('playwright install --with-deps chromium') && workflow.includes('playwright test --config=playwright.config.mjs'), 'CI must execute the browser reliability corpus in Chromium.');
 const browserTests = await read('tests/visualizer-reliability.spec.mjs');
+expect(browserTests.includes('hostile head comments') && browserTests.includes('cannot forge bridge resume'), 'Browser coverage must protect CSP placement and private bridge authority.');
 expect(browserTests.includes('valid-black-webgl'), 'CI must protect intentionally black but functioning artwork.');
 expect(browserTests.includes('webgl-dom-fallback'), 'CI must protect resilient DOM fallbacks when an advanced renderer fails.');
 expect(browserTests.includes('valid-css-only'), 'CI must protect CSS-only root-surface visualizers.');
+expect(browserTests.includes('trusted pause suspends generated RAF') && browserTests.includes('Calibration Bloom Featured art'), 'Browser corpus must protect trusted pause and shipped Featured art.');
 
 if (failures.length) {
   console.error('Visualizer reliability contract failed:\n- ' + failures.join('\n- '));

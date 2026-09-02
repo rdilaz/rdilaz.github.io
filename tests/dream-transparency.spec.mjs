@@ -5,7 +5,7 @@ const MODEL_ID = 'moonshotai/kimi-k3';
 const MODEL_NAME = 'MoonshotAI: Kimi K3';
 const SENTINEL_KEY = 'sk-or-v1-SENTINEL_BROWSER_SECRET_123456789';
 const validHtml = await readFile(new URL('./fixtures/valid-canvas2d.html', import.meta.url), 'utf8');
-const delayedCrashHtml = await readFile(new URL('./fixtures/delayed-crash.html', import.meta.url), 'utf8');
+const openWatchdogCrashHtml = await readFile(new URL('./fixtures/open-watchdog-crash.html', import.meta.url), 'utf8');
 const lateRuntimeCrashHtml = validHtml.replace('</script>', "setTimeout(() => { throw new Error('fixture late runtime crash'); }, 7000);</script>");
 const corsHeaders = {
   'access-control-allow-origin': '*',
@@ -101,6 +101,7 @@ test('normal mode keeps compact, explicit LIVE and NEXT truth', async ({ page })
 test('developer self-test renders inert full conversations and truthful reasoning', async ({ page }) => {
   await routeOpenRouter(page, null);
   await page.goto('/visualizer/index.html?dev=1');
+  await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV)).toBe('object');
   const fixture = await page.evaluate(() => window.VIZ_DEV.runTransparencySelfTest());
 
   await expect(page.locator('#traceViewer')).toBeVisible();
@@ -189,6 +190,7 @@ test('legacy diagnostics remain readable and failed saved-Dream revalidation pre
   await page.locator('#closeTraceViewer').click();
   await page.locator('#diagnosticsDrawer [data-close-drawer]').click();
 
+  await page.locator('#switcherButton').click();
   await page.locator('#libraryButton').click();
   const brokenCard = page.locator('.library-item').filter({ hasText: 'Broken Saved Dream' });
   await brokenCard.getByRole('button', { name: 'Open', exact: true }).click();
@@ -209,6 +211,9 @@ test('provider failure closes its exact attempt without changing LIVE', async ({
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
   await page.locator('#dreamButton').click();
   await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Dream failed safely');
+  await expect(page.locator('#dreamJobDetail')).toContainText(/AI service unavailable/i);
+  await expect(page.locator('#dreamJobOpen')).toBeHidden();
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
   const trace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
   expect(trace.status).toBe('failed');
@@ -242,6 +247,7 @@ test('availability failure creates no fake completion dispatch', async ({ page }
   available = false;
   await page.locator('#dreamButton').click();
   await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Dream failed safely');
   const trace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
   expect(completionRequests).toBe(0);
   expect(trace.providerRequestCount).toBe(0);
@@ -250,7 +256,7 @@ test('availability failure creates no fake completion dispatch', async ({ page }
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
 });
 
-test('mocked generation captures the final spend-guard request and promotes LIVE after watchdog', async ({ page }) => {
+test('mocked generation captures the final spend-guard request and waits for explicit Open', async ({ page }) => {
   test.setTimeout(60000);
   const dispatchedBodies = [];
   let rawResponseBody = '';
@@ -276,7 +282,8 @@ test('mocked generation captures the final spend-guard request and promotes LIVE
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
   await page.locator('#dreamButton').click();
   await expect(page.locator('#liveIdentityName')).toContainText('Calibration Bloom');
-  await expect(page.locator('#liveIdentityName')).toContainText(/Kimi K3.*#[a-f0-9]{8}/i, { timeout: 35000 });
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
+  await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
 
   expect(dispatchedBodies).toHaveLength(1);
   expect(dispatchedBodies[0].max_tokens).toBeLessThan(14000);
@@ -298,9 +305,12 @@ test('mocked generation captures the final spend-guard request and promotes LIVE
   expect(attempt.response.reasoning.exposed).toBe(true);
   expect(JSON.stringify(trace)).not.toContain(SENTINEL_KEY);
   expect(trace.providerRequestCount).toBe(1);
-  expect(trace.status).toBe('succeeded');
-  expect(trace.finalLiveIdentity.live.displayName).toContain('Kimi K3');
+  expect(trace.status).toBe('ready');
+  expect(trace.finalLiveIdentity.live.displayName).toBe('Calibration Bloom');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
+
+  await page.locator('#dreamJobOpen').click();
+  await expect(page.locator('#liveIdentityName')).toContainText(/Kimi K3.*#[a-f0-9]{8}/i, { timeout: 35000 });
 
   const firstLiveLabel = await page.locator('#liveIdentityName').textContent();
   expect(firstLiveLabel).toMatch(/Kimi K3.*#[a-f0-9]{8}/i);
@@ -308,6 +318,7 @@ test('mocked generation captures the final spend-guard request and promotes LIVE
   await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV)).toBe('object');
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
+  await page.locator('#switcherButton').click();
   await page.locator('#libraryButton').click();
   const savedCard = page.locator('.library-item').filter({ hasText: MODEL_NAME }).first();
   await savedCard.getByRole('button', { name: 'Open', exact: true }).click();
@@ -316,6 +327,7 @@ test('mocked generation captures the final spend-guard request and promotes LIVE
   await expect(page.locator('#liveIdentityName')).toHaveText(firstLiveLabel || '', { timeout: 35000 });
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
 
+  await page.locator('#switcherButton').click();
   await page.locator('#libraryButton').click();
   await page.locator('.library-item').filter({ hasText: MODEL_NAME }).first().getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
@@ -341,7 +353,8 @@ test('mocked repair preserves both attempts and never sends attempt three', asyn
   await page.goto('/visualizer/index.html?dev=1');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
   await page.locator('#dreamButton').click();
-  await expect(page.locator('#liveIdentityName')).toContainText(/Kimi K3.*#[a-f0-9]{8}/i, { timeout: 50000 });
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 50000 });
+  await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
 
   expect(requestBodies).toHaveLength(2);
   expect(String(requestBodies[1].messages[0].content)).toMatch(/^Repair the visualizer/);
@@ -357,7 +370,7 @@ test('mocked repair preserves both attempts and never sends attempt three', asyn
   expect(trace.totalReportedCost).toBeCloseTo(0.03, 8);
 });
 
-test('final watchdog rollback remains a rolled-back trace and preserves prior LIVE', async ({ page }) => {
+test('failed explicit Open preserves prior LIVE and the ready artifact evidence', async ({ page }) => {
   test.setTimeout(60000);
   let requests = 0;
   await seedConnectedModel(page);
@@ -365,7 +378,7 @@ test('final watchdog rollback remains a rolled-back trace and preserves prior LI
     requests += 1;
     const payload = providerPayload({
       id: `gen-watchdog-rollback-${requests}`,
-      html: delayedCrashHtml,
+      html: openWatchdogCrashHtml,
       cost: 0.01,
     });
     await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(payload) });
@@ -374,15 +387,20 @@ test('final watchdog rollback remains a rolled-back trace and preserves prior LI
   await page.goto('/visualizer/index.html?dev=1');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
   await page.locator('#dreamButton').click();
-  await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 35000 });
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
+  const readyTrace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
-  const trace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
-  expect(requests).toBe(2);
-  expect(trace.status).toBe('rolled-back');
-  expect(trace.attempts).toHaveLength(2);
-  expect(trace.attempts[0].outcome).toBe('rolled-back');
-  expect(trace.attempts[1].outcome).toBe('rolled-back');
-  expect(trace.finalLiveIdentity.candidate).toBe(null);
+  await page.locator('#dreamJobOpen').click();
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Could not open safely', { timeout: 35000 });
+  await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
+  const traces = await page.evaluate(() => window.VIZ_DEV.listTraces());
+  const openTrace = traces.find(trace => trace.id !== readyTrace.id);
+  expect(requests).toBe(1);
+  expect(readyTrace.status).toBe('ready');
+  expect(openTrace.status).toBe('failed');
+  expect(openTrace.finalLiveIdentity.candidate).toBe(null);
+  await page.locator('#switcherButton').click();
+  await expect(page.locator('[data-switcher-group="recent"]')).toContainText('Needs attention');
 });
 
 test('late runtime rollback persists aftercare and correlates recovered LIVE', async ({ page }) => {
@@ -396,6 +414,8 @@ test('late runtime rollback persists aftercare and correlates recovered LIVE', a
   await page.goto('/visualizer/index.html?dev=1');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
   await page.locator('#dreamButton').click();
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
+  await page.locator('#dreamJobOpen').click();
   await expect(page.locator('#liveIdentityName')).toContainText(/Kimi K3.*#[a-f0-9]{8}/i, { timeout: 35000 });
   const original = await page.evaluate(() => window.VIZ_DEV.latestTrace());
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom', { timeout: 35000 });

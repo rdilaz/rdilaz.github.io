@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#12202b}.dot{width:80px;height:80px;background:#6be4ff}</style></head>
+  <body>
+    <div class="dot" id="first"></div><div class="dot" id="second"></div>
+    <script>
+      VIZ.onFrame(() => {});
+      function frame() { VIZ.frame; requestAnimationFrame(frame); }
+      frame();
+      const second = document.getElementById('second').animate([{ opacity: .2 }, { opacity: 1 }], { duration: 1000, iterations: Infinity });
+      second.pause();
+      setTimeout(() => {
+        document.getElementById('first').animate([{ transform: 'translateX(0)' }, { transform: 'translateX(200px)' }], { duration: 900, iterations: Infinity });
+      }, 300);
+      setTimeout(() => second.play(), 350);
+    </script>
+  </body>
+</html>

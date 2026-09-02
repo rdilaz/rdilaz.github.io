@@ -498,13 +498,80 @@ export class DreamReliabilityHarness {
     };
   }
 
+  async reopen(html, {
+    viewport,
+    signal,
+    stimulationMs = 520,
+  } = {}) {
+    const startedAt = nowIso();
+    const stages = [];
+    const actualViewport = {
+      width: Math.max(1, Math.round(viewport?.width || innerWidth)),
+      height: Math.max(1, Math.round(viewport?.height || innerHeight)),
+      dpr: Math.max(1, Number(viewport?.dpr || devicePixelRatio || 1)),
+    };
+    this.sandbox.setPresentation('standby');
+    this.stage('reopening', { viewport: actualViewport });
+    const boot = await this.sandbox.load(html, { viewport: actualViewport, signal });
+    stages.push({ name: 'reopen-boot', ...boot });
+    if (!boot.ready) {
+      const fatal = boot.fatalEvents?.[0];
+      const failure = fatal
+        ? makeFailure(FAILURE_CODES[fatal.code] || fatal.code || FAILURE_CODES.RUNTIME_ERROR, fatal.message, fatal)
+        : makeFailure(FAILURE_CODES.BOOT_TIMEOUT, 'The saved Dream did not finish booting inside the isolated sandbox.', { durationMs: boot.durationMs });
+      return failedReport({ startedAt, stages, failure, report: null });
+    }
+
+    await wait(90, signal);
+    const baseline = await this.sandbox.probe('reopen-baseline', { signal, timeoutMs: 2200 });
+    stages.push({ name: 'reopen-baseline', report: baseline });
+    const stimulation = await stimulate(this.sandbox, actualViewport, { durationMs: stimulationMs, signal });
+    stages.push({ name: 'reopen-stimulation', ...stimulation });
+    const report = await this.sandbox.probe('reopen-proof', { signal, timeoutMs: 2400 });
+    const evaluation = evaluateProbe(report, { requireViz: true, previous: baseline, stage: 'safe-reopen' });
+    stages.push({ name: 'reopen-proof', report, evaluation });
+    if (!evaluation.passed) {
+      return failedReport({
+        startedAt,
+        stages,
+        failure: evaluation.failure,
+        warnings: evaluation.warnings,
+        report,
+      });
+    }
+
+    return {
+      schema: RELIABILITY_SCHEMA,
+      passed: true,
+      startedAt,
+      finishedAt: nowIso(),
+      durationMs: Date.now() - Date.parse(startedAt),
+      environment: environmentSummary(),
+      stages,
+      warnings: evaluation.warnings,
+      failure: null,
+      repairProblem: '',
+      summary: {
+        rendererTypes: report.renderer?.types || [],
+        visible: Boolean(report.visual?.visibleProof),
+        vizConsumed: Boolean(report.viz?.consumed),
+        visualChangedUnderProbe: Boolean(evaluation.changed),
+        approximateFps: Math.round(report.runtime?.monitor?.approximateFps || 0),
+        heavy: evaluation.warnings.some(warning => warning.code === 'HEAVY_RENDERER'),
+        quickReopen: true,
+      },
+    };
+  }
+
   async watchdog({ durationMs = 3600, signal } = {}) {
     const startedAt = nowIso();
     const eventStart = this.sandbox.events.length;
     let before = null;
     try {
       before = await this.sandbox.probe('post-launch-start', { signal, timeoutMs: 2200 });
-    } catch {}
+    } catch {
+      // The final probe below remains authoritative if the initial sample is unavailable.
+    }
 
     this.stage('post-launch-watchdog', { durationMs });
     await wait(durationMs, signal);

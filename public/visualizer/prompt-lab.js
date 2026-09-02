@@ -72,16 +72,19 @@ function updateAboutPromptVersion() {
 export function mountPromptLab() {
   if (document.getElementById(MOUNT_ID)) return;
   const topActions = document.querySelector('.top-actions');
-  if (!topActions) return;
+  const existingButton = document.getElementById('promptLabButton');
+  if (!topActions && !existingButton) return;
 
   ensureStyle();
   updateAboutPromptVersion();
 
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.id = 'promptLabButton';
-  button.className = 'icon-button prompt-lab-button';
-  button.textContent = 'PROMPT';
+  const button = existingButton || document.createElement('button');
+  if (!existingButton) {
+    button.type = 'button';
+    button.id = 'promptLabButton';
+    button.className = 'icon-button prompt-lab-button';
+    button.textContent = 'PROMPT';
+  }
 
   const dialog = document.createElement('dialog');
   dialog.id = MOUNT_ID;
@@ -93,7 +96,7 @@ export function mountPromptLab() {
         <div>
           <span class="prompt-lab__label">PROMPT LAB</span>
           <h2 id="promptLabTitle">What should the model be told?</h2>
-          <p>Edit only the creative brief. The technical sandbox and music API contract stay fixed so prompt experiments do not weaken runtime safety.</p>
+          <p>Edit the creative direction. Music-response and safety rules stay fixed so every AI gets the same blank canvas.</p>
         </div>
         <button class="prompt-lab__close" type="button" aria-label="Close Prompt Lab">×</button>
       </header>
@@ -109,7 +112,7 @@ export function mountPromptLab() {
         <div class="prompt-lab__meta"><span id="promptLabDescription"></span><span id="promptLabCount"></span></div>
         <div class="prompt-lab__status" id="promptLabStatus" role="status" aria-live="polite"></div>
         <details class="prompt-lab__contract">
-          <summary>Technical runtime contract — fixed</summary>
+          <summary>Music-response rules · fixed</summary>
           <pre id="promptLabContract"></pre>
         </details>
       </div>
@@ -155,6 +158,8 @@ export function mountPromptLab() {
   function updateButton(profile = loadPromptProfile()) {
     button.title = `Edit creative prompt · ${profile.name}`;
     button.setAttribute('aria-label', `Edit creative prompt. Current: ${profile.name}`);
+    const shellLabel = button.querySelector('strong');
+    if (shellLabel) shellLabel.textContent = profile.name.replace(/ blank canvas$/i, '');
     current.textContent = `Current · ${profile.name}`;
   }
 
@@ -162,7 +167,7 @@ export function mountPromptLab() {
     editor.value = profile.creativeBrief;
     draftPresetId = profile.source === 'preset' ? profile.id : '';
     const preset = PROMPT_PRESETS.find(item => item.id === draftPresetId);
-    description.textContent = preset?.description || 'Custom creative brief. The fixed runtime contract will be appended automatically.';
+    description.textContent = preset?.description || 'Custom creative brief. The fixed music-response rules are included automatically.';
     refreshCount();
     refreshPresetState();
     setStatus();
@@ -191,7 +196,7 @@ export function mountPromptLab() {
   editor.addEventListener('input', () => {
     const matchingPreset = PROMPT_PRESETS.find(preset => preset.creativeBrief.trim() === editor.value.trim());
     draftPresetId = matchingPreset?.id || '';
-    description.textContent = matchingPreset?.description || 'Custom creative brief. The fixed runtime contract will be appended automatically.';
+    description.textContent = matchingPreset?.description || 'Custom creative brief. The fixed music-response rules are included automatically.';
     refreshCount();
     refreshPresetState();
     setStatus();
@@ -218,7 +223,7 @@ export function mountPromptLab() {
       const saved = savePromptProfile(profile);
       loadDraft(saved);
       window.dispatchEvent(new CustomEvent('visualizer:prompt-profile-changed', { detail: saved }));
-      setStatus(`Using ${saved.name}. This exact prompt will be captured in the next Dream trace.`);
+      setStatus(`Using ${saved.name}. It will guide the next Dream.`);
       setTimeout(() => dialog.open && dialog.close(), 450);
     } catch (error) {
       setStatus(error?.message || 'That creative brief could not be saved.', true);
@@ -236,7 +241,7 @@ export function mountPromptLab() {
     setStatus('Neutral blank canvas restored.');
   });
 
-  topActions.insertBefore(button, topActions.querySelector('#spendButton') || topActions.firstChild);
+  if (!existingButton) topActions.insertBefore(button, topActions.firstChild);
   loadDraft();
 
   const api = Object.freeze({

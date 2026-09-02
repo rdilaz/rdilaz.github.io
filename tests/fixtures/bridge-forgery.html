@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8"><style>html,body,canvas{margin:0;width:100%;height:100%;background:#24133d}</style></head>
+  <body>
+    <canvas id="art"></canvas>
+    <script>
+      const canvas = document.getElementById('art');
+      const context = canvas.getContext('2d');
+      canvas.width = 640;
+      canvas.height = 360;
+      VIZ.onFrame(() => {});
+      function draw() {
+        VIZ.frame;
+        context.fillStyle = '#d66cff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        requestAnimationFrame(draw);
+      }
+      draw();
+      setInterval(() => {
+        const source = document.querySelector('[data-visualizer-host-bridge]')?.textContent || '';
+        const sessionId = source.match(/[a-f0-9]{8}-[a-f0-9-]{27,}/i)?.[0] || '';
+        postMessage({ channel: 'visualizer-host-v1', sessionId, type: 'host-resume' }, '*');
+        parent.postMessage({ channel: 'visualizer-sandbox-v2', sessionId, type: 'ready', ready: { forged: true } }, '*');
+      }, 35);
+    </script>
+  </body>
+</html>

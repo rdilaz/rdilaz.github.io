@@ -35,7 +35,7 @@ Generated code is untrusted software, but unusual art is not a defect.
 
 The host verifies engineering facts—boot, visible output, VIZ consumption, real viewport compatibility, runtime health, and reversible promotion—without requiring a particular renderer, brightness, amount of motion, composition, color, or visual metaphor.
 
-A candidate never replaces the last-known-good visualizer until `dream-reliability-v1` passes. One same-model repair may use concrete diagnostics. Immediate post-launch failure rolls back automatically.
+A generated candidate becomes ready only after `dream-reliability-v1` preflight passes. It does not replace the last-known-good visualizer until the user chooses Open and the reversible launch watchdog succeeds. One same-model repair may use concrete diagnostics. Immediate post-launch failure rolls back automatically.
 
 ## Privacy sentence
 
@@ -62,6 +62,22 @@ V0 is real only when a user can:
 - distinguish the visualizer currently LIVE from the model selected for the NEXT Dream;
 - favorite, reopen, delete, and battle saved Dreams;
 - inspect versioned local Dream traces through a hidden developer mode when troubleshooting.
+
+## Product Shell / Core UX v1
+
+The normal product loop is now:
+
+`LIVE Dream → visual Play/Pause → music source → Dreams switcher → NEXT AI → Prompt → Dream → explicit Open when ready`
+
+- A first visit starts with working art and does not require provider authorization.
+- Play/Pause is trusted host control over the visual experience. It stops active VIZ delivery and generated animation frames without reloading the Dream. External tab/system music remains controlled by its source.
+- A paid Dream is one background job at a time. Its detail panel can collapse while the request, optional same-model repair, and hidden preflight continue.
+- Provider-complete, preflight-ready, and LIVE are separate truths. A ready artifact is saved locally before the UI offers Open; generation success never auto-interrupts LIVE.
+- Featured, Favorites, and Recent provide the fast media-style switcher. The full Library, spend controls, battles, traces, and diagnostic detail remain secondary.
+- Normal mode keeps provider and reliability machinery out of the primary canvas loop. `?dev=1` retains local sanitized diagnostics and one-click debug material.
+- Spend caps reserve the maximum dispatched request cost before network execution. Exact usage reconciles that reservation; cancellation or uncertain transport keeps the conservative reservation so repeated aborts cannot bypass session/daily protection.
+
+The Featured manifest currently contains one truthful host-created item, Calibration Bloom. Every loadable entry requires a repository-local HTML path, content digest, CI reliability evidence, and accepted curation record. Developer export creates a pending-review package that cannot enter Featured until an operator supplies approval and complete model/request/prompt/trace provenance. One or two additional operator-approved model-generated artifacts remain operator-content work; no regression fixture or hand-authored substitute is presented as model output.
 
 ## Deliberately deferred
 

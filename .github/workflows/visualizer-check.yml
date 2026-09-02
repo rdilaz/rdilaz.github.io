@@ -43,7 +43,7 @@ jobs:
 
       - name: Check visualizer JavaScript syntax
         run: |
-          for file in public/visualizer/*.js scripts/visualizer-static-check.mjs tests/*.mjs playwright.config.mjs; do
+          for file in public/visualizer/*.js public/visualizer/featured/*.js scripts/visualizer-static-check.mjs tests/*.mjs playwright.config.mjs; do
             node --check "$file"
           done
 
@@ -55,6 +55,9 @@ jobs:
 
       - name: Verify Dream transparency contracts
         run: node --test --test-concurrency=1 tests/dream-transparency.contract.mjs
+
+      - name: Verify Product Shell contracts
+        run: node --test --test-concurrency=1 tests/product-shell.contract.mjs
 
       - name: Verify one-click debug bundle contract
         run: node --test --test-concurrency=1 tests/debug-bundle.contract.mjs
