@@ -18,7 +18,6 @@
       <section class="stage" id="stage" aria-label="AI-generated music visualizer">
         <iframe id="visualizerFrame" class="visualizer-frame" title="Generated audio visualizer" sandbox="allow-scripts" allow="fullscreen" referrerpolicy="no-referrer"></iframe>
         <iframe id="preflightFrame" class="preflight-frame" title="Visualizer candidate sandbox" sandbox="allow-scripts" referrerpolicy="no-referrer" aria-hidden="true" tabindex="-1"></iframe>
-        <div id="uiRevealSurface" aria-hidden="true" style="position:absolute;inset:0;z-index:10;pointer-events:none;background:transparent"></div>
         <div class="pause-overlay" id="pauseOverlay" aria-hidden="true" hidden><span id="pauseMessage">Visual paused</span></div>
         <header class="top-chrome chrome" aria-label="Visualizer status">
           <div class="identity">
@@ -86,7 +85,7 @@
           <button class="control control--prompt" id="promptLabButton" type="button" aria-label="Edit creative prompt"><span class="control__hint">PROMPT</span><strong>Neutral</strong></button>
           <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model"><span class="control__icon">✦</span><span>Dream</span><small class="dream-cost" id="dreamCost"></small></button>
           <button class="control control--icon" id="favoriteButton" type="button" aria-label="Save current Dream to favorites" aria-pressed="false" title="Favorite">♡</button>
-          <button class="control control--icon" id="fullscreenButton" type="button" aria-label="Enter fullscreen" title="Fullscreen">⛶</button>
+          <button class="control control--icon" id="fullscreenButton" type="button" aria-label="Enter fullscreen" aria-pressed="false" title="Fullscreen">⛶</button>
         </nav>
       </section>
     </main>
@@ -153,7 +152,25 @@
 
     <aside class="drawer drawer--about" id="aboutDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="About the visualizer" inert>
       <div class="drawer__head"><div><span class="eyebrow">THE IDEA</span><h2>One blank canvas. Every model.</h2></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
-      <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><section class="sensitivity-control" aria-labelledby="sensitivityLabel"><div class="sensitivity-control__head"><div><span class="eyebrow">AUDIO REACTION</span><strong id="sensitivityLabel">Sensitivity</strong></div><output id="sensitivityValue" for="sensitivityInput">100%</output></div><input id="sensitivityInput" type="range" min="50" max="200" step="10" value="100" aria-label="Audio sensitivity" /><div class="sensitivity-control__foot"><p>How strongly the visual reacts after the same local normalization used for every Dream. This is not speaker volume.</p><button class="text-button" id="resetSensitivity" type="button">Reset to 100%</button></div></section><p class="shortcut-hint"><kbd>←</kbd> <kbd>→</kbd> Favorites &nbsp; <kbd>↑</kbd> <kbd>↓</kbd> Sensitivity</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v2</code>. Runtime: <code>visualizer-audio-v1</code>. Reliability: <code>dream-reliability-v1</code>. Candidates must prove they boot, render, consume VIZ, survive standardized synthetic music, handle the real viewport, and remain alive through an automatic rollback window. The harness never prescribes an aesthetic or rendering technology.</p></details></div>
+      <div class="about-copy">
+        <p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p>
+        <p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p>
+        <p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p>
+        <section class="sensitivity-control" aria-labelledby="sensitivityLabel"><div class="sensitivity-control__head"><div><span class="eyebrow">AUDIO REACTION</span><strong id="sensitivityLabel">Sensitivity</strong></div><output id="sensitivityValue" for="sensitivityInput">100%</output></div><input id="sensitivityInput" type="range" min="50" max="200" step="10" value="100" aria-label="Audio sensitivity" /><div class="sensitivity-control__foot"><p>How strongly the visual reacts after the same local normalization used for every Dream. This is not speaker volume.</p><button class="text-button" id="resetSensitivity" type="button">Reset to 100%</button></div></section>
+        <section class="render-quality-control" aria-labelledby="renderQualityLabel" aria-describedby="renderQualityHelp">
+          <div><span class="eyebrow">VISUAL PERFORMANCE</span><strong id="renderQualityLabel">Render quality</strong></div>
+          <fieldset class="render-quality-options">
+            <legend class="sr-only">Render quality</legend>
+            <label><input type="radio" name="renderQuality" value="full" checked /><span><strong>Full</strong><small>Up to 60 FPS · 2× DPR</small></span></label>
+            <label><input type="radio" name="renderQuality" value="balanced" /><span><strong>Balanced</strong><small>Up to 45 FPS · 1.5× DPR</small></span></label>
+            <label><input type="radio" name="renderQuality" value="saver" /><span><strong>Saver</strong><small>Up to 30 FPS · 1× DPR</small></span></label>
+          </fieldset>
+          <p id="renderQualityHelp">Changes local smoothness and detail only. The AI, prompt, reasoning, provider request, audio analysis, and saved Dream stay the same.</p>
+          <output id="renderQualityDetail" aria-live="polite">Full · up to 60 FPS</output>
+        </section>
+        <p class="shortcut-hint"><kbd>←</kbd> <kbd>→</kbd> Favorites &nbsp; <kbd>↑</kbd> <kbd>↓</kbd> Sensitivity</p>
+        <details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v2</code>. Runtime: <code>visualizer-audio-v1</code>. Reliability: <code>dream-reliability-v1</code>. Candidates must prove they boot, render, consume VIZ, survive standardized synthetic music, handle the real viewport, and remain alive through an automatic rollback window. The harness never prescribes an aesthetic or rendering technology.</p></details>
+      </div>
     </aside>
 
     <aside class="drawer drawer--diagnostics" id="diagnosticsDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Developer diagnostics" inert>
@@ -188,19 +205,6 @@
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-    <script>
-      (() => {
-        const surface = document.getElementById('uiRevealSurface');
-        const syncRevealSurface = () => {
-          surface.style.pointerEvents = document.body.classList.contains('ui-hidden') ? 'auto' : 'none';
-        };
-        new MutationObserver(syncRevealSurface).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-        for (const eventName of ['pointermove', 'pointerdown', 'touchstart']) {
-          surface.addEventListener(eventName, () => document.body.classList.remove('ui-hidden'), { passive: true });
-        }
-        syncRevealSurface();
-      })();
-    </script>
     <script type="module" src="./dream-status.js"></script>
     <script type="module" src="./cost-guard.js"></script>
     <script type="module" src="./app.js"></script>

@@ -35,11 +35,12 @@ Read these files in order for the shortest path through a Dream:
 2. `public/visualizer/playback-state.js`, `dream-job.js`, and `dream-switcher.js` - focused product state and shell views.
 3. `public/visualizer/featured-dreams.js` and `featured/manifest.js` - curated static Dream loading and pending-review export.
 4. `public/visualizer/prompt.js` - the versioned generation and repair messages.
-5. `public/visualizer/provider-runtime.js` and `reasoning-settings.js` - provider normalization, exact reasoning choices, request construction, and HTML extraction.
-6. `public/visualizer/cost-guard.js` and `generation-envelope.js` - the quality-first envelope and last browser boundary before a paid request.
+5. `public/visualizer/provider-runtime.js`, `openrouter-sse.js`, and `reasoning-settings.js` - provider normalization, private SSE assembly, exact reasoning choices, request construction, and HTML extraction.
+6. `public/visualizer/cost-guard.js`, `completion-accounting.js`, `dream-transport.js`, and `generation-envelope.js` - request reservation/settlement, activity-aware transport deadlines, the quality-first envelope, and the last browser boundary before a paid request.
 7. `public/visualizer/model-fit-evidence.js`, `model-product-catalog.js`, and `model-guide.js` - local evidence, operator approval input, and consumer/developer model discovery.
 8. `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js` - safe global arrows and the post-normalization host transform.
-9. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
+9. `public/visualizer/immersive-ui.js` and `render-quality.js` - host chrome visibility and local Full/Balanced/Saver playback cost.
+10. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
 
 ## Architecture map
 
@@ -49,8 +50,9 @@ The main data flow is:
 prompt
   -> provider-runtime
   -> cost-guard final request
-  -> OpenRouter response
-  -> extracted HTML
+  -> OpenRouter SSE response
+  -> private complete-stream assembly + non-blocking usage settlement
+  -> extracted complete HTML
   -> candidate sandbox
   -> full reliability preflight
   -> durable ready artifact plus diagnostic record
@@ -61,7 +63,7 @@ prompt
 
 `prompt.js` creates the canonical messages. `provider-runtime.js` prepares the provider request. `cost-guard.js` applies the final budget decision and request limits, so the trace must describe the request at that final app boundary rather than an earlier draft.
 
-OpenRouter returns response material that the browser app can observe, and the provider runtime extracts the candidate HTML. The candidate runs in the sandbox while `reliability.js` checks it. Passing HTML is saved with `ready-to-open` state and does not alter LIVE. Only a later explicit Open transaction may promote it.
+OpenRouter returns SSE response material that `openrouter-sse.js` assembles privately. Keep-alive comments count as transport activity, final usage starts non-blocking reservation settlement, and `[DONE]` is required before the provider runtime can extract candidate HTML. Post-`[DONE]` events and contradictory generation ids fail closed. Partial content remains diagnostic-only. The candidate runs in the sandbox while `reliability.js` checks it. Passing HTML is saved with `ready-to-open` state and does not alter LIVE. Only a later explicit Open transaction may promote it.
 
 Ready and opened visualizers are available in Recent and the full Library. Attempt evidence is kept in the generation diagnostic, while Open/reopen gets a separate local launch diagnostic. Dream Trace remains the request/response and lifecycle view rather than an unrelated provider record.
 
@@ -73,20 +75,21 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/dream-switcher.js`: owns deterministic Featured/Favorites/Recent selection and keyboard navigation.
 - `public/visualizer/featured-dreams.js` and `public/visualizer/featured/manifest.js`: own static Featured metadata/HTML loading and pending-operator-review curation export.
 - `public/visualizer/prompt.js`: owns the canonical prompt version and generation/repair messages. Prompt changes require deliberate versioning.
-- `public/visualizer/provider-runtime.js`: owns the provider adapter contract, OpenRouter authentication/catalog calls, live request/response normalization, returned text, and HTML extraction.
+- `public/visualizer/provider-runtime.js` and `openrouter-sse.js`: own the provider adapter contract, OpenRouter authentication/catalog calls, single-reader SSE normalization, privately assembled returned text, and complete HTML extraction.
 - `public/visualizer/reasoning-settings.js`: owns catalog-exact reasoning metadata/options, per-model persistence, native Default omission, and stale fallback normalization.
-- `public/visualizer/cost-guard.js`: owns browser-side estimates, confirmations, caps, final completion-request limits, and usage/cost accounting. It is the final request boundary before OpenRouter.
+- `public/visualizer/cost-guard.js` and `completion-accounting.js`: own browser-side estimates, confirmations, caps, final completion-request limits, request-scoped settlement, and bounded generation-metadata reconciliation. The spend guard never clones or reads a completion stream.
 - `public/visualizer/generation-envelope.js` and `generation-failure.js`: own the quality-first request ceiling and evidence-based provider/artifact failure taxonomy.
 - `public/visualizer/model-fit-evidence.js`, `model-product-catalog.js`, and `model-guide.js`: own bounded local configuration evidence, explicit operator-approved starting ids, and Recommended/Experimental disclosure.
 - `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js`: own safe global arrow routing and the local post-normalization sensitivity transform.
-- `public/visualizer/dream-status.js`: observes the fetch lifecycle and emits truthful sent, model-working, response-started, body-complete, cancellation, and timeout events. `dream-job.js` owns product job state/UI.
+- `public/visualizer/dream-status.js` and `dream-transport.js`: own request-scoped fetch lifecycle, cancellation, body-activity idle timing, the secondary hard ceiling, and truthful connected/thinking/creating/checking events. `dream-job.js` owns product job state/UI.
 - `public/visualizer/model-eligibility.js`: owns the pure live-Dream model eligibility rules used by catalogs and the final availability check.
 - `public/visualizer/audio-engine.js`: owns local tab/window/system audio capture and normalized audio features supplied to the trusted host. It does not own model requests.
-- `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the injected `window.VIZ` bridge, CSP, runtime instrumentation, heartbeats, and probes.
+- `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the injected `window.VIZ` bridge, trusted iframe-activity reporting, effective DPR/generated-RAF policy, CSP, runtime instrumentation, heartbeats, and probes.
 - `public/visualizer/reliability.js`: owns deterministic synthetic VIZ stimulation, visible-output and VIZ-use evaluation, the real-viewport canary, watchdog checks, and repair diagnostics.
 - `public/visualizer/diagnostics.js`: owns the general diagnostic record, timeline, bounded retained artifacts, redaction, status labels, copy helpers, and export helpers.
 - `public/visualizer/dream-trace.js`: owns the nested, versioned Dream Trace representation and its attempt/lifecycle semantics.
 - `public/visualizer/trace-bridge.js`: owns the narrow app-boundary handoff that associates the cost-guarded final request and the returned provider material with the correct trace.
+- `public/visualizer/immersive-ui.js` and `render-quality.js`: own deterministic chrome inactivity state and persisted host render profiles. Neither is part of provider or artifact identity.
 - `public/visualizer/trace-viewer.js`: owns Dream Trace rendering and trace-specific UI actions; it should not own provider, storage, or promotion policy.
 - `public/visualizer/storage.js`: owns local IndexedDB access for Library generations and diagnostics, including their nested traces.
 - `public/visualizer/index.html`: owns the static shell, LIVE/NEXT labels, active and candidate iframe slots, drawers, Dream Trace mount point, controls, and script loading order.
@@ -103,6 +106,9 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - Left/Right selects the previous/next Favorite in the supplied display order and wraps. From a non-Favorite, Right selects the first and Left the last; zero Favorites is a safe no-op. Reopen uses the standby sandbox and commits LIVE only after validation/watchdog success, including while a separate Dream request remains in flight.
 - Up/Down adjusts `visualizer-audio-sensitivity-v1` from 50% through 200% in 10% steps; 100% is the default. The About range/Reset provides pointer, touch, and native keyboard control. Global arrows stand down for inputs, sliders, Prompt Lab, model navigation, the Dream switcher, dialogs, drawers, popovers, modifiers, composition, and repeats.
 - Sensitivity runs after `AudioEngine` adaptive normalization and before host-frame composition. It scales/clamps volume, peak, transient, beat, spectral flux, named bands, spectrum, and symmetric waveform amplitude without changing tempo, tempo confidence, centroid, stereo, connection/silence truth, time, schema, or the source sample. It never changes the creative brief, model request, generated HTML, stored artifact, or VIZ pointer coordinates.
+- Render quality is separate from generation quality. Full uses up to 60 FPS/2× DPR, Balanced 45 FPS/1.5× DPR, and Saver 30 FPS/1× DPR, but no profile increases a sub-1 native DPR. Audio analysis retains its independent 60 Hz target; only generated VIZ delivery, generated `requestAnimationFrame`, and JavaScript-visible DPR are capped. Switching or moving across native DPRs sends a private host message and a resize signal without replacing `srcdoc` or the sandbox session. Cadence recovery skips missed intervals in constant time rather than replaying them.
+- Desired pause state is stored independently of iframe readiness and injected at bootstrap, so an intentionally paused load cannot render frames before its private bridge connects. Clearing a retired/standby slot resets that intent, and candidate preflight explicitly runs unpaused before the selected global pause state is applied for presentation.
+- Immersive chrome hides after three seconds of unblocked inactivity. Drawers/dialogs and keyboard navigation pin it; background job expansion and pointer-created button focus do not. Trusted activity from an active/promoting sandbox wakes the host over the private port without forwarding key values or stealing the iframe event.
 
 `neutral-v1` remains frozen and unchanged. These host controls and quality policies do not modify its creative brief.
 
@@ -184,6 +190,7 @@ The transparency additions are:
 - `modelTestMatrix()` returns the sanitized matrix object; `copyModelTestMatrix()` copies the framed matrix block.
 - `theoreticalModelCeilings()` returns developer-only catalog-ceiling diagnostics, never an expected-cost estimate.
 - `playback()` and `setPaused(value)` inspect/control trusted visual playback for local testing.
+- `quality()` and `setQuality(mode)` inspect/control the persisted local render profile; `immersive()` reports hidden state and any legitimate blocker.
 - `probeActive(label)` requests a sanitized trusted probe from the active sandbox.
 - `exportFeatured(generationId)` downloads a local candidate package marked pending operator review.
 
@@ -219,6 +226,9 @@ npm.cmd run build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 npx.cmd playwright test tests/quality-first-controls.spec.mjs --config=playwright.config.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+npx.cmd playwright test tests/streaming-immersive-quality.spec.mjs --config=playwright.config.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ```
 
@@ -276,6 +286,15 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --test --test-concurrency=1 tests/audio-sensitivity.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+node --test --test-concurrency=1 tests/streaming-transport.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/render-quality.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/immersive-ui.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 node --test --test-concurrency=1 tests/dream-transparency.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -307,7 +326,7 @@ Never develop, commit, or push directly on `main`. Use the milestone branch and 
 1. Before editing, verify the branch and inspect existing work:
 
 ```powershell
-git switch milestone/quality-first-model-fit-reasoning-controls-v1
+git switch milestone/streaming-immersive-render-quality-v1
 git branch --show-current
 git status --short --branch
 ```
@@ -325,14 +344,14 @@ git pull --ff-only
 ```powershell
 git diff --cached --check
 git diff --cached
-git commit -m "Quality-First Model Fit and User Reasoning Controls v1"
+git commit -m "Streaming immersive playback and render quality v1"
 ```
 
 6. Push only the milestone branch and open a PR into `main`:
 
 ```powershell
-git push --set-upstream origin milestone/quality-first-model-fit-reasoning-controls-v1
-gh pr create --base main --head milestone/quality-first-model-fit-reasoning-controls-v1 --fill
+git push --set-upstream origin milestone/streaming-immersive-render-quality-v1
+gh pr create --base main --head milestone/streaming-immersive-render-quality-v1 --fill
 ```
 
 7. Let the required checks pass and merge through the PR. Never run `git push origin main` for this work.

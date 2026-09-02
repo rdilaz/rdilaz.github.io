@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { openRouterSseBody, openRouterSseHeaders } from './helpers/openrouter-sse.mjs';
 
 const MODEL_ID = 'moonshotai/kimi-k3';
 const MODEL_NAME = 'MoonshotAI: Kimi K3';
@@ -9,7 +10,7 @@ const openWatchdogCrashHtml = await readFile(new URL('./fixtures/open-watchdog-c
 const lateRuntimeCrashHtml = validHtml.replace('</script>', "setTimeout(() => { throw new Error('fixture late runtime crash'); }, 7000);</script>");
 const corsHeaders = {
   'access-control-allow-origin': '*',
-  'access-control-expose-headers': 'x-request-id',
+  'access-control-expose-headers': 'x-request-id, x-generation-id',
   'content-type': 'application/json',
 };
 
@@ -269,10 +270,10 @@ test('mocked generation captures the final spend-guard request and waits for exp
       reasoning: 'Provider-visible fixture reasoning.',
       reasoningTokens: 17,
     });
-    rawResponseBody = JSON.stringify(payload);
+    rawResponseBody = openRouterSseBody(payload);
     await route.fulfill({
       status: 200,
-      headers: { ...corsHeaders, 'x-request-id': 'req-browser-success' },
+      headers: { ...corsHeaders, ...openRouterSseHeaders(payload, 'req-browser-success') },
       body: rawResponseBody,
     });
   });
@@ -301,6 +302,10 @@ test('mocked generation captures the final spend-guard request and waits for exp
   expect(attempt.response.extractedHtml).toBe(validHtml.trim());
   expect(attempt.response.finishReason).toBe('stop');
   expect(attempt.response.requestId).toBe('req-browser-success');
+  expect(attempt.response.providerGenerationId).toBe('gen-browser-success');
+  expect(attempt.response.transport.outcome).toBe('completed');
+  expect(attempt.response.transport.doneReceived).toBe(true);
+  expect(attempt.response.streamAggregate.choices[0].message.content).toBe(validHtml);
   expect(attempt.response.usage.cost).toBe(0.123);
   expect(attempt.response.reasoning.exposed).toBe(true);
   expect(JSON.stringify(trace)).not.toContain(SENTINEL_KEY);
@@ -347,7 +352,7 @@ test('mocked repair preserves both attempts and never sends attempt three', asyn
       html: repair ? validHtml : '<!doctype html><html><body>incomplete</body></html>',
       cost: repair ? 0.02 : 0.01,
     });
-    await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(payload) });
+    await route.fulfill({ status: 200, headers: { ...corsHeaders, ...openRouterSseHeaders(payload) }, body: openRouterSseBody(payload) });
   });
 
   await page.goto('/visualizer/index.html?dev=1');
@@ -381,7 +386,7 @@ test('failed explicit Open preserves prior LIVE and the ready artifact evidence'
       html: openWatchdogCrashHtml,
       cost: 0.01,
     });
-    await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(payload) });
+    await route.fulfill({ status: 200, headers: { ...corsHeaders, ...openRouterSseHeaders(payload) }, body: openRouterSseBody(payload) });
   });
 
   await page.goto('/visualizer/index.html?dev=1');
@@ -399,6 +404,8 @@ test('failed explicit Open preserves prior LIVE and the ready artifact evidence'
   expect(readyTrace.status).toBe('ready');
   expect(openTrace.status).toBe('failed');
   expect(openTrace.finalLiveIdentity.candidate).toBe(null);
+  await page.mouse.move(260, 240);
+  await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
   await page.locator('#switcherButton').click();
   await expect(page.locator('[data-switcher-group="recent"]')).toContainText('Needs attention');
 });
@@ -408,7 +415,7 @@ test('late runtime rollback persists aftercare and correlates recovered LIVE', a
   await seedConnectedModel(page);
   await routeOpenRouter(page, async route => {
     const payload = providerPayload({ id: 'gen-late-runtime-crash', html: lateRuntimeCrashHtml, cost: 0.01 });
-    await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(payload) });
+    await route.fulfill({ status: 200, headers: { ...corsHeaders, ...openRouterSseHeaders(payload) }, body: openRouterSseBody(payload) });
   });
 
   await page.goto('/visualizer/index.html?dev=1');

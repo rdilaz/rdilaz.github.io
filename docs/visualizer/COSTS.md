@@ -39,7 +39,11 @@ Expensive Dreams are allowed when explicit per-Dream/session/day/provider bounds
 
 ## After a Dream
 
-Requests ask OpenRouter to return usage accounting. When available, the app records OpenRouter's returned `usage.cost` as the authoritative cost for that request. If exact cost is unavailable but actual token counts and catalog prices are available, the app records a clearly approximate fallback calculation.
+Streamed requests ask OpenRouter to return usage accounting. The final SSE chunk is the primary settlement source; when available, the app records its `usage.cost` as the authoritative cost for that request. Settlement starts immediately but does not block a completed artifact behind another tab's spend lock: the already-persisted maximum reservation remains conservative until the lock is acquired. If exact cost is unavailable but actual token counts and catalog prices are available, the app records a clearly approximate fallback calculation.
+
+The spend guard never clones or consumes the completion stream. A request-scoped accounting handoff lets the single provider reader settle the exact reservation. If cancellation, idle/hard timeout, an HTTP-200 stream error, premature EOF, or missing final usage leaves cost unknown, the maximum reservation remains charged conservatively.
+
+When an OpenRouter generation id is available for an uncertain outcome, the app may make one delayed metadata GET with a four-second deadline. This is a reconciliation read, not a completion retry: it cannot generate output or duplicate spend. Exact `total_cost` can settle the existing ledger entry only when returned metadata repeats the same generation id; a missing id, contradictory id, missing cost, late record, or failed lookup leaves it uncertain. Cancellation UI never waits for this read.
 
 The session ledger shows generation and repair charges separately so the user can see what actually consumed credits.
 
@@ -49,7 +53,7 @@ The app also queries `GET /api/v1/key` using the already-authorized session key.
 
 The browser-side per-Dream/session/day controls are strong application guardrails: the app lowers `max_tokens` or refuses to send a request. They are not described as an absolute provider billing guarantee, because provider routing/accounting can evolve outside this static application's control.
 
-Where the Web Locks API is available, the spend guard serializes completion authorization, reservation, transport, and reconciliation across tabs so two tabs cannot race the shared local-day ledger. Browsers without Web Locks retain conservative per-request reservation and storage-event reconciliation but cannot make localStorage updates fully transactional across tabs. Every displayed maximum rounds upward to cents so consumer copy never rounds a ceiling down.
+Where the Web Locks API is available, the spend guard serializes completion authorization and durable reservation before dispatch, then reacquires the same lock for stream-usage or metadata settlement. It deliberately does not hold the lock while a long SSE body remains open; the already-persisted maximum reservation prevents a second tab from racing the shared local-day budget. Browsers without Web Locks retain conservative per-request reservation and storage-event reconciliation but cannot make localStorage updates fully transactional across tabs. Every displayed maximum rounds upward to cents so consumer copy never rounds a ceiling down.
 
 An OpenRouter key limit is stronger because OpenRouter enforces that limit on its own side. The static V0 intentionally does not embed a Management API credential and therefore cannot safely create or mutate provider-side keys itself.
 

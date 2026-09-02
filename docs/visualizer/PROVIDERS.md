@@ -51,7 +51,7 @@ Future inference-level support must come from verified provider capability metad
 
 ## OpenRouter authority snapshot (2026-09-02)
 
-The provider facts below are grounded in OpenRouter's official [reasoning guide](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens), [model-catalog schema](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties), [parameter reference](https://openrouter.ai/docs/api_reference/parameters), and [`require_parameters` routing contract](https://openrouter.ai/docs/guides/routing/provider-selection#requiring-providers-to-support-all-parameters). They are an as-of snapshot, not a substitute for the fresh live-catalog check before spend.
+The provider facts below are grounded in OpenRouter's official [reasoning guide](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens), [streaming reference](https://openrouter.ai/docs/api_reference/streaming), [error reference](https://openrouter.ai/docs/api_reference/errors-and-debugging), [generation metadata endpoint](https://openrouter.ai/docs/api/api-reference/generations/get-request-&-usage-metadata-for-a-generation), [model-catalog schema](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties), [parameter reference](https://openrouter.ai/docs/api_reference/parameters), and [`require_parameters` routing contract](https://openrouter.ai/docs/guides/routing/provider-selection#requiring-providers-to-support-all-parameters). They are an as-of snapshot, not a substitute for the fresh live-catalog check before spend.
 
 - The Visualizer uses OpenRouter's unified `reasoning: { effort: "<level>" }` request shape. The currently documented gateway effort vocabulary is `max`, `xhigh`, `high`, `medium`, `low`, `minimal`, and `none`; the UI does not infer that every model accepts every value.
 - An exact model's `reasoning.supported_efforts` is the allowlist and provider order for explicit choices. `null` means all documented gateway efforts are accepted; omission means no effort selector. `default_effort` describes the model's effort when reasoning is enabled without an explicit effort, `default_enabled` describes native on/off behavior, `mandatory: true` forbids `none`, and `supports_max_tokens: true` advertises `reasoning.max_tokens`. The current product exposes catalog-backed efforts, not a reasoning-token-budget control.
@@ -61,6 +61,11 @@ The provider facts below are grounded in OpenRouter's official [reasoning guide]
 - Reasoning tokens are completion/output tokens and are charged accordingly. Catalog `pricing.completion` is the output-token price; a model may additionally publish the optional per-token `pricing.internal_reasoning`. Provider-returned `usage.cost` remains the preferred exact accounting fact.
 - Root `max_tokens` is a total completion ceiling, not a visible-HTML target. Reasoning can consume part of it, leaving fewer tokens for the artifact; it is also bounded by context remaining after the prompt. See OpenRouter's [reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens#reasoning-effort-level) and [`max_tokens`](https://openrouter.ai/docs/api_reference/parameters#max-tokens) documentation.
 - Request construction uses the exact model's advertised output-limit parameter: `max_tokens` when present, otherwise `max_completion_tokens`. Optional `temperature: 1` is omitted when the model does not advertise temperature support; the app never requires a route to accept an unsupported optional sampling control.
+- Chat Completions uses `stream: true`. OpenRouter documents SSE comments such as `: OPENROUTER PROCESSING` as keep-alives, top-level `error` data events for failures after HTTP 200, a final usage-bearing chunk, then `[DONE]`. The host counts any nonempty body chunk as activity but only content/reasoning deltas as model output.
+- A request gets a three-minute idle deadline reset by headers/body activity and a separate 30-minute safety ceiling. Crossing six minutes while the body remains active is not terminal. User cancellation, idle timeout, hard timeout, explicit provider error, protocol failure, and normal completion remain distinct trace outcomes.
+- The SSE response has exactly one app reader. The spend guard reserves before dispatch but never clones/consumes the body. Final stream usage starts request-scoped settlement without delaying a completed artifact behind another tab's lock; the maximum reservation remains conservative until settlement commits.
+- `[DONE]` is terminal even if malformed trailing events share its network chunk. Contradictory header/event or event/event generation ids fail closed, keep partial text diagnostic-only, and cannot settle or query accounting under the ambiguous id.
+- `X-Generation-Id` is retained separately from `X-Request-Id` and the local artifact UUID. If final usage is unavailable after cancel/timeout/error, one delayed four-second-bounded GET to `/api/v1/generation?id=...` may reconcile the existing reservation only when its response repeats that id and reports billed cost. It never sends another completion, never delays cancellation UI, and never retries the lookup. Missing or contradictory metadata leaves the reservation conservative.
 
 ### User reasoning contract
 
@@ -79,12 +84,13 @@ There is a catalog/documentation discrepancy in the same official sources: the r
 
 A successful generation or repair returns:
 
-- raw model text;
-- the decoded raw provider response and parsed payload at the trusted browser boundary when tracing is available;
+- privately assembled raw model text after normal `[DONE]` completion;
+- the bounded exact SSE transcript and a separately labeled normalized aggregate at the trusted browser boundary when tracing is available;
 - extracted complete HTML;
 - resolved model identity;
 - usage accounting when available;
 - request id when available;
+- OpenRouter generation id when available;
 - prompt version and attempt number.
 
 Generation and repair are separate append-only trace attempts. The provider adapter does not claim access to hidden model reasoning: only reasoning fields explicitly returned by the provider and separate reasoning-token accounting may be retained.
@@ -105,6 +111,6 @@ The Visualizer does not fund model calls from a site-owned balance in this phase
 
 ## Active reference adapter
 
-OpenRouter is the only active adapter in Browser Provider Reset v1. It uses PKCE, a session-scoped delegated key, the live OpenRouter model catalog, live-Dream eligibility filtering, a fresh pre-spend model-availability check, browser-side spend controls, exact usage accounting when available, explicit provider errors, and no automatic request retry after uncertain model execution.
+OpenRouter is the only active adapter in Browser Provider Reset v1. It uses PKCE, a session-scoped delegated key, the live OpenRouter model catalog, live-Dream eligibility filtering, a fresh pre-spend model-availability check, browser-side spend controls, private SSE assembly, exact usage accounting when available, explicit provider errors, and no app-issued completion retry after uncertain model execution.
 
 Additional adapters are not accepted until the OpenRouter path passes repeated real-browser acceptance and the new provider's official authentication/billing path has been verified.

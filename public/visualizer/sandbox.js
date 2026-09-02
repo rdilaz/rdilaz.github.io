@@ -16,7 +16,7 @@ const SANDBOX_CSP = [
 
 const BRIDGE_INIT_CHANNEL = 'visualizer-private-bridge-v1';
 
-function sandboxBootstrap(sessionId) {
+function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   'use strict';
 
   const BRIDGE_INIT_CHANNEL_INNER = 'visualizer-private-bridge-v1';
@@ -31,6 +31,33 @@ function sandboxBootstrap(sessionId) {
     warn: console.warn.bind(console),
     log: console.log.bind(console),
   };
+  let nativeDevicePixelRatio = Number(window.devicePixelRatio) > 0 ? Number(window.devicePixelRatio) : 1;
+  function normalizeRenderQuality(value) {
+    const suppliedNativeDpr = Number(value?.nativeDpr);
+    if (Number.isFinite(suppliedNativeDpr) && suppliedNativeDpr > 0) nativeDevicePixelRatio = suppliedNativeDpr;
+    const mode = ['full', 'balanced', 'saver'].includes(value?.mode) ? value.mode : 'full';
+    const defaults = mode === 'saver'
+      ? { maxFps: 30, maxDpr: 1 }
+      : mode === 'balanced'
+        ? { maxFps: 45, maxDpr: 1.5 }
+        : { maxFps: 60, maxDpr: 2 };
+    const maxFps = Math.min(60, Math.max(15, Number(value?.maxFps) || defaults.maxFps));
+    const effectiveDpr = Math.min(
+      nativeDevicePixelRatio,
+      Math.max(0.1, Number(value?.effectiveDpr) || Math.min(nativeDevicePixelRatio, defaults.maxDpr)),
+    );
+    return { schema: 'visualizer-render-quality-v1', mode, maxFps, effectiveDpr, nativeDpr: nativeDevicePixelRatio };
+  }
+  let renderQuality = normalizeRenderQuality(initialRenderQuality);
+  try {
+    Object.defineProperty(window, 'devicePixelRatio', {
+      configurable: false,
+      enumerable: true,
+      get: () => renderQuality.effectiveDpr,
+    });
+  } catch {
+    // VIZ viewport remains authoritative if this browser locks the native getter.
+  }
   const bridgeChannel = new MessageChannel();
   const bridgePort = bridgeChannel.port1;
   const bridgePost = bridgePort.postMessage.bind(bridgePort);
@@ -69,6 +96,8 @@ function sandboxBootstrap(sessionId) {
     lastActivityAt: performance.now(),
     lastDomStyleHash: 0,
     rootSurfaceEverChanged: false,
+    qualityChanges: 0,
+    renderQuality,
   };
 
   const listeners = new Set();
@@ -101,9 +130,12 @@ function sandboxBootstrap(sessionId) {
       spectrum: Array(96).fill(0),
     },
     pointer: { x: 0.5, y: 0.5, active: false, down: false },
-    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio || 1 },
+    viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
   };
   let viewport = currentFrame.viewport;
+  let nextGeneratedFrameAt = 0;
+  let allowedGeneratedFrameAt = -1;
+  let qualityResizePending = false;
 
   function post(type, payload = {}) {
     try {
@@ -192,6 +224,16 @@ function sandboxBootstrap(sessionId) {
     return Reflect.apply(original, console, args);
   });
 
+  function generatedFrameDue(timestamp) {
+    if (timestamp === allowedGeneratedFrameAt) return true;
+    const interval = 1000 / renderQuality.maxFps;
+    if (nextGeneratedFrameAt && timestamp + 0.25 < nextGeneratedFrameAt) return false;
+    allowedGeneratedFrameAt = timestamp;
+    if (!nextGeneratedFrameAt) nextGeneratedFrameAt = timestamp + interval;
+    else nextGeneratedFrameAt += (Math.floor(Math.max(0, timestamp - nextGeneratedFrameAt) / interval) + 1) * interval;
+    return true;
+  }
+
   function scheduleAnimationFrame(id, record) {
     if (state.paused || record.cancelled || record.nativeId) return;
     record.nativeId = originalRAF(timestamp => {
@@ -201,6 +243,10 @@ function sandboxBootstrap(sessionId) {
         return;
       }
       if (state.paused) return;
+      if (!generatedFrameDue(timestamp)) {
+        scheduleAnimationFrame(id, record);
+        return;
+      }
       pendingAnimationFrames.delete(id);
       state.rafCallbacks += 1;
       state.lastActivityAt = performance.now();
@@ -277,6 +323,38 @@ function sandboxBootstrap(sessionId) {
     }
   }
 
+  function dispatchQualityResize() {
+    if (state.paused) {
+      qualityResizePending = true;
+      return;
+    }
+    qualityResizePending = false;
+    originalSetTimeout(() => dispatchEvent(new Event('resize')), 0);
+  }
+
+  function applyRenderQuality(value, revision = 0) {
+    const previous = renderQuality;
+    const next = normalizeRenderQuality(value);
+    const changed = previous.mode !== next.mode
+      || previous.maxFps !== next.maxFps
+      || previous.effectiveDpr !== next.effectiveDpr;
+    renderQuality = next;
+    state.renderQuality = next;
+    nextGeneratedFrameAt = 0;
+    allowedGeneratedFrameAt = -1;
+    viewport = { ...viewport, dpr: next.effectiveDpr };
+    currentFrame = { ...currentFrame, viewport };
+    if (changed) {
+      state.qualityChanges += 1;
+      if (previous.effectiveDpr !== next.effectiveDpr) dispatchQualityResize();
+    }
+    post('render-quality-applied', {
+      revision: Number(revision) || 0,
+      quality: { ...next },
+      changed,
+    });
+  }
+
   function pauseGeneratedPlayback() {
     if (state.paused) return;
     state.paused = true;
@@ -301,6 +379,8 @@ function sandboxBootstrap(sessionId) {
     state.totalPausedMs += Math.max(0, performance.now() - state.pausedAt);
     state.pausedAt = 0;
     state.paused = false;
+    nextGeneratedFrameAt = 0;
+    allowedGeneratedFrameAt = -1;
     for (const animation of hostPausedAnimations) {
       try {
         if (animation.playState === 'paused') {
@@ -314,6 +394,7 @@ function sandboxBootstrap(sessionId) {
       }
     }
     hostPausedAnimations.clear();
+    if (qualityResizePending) dispatchQualityResize();
     pendingAnimationFrames.forEach((record, id) => scheduleAnimationFrame(id, record));
     post('playback-state', {
       playback: {
@@ -820,7 +901,7 @@ function sandboxBootstrap(sessionId) {
       label,
       atMs: Math.round(performance.now() - state.startedAt),
       ready: state.readyAt > 0,
-      viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio || 1 },
+      viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
       viz: {
         hostFrames: state.hostFrames,
         frameReads: state.frameReads,
@@ -833,6 +914,10 @@ function sandboxBootstrap(sessionId) {
         rafRequests: state.rafRequests,
         rafCallbacks: state.rafCallbacks,
         mutations: state.mutations,
+        renderQuality: {
+          ...renderQuality,
+          changes: state.qualityChanges,
+        },
         monitor: monitorSummary(),
         playback: {
           paused: state.paused,
@@ -931,6 +1016,11 @@ function sandboxBootstrap(sessionId) {
       return;
     }
 
+    if (message.type === 'host-render-quality') {
+      applyRenderQuality(message.quality, message.revision);
+      return;
+    }
+
     if (message.type === 'frame') {
       if (state.paused) return;
       state.hostFrames += 1;
@@ -986,9 +1076,15 @@ function sandboxBootstrap(sessionId) {
     recordEvent('warning', 'CSP_BLOCKED_RESOURCE', `${item.directive} blocked ${item.blockedURI || 'a resource'}.`, item);
   });
 
+  let lastTrustedPointerMoveAt = 0;
   for (const name of ['pointermove', 'pointerdown', 'pointerup', 'pointerleave']) {
     addEventListener(name, event => {
+      if (!event.isTrusted) return;
+      const now = performance.now();
+      if (name === 'pointermove' && now - lastTrustedPointerMoveAt < 80) return;
+      if (name === 'pointermove') lastTrustedPointerMoveAt = now;
       post('pointer', {
+        trustedActivity: true,
         pointer: {
           x: event.clientX / Math.max(1, innerWidth),
           y: event.clientY / Math.max(1, innerHeight),
@@ -996,7 +1092,14 @@ function sandboxBootstrap(sessionId) {
           down: name === 'pointerdown' || (name === 'pointermove' && event.buttons > 0),
         },
       });
-    }, { passive: true });
+    }, { passive: true, capture: true });
+  }
+
+  for (const [name, kind] of [['keydown', 'keyboard'], ['wheel', 'wheel'], ['touchstart', 'touch']]) {
+    addEventListener(name, event => {
+      if (!event.isTrusted) return;
+      post('user-activity', { kind });
+    }, { passive: name !== 'keydown', capture: true });
   }
 
   let lastMonitorAt = 0;
@@ -1028,12 +1131,14 @@ function sandboxBootstrap(sessionId) {
     });
   }, 1000);
 
+  if (initialPaused) pauseGeneratedPlayback();
+
   addEventListener('DOMContentLoaded', () => {
     state.readyAt = performance.now();
     post('ready', {
       ready: {
         atMs: Math.round(state.readyAt - state.startedAt),
-        viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio || 1 },
+        viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
       },
     });
   });
@@ -1042,7 +1147,7 @@ function sandboxBootstrap(sessionId) {
   void originalConsole;
 }
 
-function injectRuntime(html, sessionId) {
+function injectRuntime(html, sessionId, renderQuality, paused) {
   const parser = new DOMParser();
   const document = parser.parseFromString(String(html || ''), 'text/html');
   document.querySelectorAll('base').forEach(element => element.remove());
@@ -1058,7 +1163,7 @@ function injectRuntime(html, sessionId) {
   baseStyle.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}';
   const bridge = document.createElement('script');
   bridge.dataset.visualizerHostBridge = '';
-  bridge.textContent = `;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)});`.replace(/<\/script/gi, '<\\/script');
+  bridge.textContent = `;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)},${JSON.stringify(renderQuality)},${JSON.stringify(Boolean(paused))});`.replace(/<\/script/gi, '<\\/script');
   document.head.prepend(meta, baseStyle, bridge);
   return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
@@ -1093,6 +1198,25 @@ function wait(ms, signal) {
   });
 }
 
+function sandboxRenderQuality(value = {}) {
+  const mode = ['full', 'balanced', 'saver'].includes(value.mode) ? value.mode : 'full';
+  const fallback = mode === 'saver'
+    ? { maxFps: 30, effectiveDpr: 1 }
+    : mode === 'balanced'
+      ? { maxFps: 45, effectiveDpr: 1.5 }
+      : { maxFps: 60, effectiveDpr: 2 };
+  const parsedNativeDpr = Number(value.nativeDpr ?? globalThis.devicePixelRatio);
+  const nativeDpr = Number.isFinite(parsedNativeDpr) && parsedNativeDpr > 0 ? parsedNativeDpr : 1;
+  const requestedDpr = Number(value.effectiveDpr) || fallback.effectiveDpr;
+  return Object.freeze({
+    schema: 'visualizer-render-quality-v1',
+    mode,
+    maxFps: Math.min(60, Math.max(15, Number(value.maxFps) || fallback.maxFps)),
+    effectiveDpr: Math.min(nativeDpr, 2, Math.max(0.1, requestedDpr)),
+    nativeDpr,
+  });
+}
+
 export class VisualizerSandbox {
   constructor(iframe, onEvent = () => {}) {
     this.iframe = iframe;
@@ -1101,6 +1225,7 @@ export class VisualizerSandbox {
     this.ready = false;
     this.readyDetail = null;
     this.events = [];
+    this.desiredPaused = false;
     this.paused = false;
     this.reportedPaused = false;
     this.playbackDetail = null;
@@ -1108,6 +1233,9 @@ export class VisualizerSandbox {
     this.lastHeartbeat = null;
     this.pendingProbes = new Map();
     this.bridgePort = null;
+    this.renderQuality = sandboxRenderQuality();
+    this.renderQualityRevision = 0;
+    this.appliedRenderQuality = null;
     this.bridgeMessageHandler = event => {
       const message = event.data;
       if (!message || typeof message.type !== 'string') return;
@@ -1123,6 +1251,9 @@ export class VisualizerSandbox {
         this.paused = Boolean(message.playback?.paused);
         this.reportedPaused = this.paused;
         this.playbackDetail = message.playback || null;
+      }
+      if (message.type === 'render-quality-applied') {
+        this.appliedRenderQuality = message.quality || null;
       }
       if (message.type === 'diagnostic-event' && message.event) {
         this.events.push(message.event);
@@ -1145,6 +1276,12 @@ export class VisualizerSandbox {
       this.bridgePort = port;
       port.addEventListener('message', this.bridgeMessageHandler);
       port.start();
+      this.sendHost({
+        type: 'host-render-quality',
+        quality: this.renderQuality,
+        revision: this.renderQualityRevision,
+      });
+      this.sendHost({ type: this.desiredPaused ? 'host-pause' : 'host-resume' });
     };
     window.addEventListener('message', this.messageHandler);
   }
@@ -1181,6 +1318,23 @@ export class VisualizerSandbox {
     this.iframe.style.setProperty('--candidate-height', `${safeHeight}px`);
   }
 
+  setRenderQuality(value) {
+    const next = sandboxRenderQuality(value);
+    const changed = !this.renderQuality
+      || this.renderQuality.mode !== next.mode
+      || this.renderQuality.maxFps !== next.maxFps
+      || this.renderQuality.effectiveDpr !== next.effectiveDpr;
+    this.renderQuality = next;
+    if (!changed) return false;
+    this.renderQualityRevision += 1;
+    this.sendHost({
+      type: 'host-render-quality',
+      quality: next,
+      revision: this.renderQualityRevision,
+    });
+    return true;
+  }
+
   async load(html, {
     viewport = { width: 640, height: 360 },
     readyTimeoutMs = 3500,
@@ -1192,7 +1346,7 @@ export class VisualizerSandbox {
     this.ready = false;
     this.readyDetail = null;
     this.events = [];
-    this.paused = false;
+    this.paused = this.desiredPaused;
     this.reportedPaused = false;
     this.playbackDetail = null;
     this.lastHeartbeatAt = performance.now();
@@ -1200,7 +1354,7 @@ export class VisualizerSandbox {
     for (const pending of this.pendingProbes.values()) pending.reject(new Error('Sandbox was reloaded.'));
     this.pendingProbes.clear();
     this.setViewport(viewport);
-    this.iframe.srcdoc = injectRuntime(html, this.sessionId);
+    this.iframe.srcdoc = injectRuntime(html, this.sessionId, this.renderQuality, this.desiredPaused);
 
     const started = performance.now();
     while (!this.ready && performance.now() - started < readyTimeoutMs) {
@@ -1227,16 +1381,15 @@ export class VisualizerSandbox {
 
   setPaused(paused) {
     const next = Boolean(paused);
-    if (!this.sessionId || !this.bridgePort || this.paused === next) return false;
+    if (this.desiredPaused === next) return false;
+    this.desiredPaused = next;
     this.paused = next;
-    this.sendHost({
-      type: next ? 'host-pause' : 'host-resume',
-    });
+    this.sendHost({ type: next ? 'host-pause' : 'host-resume' });
     return true;
   }
 
   isPaused() {
-    return this.paused;
+    return this.desiredPaused;
   }
 
   async waitForPlayback(paused, timeoutMs = 320) {
@@ -1298,6 +1451,7 @@ export class VisualizerSandbox {
     this.sessionId = '';
     this.ready = false;
     this.events = [];
+    this.desiredPaused = false;
     this.paused = false;
     this.reportedPaused = false;
     this.playbackDetail = null;

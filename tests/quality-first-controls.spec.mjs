@@ -11,6 +11,7 @@ import {
   buildGenerationMessages,
   promptPreset,
 } from '../public/visualizer/prompt.js';
+import { openRouterSseBody, openRouterSseHeaders } from './helpers/openrouter-sse.mjs';
 
 const MODEL_ID = 'deepseek/deepseek-v4-flash-0731';
 const MODEL_NAME = 'DeepSeek: DeepSeek V4 Flash 0731';
@@ -28,7 +29,7 @@ const corsHeaders = {
   'access-control-allow-origin': '*',
   'access-control-allow-headers': '*',
   'access-control-allow-methods': 'GET, POST, OPTIONS',
-  'access-control-expose-headers': 'x-request-id',
+  'access-control-expose-headers': 'x-request-id, x-generation-id',
   'content-type': 'application/json',
 };
 
@@ -116,6 +117,13 @@ function providerPayload({
       native_finish_reason: 'stop',
     }],
     usage,
+  };
+}
+
+function streamedCompletion(payload, requestId = '') {
+  return {
+    headers: { ...corsHeaders, ...openRouterSseHeaders(payload, requestId) },
+    body: openRouterSseBody(payload),
   };
 }
 
@@ -513,8 +521,7 @@ test('DeepSeek HTTP 200 length exhaustion is one TESTED failure with exact evide
     completion: async route => {
       await route.fulfill({
         status: 200,
-        headers: { ...corsHeaders, 'x-request-id': 'request-deepseek-length' },
-        body: JSON.stringify(deepSeekLengthFixture.response.payload),
+        ...streamedCompletion(deepSeekLengthFixture.response.payload, 'request-deepseek-length'),
       });
     },
   });
@@ -533,7 +540,8 @@ test('DeepSeek HTTP 200 length exhaustion is one TESTED failure with exact evide
   expect(router.completionBodies[0].model).toBe(deepSeekLengthFixture.request.model);
   expect(router.completionBodies[0].temperature).toBe(deepSeekLengthFixture.request.temperature);
   expect(router.completionBodies[0].max_tokens).toBe(deepSeekLengthFixture.request.max_tokens);
-  expect(router.completionBodies[0].stream).toBe(deepSeekLengthFixture.request.stream);
+  expect(router.completionBodies[0].stream).toBe(true);
+  expect(deepSeekLengthFixture.request.stream).toBe(false);
   expect(router.completionBodies[0]).not.toHaveProperty('reasoning');
   expect(trace.providerRequestCount).toBe(1);
   expect(trace.attempts).toHaveLength(1);
@@ -543,7 +551,9 @@ test('DeepSeek HTTP 200 length exhaustion is one TESTED failure with exact evide
   expect(response.finishReason).toBe('length');
   expect(response.nativeFinishReason).toBe('length');
   expect(response.native_finish_reason).toBe('length');
-  expect(response.payload.choices[0].message.content).toBeNull();
+  expect(response.payload).toBeNull();
+  expect(response.streamAggregate.choices[0].message.content).toBeNull();
+  expect(response.transport.outcome).toBe('completed');
   expect(response.usage).toEqual(exactUsage);
   expect(response.reasoning.tokenCount).toBe(12392);
   expect(response.cost).toBeCloseTo(0.004004, 10);
@@ -576,8 +586,7 @@ test('Ready and explicit Open produce PROVEN evidence, recommendations, and a sa
     completion: async route => {
       await route.fulfill({
         status: 200,
-        headers: { ...corsHeaders, 'x-request-id': 'request-proven-success' },
-        body: JSON.stringify(providerPayload({ id: 'completion-proven-success' })),
+        ...streamedCompletion(providerPayload({ id: 'completion-proven-success' }), 'request-proven-success'),
       });
     },
   });
@@ -684,8 +693,7 @@ test('Favorite arrows preserve LIVE, wrap exact order, and coexist with a slow D
       await completionGate;
       await route.fulfill({
         status: 200,
-        headers: { ...corsHeaders, 'x-request-id': 'request-background-ready' },
-        body: JSON.stringify(providerPayload({ id: 'completion-background-ready' })),
+        ...streamedCompletion(providerPayload({ id: 'completion-background-ready' }), 'request-background-ready'),
       });
     },
   });

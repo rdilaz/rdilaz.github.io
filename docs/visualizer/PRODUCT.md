@@ -54,11 +54,11 @@ V0 is real only when a user can:
 - authorize their own OpenRouter access using PKCE;
 - choose a model from the live catalog;
 - generate a new visualizer using the canonical prompt;
-- see truthful inference progress, cancellation, and provider failures;
+- see truthful streamed inference progress, cancellation, idle/hard timeout, and provider failures;
 - keep the previous visualizer running while generation and testing happen;
 - reject or repair malformed, silent-crashing, shader-broken, blank, non-VIZ, or immediately unstable output;
 - promote healthy arbitrary Canvas/DOM/SVG/WebGL/WebGPU-capable art transactionally;
-- receive host audio frames at a 60 Hz target;
+- receive host audio analysis from an independent 60 Hz target while generated VIZ delivery follows the selected local render profile;
 - enter fullscreen;
 - retain verified Dreams locally;
 - distinguish the visualizer currently LIVE from the model selected for the NEXT Dream;
@@ -74,10 +74,13 @@ The normal product loop is now:
 - A first visit starts with working art and does not require provider authorization.
 - Play/Pause is trusted host control over the visual experience. It stops active VIZ delivery and generated animation frames without reloading the Dream. External tab/system music remains controlled by its source.
 - A paid Dream is one background job at a time. Its detail panel can collapse while the request, optional same-model repair, and hidden preflight continue.
+- OpenRouter completion transport is streamed privately. Network activity extends the idle deadline; a secondary hard ceiling remains. Only a normal `[DONE]` stream with a fully assembled response may enter artifact validation.
 - Provider-complete, preflight-ready, and LIVE are separate truths. A ready artifact is saved locally before the UI offers Open; generation success never auto-interrupts LIVE.
+- Passive viewing is immersive: host chrome and cursor fade after inactivity in normal or fullscreen viewing, and trusted host/iframe activity restores them without stealing the generated Dream's gesture.
+- Full, Balanced, and Saver are host-owned render choices. They cap generated cadence and JavaScript-visible DPR locally without changing audio analysis, the prompt, model request, generated HTML, or saved artifact.
 - Featured, Favorites, and Recent provide the fast media-style switcher. The full Library, spend controls, battles, traces, and diagnostic detail remain secondary.
 - Normal mode keeps provider and reliability machinery out of the primary canvas loop. `?dev=1` retains local sanitized diagnostics and one-click debug material.
-- Spend caps reserve the maximum dispatched request cost before network execution. Exact usage reconciles that reservation; cancellation or uncertain transport keeps the conservative reservation so repeated aborts cannot bypass session/daily protection.
+- Spend caps reserve the maximum dispatched request cost before network execution. Exact final-stream usage reconciles that reservation; cancellation or uncertain transport keeps the conservative reservation so repeated aborts cannot bypass session/daily protection. One bounded generation-metadata lookup may reconcile an existing reservation, but never creates another completion.
 - Cost copy keeps three truths separate: compatible exact billed history (`No estimate yet`, `Last`, or median `Usually`), the enforced initial-request maximum, and a developer-only theoretical catalog ceiling. A confirmation names the strict whole-Dream maximum, including one possible repair, before expensive dispatch. Users may deliberately raise Spend protection and authorize an expensive Dream; the product prevents surprise spend rather than imposing a hidden low ceiling.
 - Reasoning begins at native `Default` omission and exposes only choices advertised by the exact live model. Affordability blocks rather than silently lowering a chosen effort.
 - `Recommended` is grounded only by an exact currently eligible model in the operator catalog or a compatible successful run in this browser. Automated live-catalog rankings are disclosed as `Experimental`, never promoted to recommendation; developer mode opens the broad eligible catalog and local evidence statuses without turning them into approval. The operator catalog is currently empty, so no operator-approved starting model is claimed.

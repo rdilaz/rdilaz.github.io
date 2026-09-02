@@ -4,9 +4,11 @@ import {
   captureRequestDispatched,
   captureTraceError,
   requestPolicyFromInit,
+  traceCaptureIdentity,
   traceRequestPolicy,
   traceContextFromInit,
 } from './trace-bridge.js';
+import { registerCompletionAccounting } from './completion-accounting.js';
 import {
   DEFAULT_GENERATION_ENVELOPE_SAFETY_FACTOR,
   GENERATION_ENVELOPE_VERSION,
@@ -116,7 +118,6 @@ if (daily.date !== todayKey()) daily = { date: todayKey(), spent: 0 };
 let modelCatalog = new Map();
 let keyInfo = null;
 let lastKey = '';
-let currentDreamSpent = 0;
 let keyRefreshTimer = 0;
 let catalogUpdatedAt = null;
 const reasoningSelectionStore = createReasoningSelectionStore({ storage: localStore });
@@ -301,13 +302,18 @@ function refreshDailySpend() {
   }
 }
 
-function remainingBudgets({ newDream = false } = {}) {
+function dreamSpend(traceId) {
+  if (!traceId) return 0;
+  return ledger.reduce((sum, entry) => entry?.traceId === traceId ? sum + Math.max(0, Number(entry.cost) || 0) : sum, 0);
+}
+
+function remainingBudgets({ newDream = false, traceId = '' } = {}) {
   refreshDailySpend();
   const providerRemaining = keyInfo?.limit_remaining != null && Number.isFinite(Number(keyInfo.limit_remaining))
     ? Math.max(0, Number(keyInfo.limit_remaining))
     : Infinity;
   return {
-    perDream: Math.max(0, settings.perDream - (newDream ? 0 : currentDreamSpent)),
+    perDream: Math.max(0, settings.perDream - (newDream ? 0 : dreamSpend(traceId))),
     session: Math.max(0, settings.session - sessionSpent),
     daily: Math.max(0, settings.daily - daily.spent),
     provider: providerRemaining,
@@ -417,12 +423,11 @@ function saveSpend() {
 
 function adjustSpend(amount) {
   refreshDailySpend();
-  currentDreamSpent = Math.max(0, currentDreamSpent + amount);
   sessionSpent = Math.max(0, sessionSpent + amount);
   daily.spent = Math.max(0, daily.spent + amount);
 }
 
-function reserveCost({ modelId, ceiling, repair }) {
+function reserveCost({ modelId, ceiling, repair, traceId = '', attemptId = '' }) {
   const amount = Number(ceiling);
   if (!Number.isFinite(amount) || amount <= 0) return '';
   const id = globalThis.crypto?.randomUUID?.() || `reservation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -432,6 +437,8 @@ function reserveCost({ modelId, ceiling, repair }) {
     at: Date.now(),
     modelId,
     modelName: modelCatalog.get(modelId)?.name || modelId,
+    traceId,
+    attemptId,
     cost: amount,
     repair: Boolean(repair),
     estimated: true,
@@ -446,19 +453,96 @@ function reserveCost({ modelId, ceiling, repair }) {
   return id;
 }
 
-function reconcileReservedCost(reservationId, { cost, usage, estimated = false }) {
+function reconcileReservedCost(reservationId, { cost, usage, estimated = false, source = 'stream-usage' }) {
   const amount = Number(cost);
   const entry = ledger.find(candidate => candidate.id === reservationId);
-  if (!entry || !Number.isFinite(amount) || amount < 0) return;
+  if (!entry || !entry.uncertain || !Number.isFinite(amount) || amount < 0) return false;
   adjustSpend(amount - Number(entry.cost || 0));
   entry.cost = amount;
   entry.estimated = Boolean(estimated);
   entry.uncertain = false;
   entry.promptTokens = usage?.prompt_tokens ?? usage?.promptTokens ?? null;
   entry.completionTokens = usage?.completion_tokens ?? usage?.completionTokens ?? null;
+  entry.settlementSource = source;
+  entry.providerGenerationId = usage?.providerGenerationId || entry.providerGenerationId || '';
   saveSpend();
   render();
   scheduleKeyRefresh();
+  return true;
+}
+
+async function withSpendLock(operation) {
+  const locks = globalThis.navigator?.locks;
+  if (!locks?.request) return operation();
+  return locks.request(SPEND_LOCK_NAME, { mode: 'exclusive' }, operation);
+}
+
+function usageFromGenerationMetadata(data, providerGenerationId) {
+  const metadataNumber = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const promptTokens = metadataNumber(data?.tokens_prompt ?? data?.native_tokens_prompt);
+  const completionTokens = metadataNumber(data?.tokens_completion ?? data?.native_tokens_completion);
+  const reasoningTokens = metadataNumber(data?.native_tokens_reasoning);
+  const totalTokens = promptTokens !== null && completionTokens !== null
+    ? promptTokens + completionTokens
+    : null;
+  const costValue = data?.total_cost ?? (typeof data?.usage === 'number' ? data.usage : null);
+  const cost = metadataNumber(costValue);
+  return {
+    ...(promptTokens !== null ? { prompt_tokens: promptTokens } : {}),
+    ...(completionTokens !== null ? { completion_tokens: completionTokens } : {}),
+    ...(totalTokens !== null ? { total_tokens: totalTokens } : {}),
+    ...(reasoningTokens !== null ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } } : {}),
+    ...(cost !== null && cost >= 0 ? { cost } : {}),
+    providerGenerationId,
+  };
+}
+
+async function reconcileGenerationMetadata(reservationId, providerGenerationId) {
+  const id = String(providerGenerationId || '').trim();
+  if (!reservationId || !id || !nativeFetch) return { settled: false, reason: 'missing-generation-id' };
+  await new Promise(resolve => setTimeout(resolve, 750));
+  const key = sessionStore.getItem(OPENROUTER_KEY_STORAGE) || '';
+  if (!key) return { settled: false, reason: 'missing-key' };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
+  try {
+    const response = await nativeFetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) return { settled: false, reason: `metadata-http-${response.status}` };
+    const payload = await response.json().catch(() => null);
+    if (String(payload?.data?.id || '') !== id) return { settled: false, reason: 'metadata-generation-id-mismatch' };
+    const usage = usageFromGenerationMetadata(payload?.data, id);
+    const exact = exactUsageCost(usage);
+    if (!Number.isFinite(exact)) return { settled: false, reason: 'metadata-cost-unavailable' };
+    const settled = await withSpendLock(() => reconcileReservedCost(reservationId, {
+      cost: exact,
+      usage,
+      estimated: false,
+      source: 'generation-metadata',
+    }));
+    if (settled) {
+      windowRef?.dispatchEvent(new CustomEvent('visualizer:generation-reconciled', {
+        detail: {
+          providerGenerationId: id,
+          cost: exact,
+          finishReason: payload?.data?.finish_reason || null,
+          model: payload?.data?.model || '',
+          provider: payload?.data?.provider_name || '',
+        },
+      }));
+    }
+    return { settled: Boolean(settled), source: 'generation-metadata' };
+  } catch {
+    return { settled: false, reason: 'metadata-fetch-failed' };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function refreshKeyInfo() {
@@ -817,7 +901,7 @@ async function executeGuardedCompletion(input, init, traceContext) {
     : owns(body, 'max_completion_tokens')
       ? 'max_completion_tokens'
       : requestPolicy?.maxTokenParameter || 'max_tokens';
-  if (!repair) currentDreamSpent = 0;
+  const traceIdentity = traceCaptureIdentity(traceContext) || {};
   const policyModel = requestPolicy?.catalogModel || null;
   const model = normalizeCostGuardModel(policyModel || modelCatalog.get(body.model) || { id: body.model });
   if (policyModel) modelCatalog.set(body.model, model);
@@ -825,7 +909,7 @@ async function executeGuardedCompletion(input, init, traceContext) {
     model,
     messages: body.messages,
     maxTokens: owns(body, maxTokenParameter) ? body[maxTokenParameter] : undefined,
-    remainingBudgets: remainingBudgets(),
+    remainingBudgets: remainingBudgets({ traceId: traceIdentity.traceId || '' }),
     reasoningSelection: requestPolicy?.appliedReasoningSelection || null,
   });
   captureRequestPolicy(traceContext, {
@@ -901,22 +985,38 @@ async function executeGuardedCompletion(input, init, traceContext) {
   // Keep the private trace symbols through the lifecycle wrapper. That wrapper
   // owns the final strip immediately before native browser transport.
   const nextInit = { ...init, body: serializedBody };
-  const reservationId = reserveCost({ modelId: body.model, ceiling: requestCeiling, repair });
-  captureRequestDispatched(traceContext);
-  const response = await nativeFetch(input, nextInit);
-  if (response.ok) {
-    try {
-      const payload = await response.clone().json();
-      const usage = payload?.usage || null;
-      const exact = exactUsageCost(usage);
-      const fallback = calculateFallbackUsageCost(model, usage);
-      const cost = exact ?? fallback;
-      if (Number.isFinite(cost)) reconcileReservedCost(reservationId, { cost, usage, estimated: exact === null });
-    } catch {
-      // Missing usage metadata must not turn a successful provider response into a retry.
-    }
+  const reservationId = reserveCost({
+    modelId: body.model,
+    ceiling: requestCeiling,
+    repair,
+    traceId: traceIdentity.traceId || '',
+    attemptId: traceIdentity.attemptId || '',
+  });
+  if (reservationId) {
+    registerCompletionAccounting(traceContext, {
+      async settle({ usage, providerGenerationId = '' } = {}) {
+        const exact = exactUsageCost(usage);
+        const fallback = calculateFallbackUsageCost(model, usage);
+        const cost = exact ?? fallback;
+        if (!Number.isFinite(cost)) return { settled: false, reason: 'usage-cost-unavailable' };
+        const usageWithId = usage && typeof usage === 'object'
+          ? { ...usage, providerGenerationId }
+          : { providerGenerationId };
+        const settled = await withSpendLock(() => reconcileReservedCost(reservationId, {
+          cost,
+          usage: usageWithId,
+          estimated: exact === null,
+          source: exact === null ? 'stream-usage-estimate' : 'stream-usage',
+        }));
+        return { settled: Boolean(settled), estimated: exact === null };
+      },
+      reconcile({ providerGenerationId = '' } = {}) {
+        return reconcileGenerationMetadata(reservationId, providerGenerationId);
+      },
+    });
   }
-  return response;
+  captureRequestDispatched(traceContext);
+  return nativeFetch(input, nextInit);
 }
 
 async function guardedCompletion(input, init) {

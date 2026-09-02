@@ -154,6 +154,13 @@ export function beginTraceCapture({
       requestPreparedAt: null,
       requestDispatchedAt: null,
       responseHeadersAt: null,
+      firstStreamActivityAt: null,
+      firstStreamEventAt: null,
+      firstReasoningDeltaAt: null,
+      firstContentDeltaAt: null,
+      lastStreamActivityAt: null,
+      streamCompletedAt: null,
+      streamTerminatedAt: null,
       responseBodyCompleteAt: null,
       providerDurationMs: null,
     },
@@ -221,6 +228,17 @@ export function stripTraceContext(init = {}) {
 
 export function traceDisplayName(context) {
   return lookup(context)?.displayName || '';
+}
+
+export function traceCaptureIdentity(context) {
+  const record = lookup(context);
+  if (!record) return null;
+  return deepFreeze({
+    correlationId: record.correlationId,
+    traceId: record.traceId,
+    attemptId: record.attemptId,
+    displayName: record.displayName,
+  });
 }
 
 export function captureRequestPolicy(context, detail = {}) {
@@ -348,6 +366,7 @@ export function captureResponseHeaders(context, response, detail = {}) {
     headers,
     rawBody: '',
     payload: null,
+    streamAggregate: null,
     assistantText: '',
     rawOutput: '',
     extractedHtml: '',
@@ -356,13 +375,18 @@ export function captureResponseHeaders(context, response, detail = {}) {
     native_finish_reason: '',
     resolvedModel: '',
     requestId: validText(headers['x-request-id'] || headers['request-id']),
+    providerGenerationId: validText(headers['x-generation-id']),
     usage: null,
     cost: null,
     costDetails: null,
     reasoning: extractProviderReasoning(null, null),
     error: null,
+    transport: null,
   };
-  timeline(record, 'response:headers', at, { status: record.response.status });
+  timeline(record, 'response:headers', at, {
+    status: record.response.status,
+    providerGenerationId: record.response.providerGenerationId,
+  });
   return true;
 }
 
@@ -377,7 +401,62 @@ export function captureResponseBodyComplete(context, detail = {}) {
   if (Number.isFinite(startedAt) && Number.isFinite(endedAt) && endedAt >= startedAt) {
     record.timing.providerDurationMs = endedAt - startedAt;
   }
-  timeline(record, 'response:body-complete', at);
+  timeline(record, 'response:body-complete', at, {
+    protocolComplete: detail.protocolComplete === true,
+  });
+  return true;
+}
+
+export function captureStreamTransport(context, detail = {}) {
+  const record = lookup(context);
+  if (!record || !record.claims.has('request-dispatched')) return false;
+  const safe = sanitizeTraceValue(detail);
+  if (!safe || typeof safe !== 'object' || Array.isArray(safe)) return false;
+  const at = timestamp(record, detail, ['terminatedAt', 'streamCompletedAt']);
+  const existing = record.response || {
+    status: null,
+    headers: {},
+    rawBody: '',
+    payload: null,
+    streamAggregate: null,
+    assistantText: '',
+    rawOutput: '',
+    extractedHtml: '',
+    finishReason: '',
+    nativeFinishReason: '',
+    native_finish_reason: '',
+    resolvedModel: '',
+    requestId: '',
+    providerGenerationId: '',
+    usage: null,
+    cost: null,
+    costDetails: null,
+    reasoning: extractProviderReasoning(null, null),
+    error: null,
+  };
+  record.response = { ...existing, transport: safe };
+  record.timing.firstStreamActivityAt = safe.firstActivityAt ?? record.timing.firstStreamActivityAt;
+  record.timing.firstStreamEventAt = safe.firstEventAt ?? record.timing.firstStreamEventAt;
+  record.timing.firstReasoningDeltaAt = safe.firstReasoningDeltaAt ?? record.timing.firstReasoningDeltaAt;
+  record.timing.firstContentDeltaAt = safe.firstContentDeltaAt ?? record.timing.firstContentDeltaAt;
+  record.timing.lastStreamActivityAt = safe.lastActivityAt ?? record.timing.lastStreamActivityAt;
+  record.timing.streamCompletedAt = safe.streamCompletedAt ?? record.timing.streamCompletedAt;
+  record.timing.streamTerminatedAt = safe.terminatedAt ?? record.timing.streamTerminatedAt ?? at;
+  if (safe.providerGenerationId && !record.response.providerGenerationId) {
+    record.response.providerGenerationId = validText(safe.providerGenerationId);
+  }
+  if (!record.claims.has('stream-transport')) {
+    record.claims.add('stream-transport');
+    timeline(record, 'stream:terminated', at, {
+      outcome: safe.outcome || 'unknown',
+      timeoutKind: safe.timeoutKind ?? null,
+      chunkCount: safe.chunkCount ?? null,
+      eventCount: safe.eventCount ?? null,
+      commentCount: safe.commentCount ?? null,
+      doneReceived: safe.doneReceived === true,
+      usageReceived: safe.usageReceived === true,
+    });
+  }
   return true;
 }
 
@@ -386,12 +465,9 @@ export function captureProviderResponse(context, detail = {}) {
   if (!record || !record.claims.has('request-dispatched') || record.claims.has('provider-response')) return false;
   const at = timestamp(record, detail, ['completedAt']);
   record.claims.add('provider-response');
-  if (!record.claims.has('response-body-complete')) {
-    record.claims.add('response-body-complete');
-    record.timing.responseBodyCompleteAt = at;
-  }
   const parsedPayload = sanitizeTraceValue(detail.parsedPayload ?? detail.payload ?? null);
-  const usage = sanitizeTraceValue(detail.usage ?? parsedPayload?.usage ?? null);
+  const streamAggregate = sanitizeTraceValue(detail.streamAggregate ?? null);
+  const usage = sanitizeTraceValue(detail.usage ?? parsedPayload?.usage ?? streamAggregate?.usage ?? null);
   const rawBodyText = sanitizedJsonText(
     detail.rawBodyText ?? detail.rawBody ?? '',
     detail.parseError ? undefined : detail.parsedPayload ?? detail.payload,
@@ -407,27 +483,34 @@ export function captureProviderResponse(context, detail = {}) {
     detail.nativeFinishReason
     ?? detail.native_finish_reason
     ?? parsedPayload?.choices?.[0]?.native_finish_reason
-    ?? parsedPayload?.native_finish_reason,
+    ?? parsedPayload?.native_finish_reason
+    ?? streamAggregate?.choices?.[0]?.native_finish_reason,
   );
   record.response = {
     status: Number.isFinite(responseStatus) ? responseStatus : null,
     headers,
     rawBody: rawBodyText,
     payload: parsedPayload,
+    streamAggregate,
     assistantText,
     rawOutput: redactSecretStrings(detail.rawOutput ?? assistantText),
     extractedHtml: redactSecretStrings(detail.extractedHtml ?? ''),
-    finishReason: validText(detail.finishReason ?? parsedPayload?.choices?.[0]?.finish_reason),
+    finishReason: validText(detail.finishReason ?? parsedPayload?.choices?.[0]?.finish_reason ?? streamAggregate?.choices?.[0]?.finish_reason),
     nativeFinishReason,
     native_finish_reason: nativeFinishReason,
-    resolvedModel: validText(detail.resolvedModel),
+    resolvedModel: validText(detail.resolvedModel ?? parsedPayload?.model ?? streamAggregate?.model),
     requestId: validText(detail.requestId) || validText(headers['x-request-id'] || headers['request-id']),
+    providerGenerationId: validText(detail.providerGenerationId)
+      || validText(headers['x-generation-id'])
+      || validText(streamAggregate?.id)
+      || validText(parsedPayload?.id),
     usage,
     cost,
     costDetails: sanitizeTraceValue(detail.costDetails ?? usage?.cost_details ?? usage?.costDetails ?? null),
-    reasoning: extractProviderReasoning(parsedPayload, usage),
+    reasoning: extractProviderReasoning(parsedPayload || streamAggregate, usage),
     parseError: safeError(detail.parseError),
     error: existing.error || null,
+    transport: sanitizeTraceValue(detail.transport ?? existing.transport ?? null),
   };
   const startedAt = Number(record.timing.requestDispatchedAt);
   const endedAt = Number(record.timing.responseBodyCompleteAt);
@@ -440,6 +523,7 @@ export function captureProviderResponse(context, detail = {}) {
     nativeFinishReason: record.response.nativeFinishReason,
     resolvedModel: record.response.resolvedModel,
     requestId: record.response.requestId,
+    providerGenerationId: record.response.providerGenerationId,
   });
   return true;
 }
@@ -467,6 +551,7 @@ export function captureTraceError(context, error, detail = {}) {
       headers: {},
       rawBody: '',
       payload: sanitizeTraceValue(detail.payload ?? null),
+      streamAggregate: null,
       assistantText: '',
       rawOutput: '',
       extractedHtml: '',
@@ -475,11 +560,13 @@ export function captureTraceError(context, error, detail = {}) {
       native_finish_reason: '',
       resolvedModel: '',
       requestId: '',
+      providerGenerationId: '',
       usage: null,
       cost: null,
       costDetails: null,
       reasoning: extractProviderReasoning(null, null),
       error: safe,
+      transport: sanitizeTraceValue(detail.transport ?? null),
     };
   } else if (!record.response.error) {
     record.response.error = safe;

@@ -89,6 +89,14 @@ const [
   keyboardTransportContract,
   audioSensitivityContract,
   qualityFirstBrowser,
+  openRouterSse,
+  dreamTransport,
+  renderQuality,
+  immersiveUi,
+  streamingTransportContract,
+  renderQualityContract,
+  immersiveUiContract,
+  streamingImmersiveQualityBrowser,
   playwrightConfig,
 ] = await Promise.all([
   read('public/visualizer/reasoning-settings.js'),
@@ -106,6 +114,14 @@ const [
   read('tests/keyboard-transport.contract.mjs'),
   read('tests/audio-sensitivity.contract.mjs'),
   read('tests/quality-first-controls.spec.mjs'),
+  read('public/visualizer/openrouter-sse.js'),
+  read('public/visualizer/dream-transport.js'),
+  read('public/visualizer/render-quality.js'),
+  read('public/visualizer/immersive-ui.js'),
+  read('tests/streaming-transport.contract.mjs'),
+  read('tests/render-quality.contract.mjs'),
+  read('tests/immersive-ui.contract.mjs'),
+  read('tests/streaming-immersive-quality.spec.mjs'),
   read('playwright.config.mjs'),
 ]);
 
@@ -531,8 +547,29 @@ expect(
 
 // Truthful inference lifecycle remains intact.
 expect(index.includes('./dream-status.js') && index.includes('dreamCancelButton'), 'Dream request lifecycle and cancellation UI must remain loaded.');
-expect(dreamStatus.includes('DREAM_TIMEOUT_MS = 360000'), 'Slow model requests must retain the six-minute inference timeout.');
-expect(dreamStatus.includes('full response body received'), 'Request lifecycle must distinguish response start from complete response body.');
+expect(
+  dreamTransport.includes('DREAM_STREAM_IDLE_TIMEOUT_MS = 180000')
+    && dreamTransport.includes('DREAM_STREAM_HARD_TIMEOUT_MS = 1800000')
+    && dreamTransport.includes('activity(at = clock())'),
+  'Generation transport must use a resettable idle deadline and a secondary hard ceiling.',
+);
+expect(
+  providerRuntime.includes('stream: true')
+    && openRouterSse.includes("event.data.trim() === '[DONE]'")
+    && openRouterSse.includes('onEvent(event) === false')
+    && openRouterSse.includes('PROVIDER_GENERATION_ID_MISMATCH')
+    && openRouterSse.includes("payload?.error || choice?.error")
+    && openRouterSse.includes('usageReceived'),
+  'OpenRouter Dream generation must consume SSE through [DONE], final usage, and top-level provider errors.',
+);
+expect(
+  providerRuntime.includes('settleUsageWithoutBlocking')
+    && providerRuntime.includes('.then(result =>')
+    && costGuard.includes('metadata-generation-id-mismatch')
+    && costGuard.includes('metadata-cost-unavailable'),
+  'Accounting settlement must not block Ready and metadata must match the generation with a real cost.',
+);
+expect(dreamStatus.includes('ReadableStream') && dreamStatus.includes('markActivity(transaction'), 'Request lifecycle must reset idle timing on streamed body activity.');
 expect(app.includes('activeDreamController') && dreamJob.includes("els.cancel?.addEventListener('click'") && app.includes('activeDreamController?.abort()'), 'Cancellation must continue through artifact checks as well as provider inference.');
 
 // Generic, medium-agnostic reliability harness.
@@ -560,7 +597,7 @@ expect(app.includes("setPresentation('promoting')") && app.includes("setPresenta
 expect(app.includes('promotion:rolled-back') && app.includes('harness.watchdog') && app.includes('activeSlot.sandbox.setPresentation'), 'Post-launch rollback must be explicit and diagnostic.');
 expect(app.includes('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1)'), 'A Dream must permit at most one same-model repair.');
 expect(app.includes('if (attemptNumber === 2 || diagnostic.repairUsed)'), 'A second repair must be impossible.');
-expect(app.includes('1000 / 60'), 'Host audio frames must run at a 60 Hz target instead of the old 30 Hz gate.');
+expect(app.includes('audioAnalysisGate = createCadenceGate(60)'), 'Host audio analysis must retain an independent 60 Hz target.');
 expect(app.includes('heartbeatAgeMs() > 8000') && app.includes('recoverFromRuntimeFailure'), 'Long-lived visualizers must retain heartbeat-based automatic recovery.');
 
 // Product Shell/Core UX v1: trusted pause, background jobs, explicit Open and fast switching.
@@ -571,7 +608,7 @@ expect(sandbox.includes("type: next ? 'host-pause' : 'host-resume'") && sandbox.
 expect(sandbox.includes('pendingAnimationFrames') && sandbox.includes('hostPausedAnimations') && sandbox.includes('totalPausedMs'), 'Trusted pause must queue RAF, preserve virtual time and track only host-paused animations.');
 expect(sandbox.includes("Element.prototype, 'animate'") && sandbox.includes("['play', 'reverse']"), 'Web Animations created or replayed during pause must remain host-paused.');
 expect(!/intensiveRestores\.push\([\s\S]{0,180}requestAnimationFrame/.test(sandbox), 'Persistent pause scheduling must not be removed with intensive reliability instrumentation.');
-expect(/function hostLoop\(timestamp\)[\s\S]{0,180}if \(visualPaused\) return;[\s\S]{0,320}sendFrame/.test(app), 'Active host VIZ frame delivery must stop before sampling or sending while paused.');
+expect(/function hostLoop\(timestamp\)[\s\S]{0,240}if \(visualPaused\) return;[\s\S]{0,700}sendFrame/.test(app), 'Active host VIZ frame delivery must stop before sampling or sending while paused.');
 expect(app.includes('visualPaused || recovering') && sandbox.includes('paused: state.paused'), 'Heartbeat recovery and diagnostics must understand explicit pause.');
 
 expect(dreamJob.includes("DREAM_JOB_SCHEMA = 'visualizer-dream-job-v1'") && dreamJob.includes("READY: 'ready'") && dreamJob.includes("OPENING: 'opening'"), 'Background Dream job needs explicit ready-before-opening state.');
@@ -608,7 +645,7 @@ expect(featuredDreams.includes('pending-operator-review') && featuredDreams.incl
 expect(index.includes('id="promptLabButton"') && index.includes('id="audioButton"') && index.includes('id="fullscreenButton"'), 'Primary product dock must retain Prompt, audio source and fullscreen.');
 expect(!/<div class="top-actions">[\s\S]{0,400}id="spendButton"/.test(index), 'Spend details must not remain primary top chrome.');
 expect(index.includes('class="model-spend-link"') && index.includes('id="spendButton"'), 'Spend protection must remain active and discoverable through progressive disclosure.');
-expect(productShellCss.includes('grid-template-areas:') && productShellCss.includes('max-width: 760px') && productShellBrowser.includes('mobileOverlayGap') && productShellBrowser.includes('desktopOverlayGap'), 'Product shell must provide a compact mobile dock with browser-verified non-overlapping overlays.');
+expect(productShellCss.includes('grid-template-areas:') && productShellCss.includes('max-width: 820px') && productShellBrowser.includes('mobileOverlayGap') && productShellBrowser.includes('desktopOverlayGap'), 'Product shell must provide a compact mobile/tablet dock with browser-verified non-overlapping overlays.');
 expect(app.includes('if (!store.persistent)') && productShellBrowser.includes('unavailable durable storage blocks paid generation'), 'Paid generation must not promise reload persistence when IndexedDB is unavailable.');
 
 // Local flight recorder and hidden developer backdoor.
@@ -642,8 +679,49 @@ const finalPriceMutation = guardedCompletionFlow.indexOf('enforceProviderPriceCe
 const finalRequestSerialization = guardedCompletionFlow.indexOf('const serializedBody = JSON.stringify(body);');
 const finalRequestCapture = guardedCompletionFlow.indexOf('captureFinalRequest(traceContext');
 expect(ordered(finalMaxTokenMutation, finalUsageMutation, finalPriceMutation, finalRequestSerialization, finalRequestCapture), 'Final request capture must follow envelope max, usage-accounting, route-price and serialization mutations.');
-expect(providerRuntime.includes('rawBodyText') && providerRuntime.includes('response.text()'), 'Provider runtime must retain the exact decoded response body before parsing.');
-expect(dreamStatus.includes('dreamTimeoutError') && app.includes("error?.code || 'PROVIDER_OR_PIPELINE_FAILURE'"), 'Response-body timeout must not be mislabeled as user cancellation.');
+expect(
+  providerRuntime.includes('consumeOpenRouterChatStream(response')
+    && openRouterSse.includes('rawBodyText')
+    && openRouterSse.includes('streamAggregate')
+    && !guardedCompletionFlow.includes('response.clone()'),
+  'Provider runtime must use one SSE reader while keeping exact transcript and normalized aggregate distinct.',
+);
+expect(
+  dreamTransport.includes("DREAM_IDLE_TIMEOUT")
+    && dreamTransport.includes("DREAM_HARD_TIMEOUT")
+    && app.includes("['DREAM_TIMEOUT', 'DREAM_IDLE_TIMEOUT', 'DREAM_HARD_TIMEOUT']"),
+  'Idle and hard timeout evidence must not be mislabeled as user cancellation.',
+);
+expect(
+  !index.includes('uiRevealSurface')
+    && sandbox.includes('event.isTrusted')
+    && sandbox.includes("post('user-activity'")
+    && app.includes("showUi('iframe-pointer', mode)")
+    && immersiveUi.includes('visualizer-immersive-ui-v1'),
+  'Immersive wake must preserve the first iframe gesture and accept only trusted bridged activity.',
+);
+expect(
+  sandbox.includes('initialPaused')
+    && sandbox.includes('this.desiredPaused')
+    && sandbox.includes("type: this.desiredPaused ? 'host-pause' : 'host-resume'"),
+  'Pause intent must survive iframe loading and be replayed when the private bridge connects.',
+);
+expect(
+  renderQuality.includes("full: Object.freeze({ mode: 'full', label: 'Full', maxFps: 60, maxDpr: 2 })")
+    && renderQuality.includes("balanced: Object.freeze({ mode: 'balanced', label: 'Balanced', maxFps: 45, maxDpr: 1.5 })")
+    && renderQuality.includes("saver: Object.freeze({ mode: 'saver', label: 'Saver', maxFps: 30, maxDpr: 1 })")
+    && sandbox.includes("message.type === 'host-render-quality'")
+    && app.includes('audioAnalysisGate')
+    && app.includes('vizDeliveryGate'),
+  'Render quality must cap effective DPR, generated RAF, and VIZ delivery without changing audio analysis cadence.',
+);
+expect(
+  renderQuality.includes('Math.floor(Math.max(0, now - nextDueAt) / interval)')
+    && sandbox.includes('Math.floor(Math.max(0, timestamp - nextGeneratedFrameAt) / interval)')
+    && app.includes('wakeLockRevision')
+    && app.includes('event.isTrusted'),
+  'Long suspension recovery, wake-lock ownership, and host activity trust must remain bounded.',
+);
 expect(!traceViewer.includes('.innerHTML') && !traceViewer.includes('srcdoc') && traceViewer.includes('.textContent'), 'Trace viewer must render provider output and HTML as inert text only.');
 expect(index.includes('id="traceViewer"') && index.includes('id="transparencySelfTest"'), 'Developer mode must include the hidden Trace viewer and no-cost fixture action.');
 expect(app.includes('runTransparencySelfTest') && app.includes('latestTrace') && app.includes('identity()'), 'VIZ_DEV must expose identity, traces and the no-cost transparency self-test.');
@@ -657,6 +735,9 @@ for (const contractPath of [
   'tests/model-fit-evidence.contract.mjs',
   'tests/keyboard-transport.contract.mjs',
   'tests/audio-sensitivity.contract.mjs',
+  'tests/streaming-transport.contract.mjs',
+  'tests/render-quality.contract.mjs',
+  'tests/immersive-ui.contract.mjs',
 ]) {
   expect(workflow.includes(`node --test --test-concurrency=1 ${contractPath}`), `CI must explicitly execute ${contractPath}.`);
 }
@@ -723,6 +804,31 @@ expect(
     && /Opening \u00b7 Favorite First/.test(qualityFirstBrowser)
     && /Sensitivity \u00b7 110%/.test(qualityFirstBrowser),
   'Browser coverage must protect no-retry exhaustion, Favorite standby feedback and sensitivity transport.',
+);
+expect(
+  streamingTransportContract.includes('a complete-looking partial artifact stays private until [DONE]')
+    && streamingTransportContract.includes('stream activity repeatedly extends idle time beyond the former absolute boundary')
+    && streamingTransportContract.includes('HTTP-200 provider-declared timeouts retain a distinct stream outcome')
+    && streamingImmersiveQualityBrowser.includes('mid-stream provider error keeps partial HTML diagnostic-only'),
+  'Streaming contracts must cover private assembly, active-stream survival, and explicit provider errors.',
+);
+expect(
+  renderQualityContract.includes('render quality persists locally')
+    && renderQualityContract.includes('cadence gates bound Full, Balanced, and Saver')
+    && immersiveUiContract.includes('continuous activity invalidates stale timers')
+    && immersiveUiContract.includes('pointer-created focus'),
+  'Playback contracts must cover quality persistence/cadence and immersive activity/focus behavior.',
+);
+expect(
+  streamingImmersiveQualityBrowser.includes('stream stays private until DONE')
+    && streamingImmersiveQualityBrowser.includes('mid-stream provider error keeps partial HTML diagnostic-only')
+    && streamingImmersiveQualityBrowser.includes('active job chrome hides')
+    && streamingImmersiveQualityBrowser.includes('quality persists and changes DPR plus generated cadence')
+    && streamingImmersiveQualityBrowser.includes('390x844 keeps Visual Performance controls usable')
+    && streamingImmersiveQualityBrowser.includes('768px compact dock keeps the fullscreen target fully visible')
+    && streamingImmersiveQualityBrowser.includes('late fullscreen wake-lock grant is released')
+    && streamingImmersiveQualityBrowser.includes('cancel during fresh catalog verification'),
+  'Playwright must cover streamed promotion safety, immersive wake, quality switching, and the mobile disclosure layout.',
 );
 
 if (failures.length) {

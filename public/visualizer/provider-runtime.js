@@ -19,8 +19,16 @@ import {
   captureAvailabilityStart,
   captureProviderResponse,
   captureRequestPolicy,
+  captureStreamTransport,
   captureTraceError,
+  traceCaptureIdentity,
 } from './trace-bridge.js';
+import {
+  reconcileCompletionAccounting,
+  releaseCompletionAccounting,
+  settleCompletionAccounting,
+} from './completion-accounting.js';
+import { consumeOpenRouterChatStream } from './openrouter-sse.js';
 
 export const PROVIDER_CONTRACT_VERSION = 'visualizer-provider-v1';
 export const DEFAULT_PROVIDER_ID = 'openrouter';
@@ -388,6 +396,10 @@ async function assertCurrentOpenRouterModel(modelId, { signal, traceContext } = 
   try {
     rawModels = await fetchRawOpenRouterCatalog({ fresh: true, signal });
   } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError' || error?.code === 'CANCELLED') {
+      captureAvailabilityEnd(traceContext, { modelId, status: 'cancelled', code: 'CANCELLED', error });
+      throw cancellationError(signal, error);
+    }
     captureAvailabilityEnd(traceContext, { modelId, status: 'failed', code: 'MODEL_AVAILABILITY_UNVERIFIED', error });
     const verificationError = new Error('Could not verify that this model is still available for a live Dream. No generation request was sent; try again in a moment.');
     verificationError.code = 'MODEL_AVAILABILITY_UNVERIFIED';
@@ -410,13 +422,6 @@ async function assertCurrentOpenRouterModel(modelId, { signal, traceContext } = 
   const normalized = normalizeOpenRouterModel(raw);
   captureAvailabilityEnd(traceContext, { modelId, status: 'succeeded', resolvedModel: normalized.id });
   return normalized;
-}
-
-function extractText(payload) {
-  const content = payload?.choices?.[0]?.message?.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map(part => part?.text || '').join('');
-  return '';
 }
 
 export function extractHtml(raw) {
@@ -488,7 +493,7 @@ export function buildOpenRouterCompletionRequest({
     messages: Array.isArray(messages) ? messages : [],
     ...(!declaredParameters || supportedParameters.has('temperature') ? { temperature: 1 } : {}),
     ...(maxCompletionTokens === null || !maxTokenParameter ? {} : { [maxTokenParameter]: maxCompletionTokens }),
-    stream: false,
+    stream: true,
     provider: { require_parameters: true },
     ...(dispatchedReasoning === undefined ? {} : { reasoning: dispatchedReasoning }),
   };
@@ -610,11 +615,88 @@ function generationFailureError(category, { status = null, payload = null, cause
   return error;
 }
 
-function categorizedTransportError(error) {
-  const category = classifyGenerationFailure({ error });
-  return category === GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT
-    ? generationFailureError(category, { cause: error })
-    : error;
+function cancellationError(signal, cause = null) {
+  const reason = signal?.reason;
+  if (reason?.name === 'AbortError' || reason?.code === 'CANCELLED') return reason;
+  const error = new Error('Dream cancelled. No retry was sent, and your current Dream is unchanged.');
+  error.name = 'AbortError';
+  error.code = 'CANCELLED';
+  error.cause = cause || reason || null;
+  return error;
+}
+
+export function categorizedTransportError(error, { signal = null } = {}) {
+  const timeoutKind = error?.timeoutKind
+    || (error?.code === 'DREAM_IDLE_TIMEOUT' ? 'idle' : error?.code === 'DREAM_HARD_TIMEOUT' ? 'hard' : null);
+  if (signal?.aborted && !timeoutKind) return cancellationError(signal, error);
+  const category = timeoutKind ? GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT : classifyGenerationFailure({ error });
+  if (category !== GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT) return error;
+  const failure = generationFailureError(category, { cause: error });
+  failure.timeoutKind = timeoutKind;
+  failure.streamTransport = error?.streamResult?.transport || error?.streamTransport || error?.transport || null;
+  return failure;
+}
+
+function emitStreamProgress(traceContext, detail) {
+  if (typeof globalThis.dispatchEvent !== 'function' || typeof globalThis.CustomEvent !== 'function') return;
+  const identity = traceCaptureIdentity(traceContext);
+  if (!identity) return;
+  globalThis.dispatchEvent(new globalThis.CustomEvent('visualizer:dream-stream-progress', {
+    detail: Object.freeze({
+      correlationId: identity.correlationId,
+      traceId: identity.traceId,
+      attemptId: identity.attemptId,
+      kind: String(detail?.kind || ''),
+      at: Number(detail?.at) || Date.now(),
+      eventCount: Number(detail?.eventCount) || 0,
+      commentCount: Number(detail?.commentCount) || 0,
+      contentDeltaCount: Number(detail?.contentDeltaCount) || 0,
+      reasoningDeltaCount: Number(detail?.reasoningDeltaCount) || 0,
+      usageReceived: detail?.usageReceived === true,
+      providerGenerationId: String(detail?.providerGenerationId || ''),
+      outcome: String(detail?.outcome || ''),
+    }),
+  }));
+}
+
+function scheduleMetadataReconciliation(traceContext, providerGenerationId) {
+  if (!providerGenerationId) {
+    releaseCompletionAccounting(traceContext);
+    return;
+  }
+  void reconcileCompletionAccounting(traceContext, { providerGenerationId });
+}
+
+function settleUsageWithoutBlocking(traceContext, usage, providerGenerationId) {
+  if (!usage || typeof usage !== 'object') {
+    scheduleMetadataReconciliation(traceContext, providerGenerationId);
+    return;
+  }
+  void settleCompletionAccounting(traceContext, { usage, providerGenerationId })
+    .then(result => {
+      if (result.settled !== true) scheduleMetadataReconciliation(traceContext, providerGenerationId);
+    })
+    .catch(() => scheduleMetadataReconciliation(traceContext, providerGenerationId));
+}
+
+async function readResponseText(response, { signal, traceContext, providerGenerationId, stage }) {
+  try {
+    return await response.text();
+  } catch (error) {
+    const classified = categorizedTransportError(error, { signal });
+    const transport = classified?.streamTransport || error?.streamTransport || error?.transport || null;
+    if (transport) captureStreamTransport(traceContext, transport);
+    scheduleMetadataReconciliation(traceContext, providerGenerationId || transport?.providerGenerationId || '');
+    captureTraceError(traceContext, classified, { stage, status: response.status, transport });
+    throw classified;
+  }
+}
+
+function attachTransportFailure(error, streamResult) {
+  if (!error || !streamResult) return error;
+  error.streamTransport = streamResult.transport;
+  error.providerGenerationId = streamResult.providerGenerationId || '';
+  return error;
 }
 
 async function requestOpenRouterCompletion({
@@ -662,43 +744,69 @@ async function requestOpenRouterCompletion({
       signal,
     }, prepared.policy), traceContext));
   } catch (error) {
-    const classified = categorizedTransportError(error);
-    captureTraceError(traceContext, classified, { stage: 'provider-fetch' });
+    const classified = categorizedTransportError(error, { signal });
+    const transport = classified?.streamTransport || error?.streamTransport || error?.transport || null;
+    if (transport) captureStreamTransport(traceContext, transport);
+    scheduleMetadataReconciliation(traceContext, transport?.providerGenerationId || '');
+    captureTraceError(traceContext, classified, { stage: 'provider-fetch', transport });
     throw classified;
   }
 
-  let rawBodyText;
-  let payload = {};
-  let parseError = null;
-  try {
-    rawBodyText = await response.text();
-  } catch (error) {
-    const classified = categorizedTransportError(error);
-    captureTraceError(traceContext, classified, { stage: 'provider-response-body', status: response.status });
-    throw classified;
-  }
-  try {
-    payload = rawBodyText ? JSON.parse(rawBodyText) : {};
-  } catch (error) {
-    parseError = error;
-  }
-  const raw = extractText(payload);
-  const finishReason = payload?.choices?.[0]?.finish_reason ?? null;
-  const nativeFinishReason = payload?.choices?.[0]?.native_finish_reason ?? payload?.native_finish_reason ?? null;
-  const requestId = response.headers.get('x-request-id') || payload?.id || null;
-  captureProviderResponse(traceContext, {
-    response,
-    rawBodyText,
-    parsedPayload: payload,
-    parseError,
-    assistantText: raw,
-    finishReason,
-    nativeFinishReason,
-    resolvedModel: payload?.model || modelId,
-    requestId,
-    usage: payload?.usage || null,
-  });
+  const headerGenerationId = response.headers.get('x-generation-id') || '';
+  const headerRequestId = response.headers.get('x-request-id') || '';
   if (!response.ok) {
+    const rawBodyText = await readResponseText(response, {
+      signal,
+      traceContext,
+      providerGenerationId: headerGenerationId,
+      stage: 'provider-error-response-body',
+    });
+    let payload = {};
+    let parseError = null;
+    try {
+      payload = rawBodyText ? JSON.parse(rawBodyText) : {};
+    } catch (error) {
+      parseError = error;
+    }
+    const providerGenerationId = headerGenerationId || payload?.id || '';
+    const requestId = headerRequestId || payload?.request_id || '';
+    const transport = {
+      schema: 'openrouter-chat-sse-v1',
+      streamed: true,
+      outcome: 'provider-error',
+      timeoutKind: null,
+      chunkCount: rawBodyText ? 1 : 0,
+      eventCount: 0,
+      commentCount: 0,
+      bytesReceived: new TextEncoder().encode(rawBodyText).byteLength,
+      doneReceived: false,
+      usageReceived: Boolean(payload?.usage),
+      providerGenerationId,
+      firstActivityAt: null,
+      firstEventAt: null,
+      firstReasoningDeltaAt: null,
+      firstContentDeltaAt: null,
+      lastActivityAt: null,
+      streamCompletedAt: null,
+      terminatedAt: Date.now(),
+    };
+    captureStreamTransport(traceContext, transport);
+    settleUsageWithoutBlocking(traceContext, payload?.usage || null, providerGenerationId);
+    captureProviderResponse(traceContext, {
+      response,
+      rawBodyText,
+      parsedPayload: payload,
+      parseError,
+      assistantText: '',
+      extractedHtml: '',
+      finishReason: payload?.choices?.[0]?.finish_reason ?? null,
+      nativeFinishReason: payload?.choices?.[0]?.native_finish_reason ?? payload?.native_finish_reason ?? null,
+      resolvedModel: payload?.model || modelId,
+      requestId,
+      providerGenerationId,
+      usage: payload?.usage || null,
+      transport,
+    });
     const category = classifyGenerationFailure({ status: response.status, payload, error: null });
     const error = generationFailureError(
       category === GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT
@@ -709,23 +817,170 @@ async function requestOpenRouterCompletion({
     captureTraceError(traceContext, error, { stage: 'provider-response', status: response.status, payload });
     throw error;
   }
-  if (parseError) {
+
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('text/event-stream')) {
+    const rawBodyText = await readResponseText(response, {
+      signal,
+      traceContext,
+      providerGenerationId: headerGenerationId,
+      stage: 'provider-non-stream-response-body',
+    });
+    let payload = null;
+    try {
+      payload = rawBodyText ? JSON.parse(rawBodyText) : null;
+    } catch { /* The exact bounded body remains in diagnostics when available. */ }
+    const providerGenerationId = headerGenerationId || payload?.id || '';
+    const transport = {
+      schema: 'openrouter-chat-sse-v1',
+      streamed: false,
+      outcome: 'protocol-error',
+      timeoutKind: null,
+      chunkCount: rawBodyText ? 1 : 0,
+      eventCount: 0,
+      commentCount: 0,
+      bytesReceived: new TextEncoder().encode(rawBodyText).byteLength,
+      doneReceived: false,
+      usageReceived: Boolean(payload?.usage),
+      providerGenerationId,
+      streamCompletedAt: null,
+      terminatedAt: Date.now(),
+    };
+    captureStreamTransport(traceContext, transport);
+    settleUsageWithoutBlocking(traceContext, payload?.usage || null, providerGenerationId);
+    captureProviderResponse(traceContext, {
+      response,
+      rawBodyText,
+      parsedPayload: payload,
+      assistantText: '',
+      extractedHtml: '',
+      resolvedModel: payload?.model || modelId,
+      requestId: headerRequestId || payload?.request_id || '',
+      providerGenerationId,
+      usage: payload?.usage || null,
+      transport,
+    });
     const error = generationFailureError(GENERATION_FAILURE_CATEGORIES.PROVIDER_EXPLICIT_ERROR, {
       status: response.status,
-      cause: parseError,
+      payload,
+      cause: new Error('OpenRouter returned a non-streaming success body for a streaming request.'),
     });
-    captureTraceError(traceContext, error, { stage: 'provider-response-parse' });
+    captureTraceError(traceContext, error, { stage: 'provider-stream-protocol', transport });
     throw error;
   }
+
+  let streamed;
+  try {
+    streamed = await consumeOpenRouterChatStream(response, {
+      signal,
+      providerGenerationId: headerGenerationId,
+      onProgress: detail => emitStreamProgress(traceContext, detail),
+    });
+  } catch (streamError) {
+    const partial = streamError?.streamResult || null;
+    if (partial?.transport) captureStreamTransport(traceContext, partial.transport);
+    const providerGenerationId = partial?.providerGenerationId || headerGenerationId;
+    if (partial?.transport?.generationIdMismatch) releaseCompletionAccounting(traceContext);
+    else settleUsageWithoutBlocking(traceContext, partial?.usage || null, providerGenerationId);
+    if (partial) {
+      captureProviderResponse(traceContext, {
+        response,
+        rawBodyText: partial.rawBodyText,
+        parsedPayload: null,
+        streamAggregate: partial.streamAggregate,
+        assistantText: partial.assistantText,
+        extractedHtml: '',
+        finishReason: partial.finishReason,
+        nativeFinishReason: partial.nativeFinishReason,
+        resolvedModel: partial.resolvedModel || modelId,
+        requestId: headerRequestId,
+        providerGenerationId,
+        usage: partial.usage,
+        transport: partial.transport,
+      });
+    }
+    let error;
+    const streamFailureCategory = classifyGenerationFailure({
+      status: response.status,
+      payload: streamError?.providerPayload || null,
+      error: streamError,
+      stage: 'provider-stream',
+    });
+    if (streamError?.code === 'DREAM_IDLE_TIMEOUT' || streamError?.code === 'DREAM_HARD_TIMEOUT') {
+      error = categorizedTransportError(streamError, { signal });
+      if (error === streamError) {
+        error = generationFailureError(GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT, {
+          status: response.status,
+          payload: streamError?.providerPayload || null,
+          cause: streamError,
+        });
+      }
+    } else if (signal?.aborted) {
+      error = cancellationError(signal, streamError);
+    } else if (streamFailureCategory === GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT) {
+      error = categorizedTransportError(streamError, { signal });
+      if (error === streamError) {
+        error = generationFailureError(GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT, {
+          status: response.status,
+          payload: streamError?.providerPayload || null,
+          cause: streamError,
+        });
+      }
+    } else {
+      error = generationFailureError(GENERATION_FAILURE_CATEGORIES.PROVIDER_EXPLICIT_ERROR, {
+        status: response.status,
+        payload: streamError?.providerPayload || null,
+        cause: streamError,
+      });
+    }
+    attachTransportFailure(error, partial);
+    emitStreamProgress(traceContext, {
+      kind: 'terminated',
+      at: partial?.transport?.terminatedAt || Date.now(),
+      outcome: partial?.transport?.outcome || 'transport-error',
+      providerGenerationId,
+    });
+    captureTraceError(traceContext, error, {
+      stage: partial?.transport?.outcome || 'provider-stream',
+      status: response.status,
+      payload: streamError?.providerPayload || null,
+      transport: partial?.transport || null,
+    });
+    throw error;
+  }
+
+  captureStreamTransport(traceContext, streamed.transport);
+  settleUsageWithoutBlocking(traceContext, streamed.usage, streamed.providerGenerationId);
+  const raw = streamed.assistantText;
+  const payload = streamed.streamAggregate;
+  const finishReason = streamed.finishReason;
+  const nativeFinishReason = streamed.nativeFinishReason;
+  const requestId = headerRequestId || '';
+  const extractedHtml = extractHtml(raw);
   const failureCategory = classifyGenerationFailure({
     response: {
       status: response.status,
       payload,
       assistantText: raw,
-      extractedHtml: extractHtml(raw),
+      extractedHtml,
       finishReason,
       nativeFinishReason,
     },
+  });
+  captureProviderResponse(traceContext, {
+    response,
+    rawBodyText: streamed.rawBodyText,
+    parsedPayload: null,
+    streamAggregate: payload,
+    assistantText: raw,
+    extractedHtml: failureCategory ? '' : extractedHtml,
+    finishReason,
+    nativeFinishReason,
+    resolvedModel: streamed.resolvedModel || modelId,
+    requestId,
+    providerGenerationId: streamed.providerGenerationId,
+    usage: streamed.usage,
+    transport: streamed.transport,
   });
   if (failureCategory) {
     const error = generationFailureError(failureCategory, { status: response.status, payload });
@@ -741,10 +996,12 @@ async function requestOpenRouterCompletion({
   }
   return {
     raw,
-    rawBodyText,
-    usage: payload.usage || null,
-    resolvedModel: payload.model || modelId,
+    rawBodyText: streamed.rawBodyText,
+    usage: streamed.usage || null,
+    resolvedModel: streamed.resolvedModel || modelId,
+    resolvedProvider: streamed.resolvedProvider || '',
     requestId,
+    providerGenerationId: streamed.providerGenerationId,
     providerId: DEFAULT_PROVIDER_ID,
     reasoningSelection: prepared.reasoningSelection,
     requestPolicy: prepared.policy,

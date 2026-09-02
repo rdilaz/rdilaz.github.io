@@ -89,6 +89,39 @@
       return result;
     };
 
+    window.runPreBridgePauseFixture = async html => {
+      sandbox.setPaused(false);
+      sandbox.clear();
+      const firstPause = sandbox.setPaused(true);
+      const repeatedPause = sandbox.setPaused(true);
+      const boot = await sandbox.load(html, { viewport: { width: 640, height: 360, dpr: 1 } });
+      await sandbox.waitForPlayback(true);
+      const applied = await sandbox.probe('pre-bridge-pause-applied');
+      await new Promise(resolve => setTimeout(resolve, 320));
+      const held = await sandbox.probe('pre-bridge-pause-held');
+      const firstResume = sandbox.setPaused(false);
+      await sandbox.waitForPlayback(false);
+      const result = { boot, firstPause, repeatedPause, firstResume, applied, held };
+      sandbox.clear();
+      return result;
+    };
+
+    window.runClearedSlotPauseFixture = async html => {
+      sandbox.setPaused(false);
+      sandbox.clear();
+      sandbox.setPaused(true);
+      await sandbox.load(html, { viewport: { width: 640, height: 360, dpr: 1 } });
+      await sandbox.waitForPlayback(true);
+      sandbox.clear();
+      const staleAfterClear = sandbox.isPaused();
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const nextPreflight = await harness.preflight(html, {
+        viewport: { width: 800, height: 450, dpr: 1 },
+      });
+      sandbox.clear();
+      return { staleAfterClear, nextPreflight };
+    };
+
     window.__reliabilityHarnessReady = true;
   </script>
 </body>

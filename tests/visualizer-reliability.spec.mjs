@@ -88,6 +88,24 @@ test('trusted pause suspends generated RAF and host frames without reloading', a
   expect(result.resumed.viz.hostFrames).toBeGreaterThan(result.paused.viz.hostFrames);
 });
 
+test('pause selected before bridge startup is applied before generated RAF can advance', async ({ page }) => {
+  const result = await run(page, await fixture('pause-observable.html'), 'runPreBridgePauseFixture');
+  expect(result.boot.ready).toBe(true);
+  expect(result.firstPause).toBe(true);
+  expect(result.repeatedPause).toBe(false);
+  expect(result.applied.runtime.playback.paused).toBe(true);
+  expect(result.held.runtime.playback.paused).toBe(true);
+  expect(result.held.runtime.rafCallbacks).toBe(result.applied.runtime.rafCallbacks);
+  expect(result.firstResume).toBe(true);
+});
+
+test('clearing a paused standby slot cannot leak pause intent into its next preflight', async ({ page }) => {
+  const result = await run(page, await fixture('valid-canvas2d.html'), 'runClearedSlotPauseFixture');
+  expect(result.staleAfterClear).toBe(false);
+  expect(result.nextPreflight.passed).toBe(true);
+  expect(result.nextPreflight.summary.visible).toBe(true);
+});
+
 test('shipped Calibration Bloom Featured art passes without provider authentication', async ({ page }) => {
   const html = await readFile(new URL('../public/visualizer/featured/calibration-bloom.html', import.meta.url), 'utf8');
   const result = await run(page, html);

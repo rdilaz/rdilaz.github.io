@@ -75,8 +75,10 @@ export function classifyGenerationFailure(evidence = {}) {
   const timeout = evidence.timeout === true
     || evidence.timedOut === true
     || [408, 504, 524].includes(status)
+    || /^(408|504|524)$/.test(providerErrorType)
     || /timeout|timed_out/i.test(providerErrorType)
     || /^(TimeoutError|ETIMEDOUT)$/i.test(String(error?.name || error?.code || ''))
+    || /^(DREAM_IDLE_TIMEOUT|DREAM_HARD_TIMEOUT)$/i.test(String(error?.code || ''))
     || /timed?\s*out/i.test(String(error?.message || ''));
   const cancelled = evidence.cancelled === true
     || evidence.canceled === true

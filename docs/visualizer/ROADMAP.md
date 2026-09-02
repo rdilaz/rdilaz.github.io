@@ -47,7 +47,7 @@ Everything else is progressive disclosure.
 
 # Stage 1 — Product Shell / Core UX v1
 
-Implementation is present on the current milestone branch, but deployment and product acceptance are not claimed. Repeated real-browser checks, operator model/catalog review, curated content, and mobile acceptance remain.
+The accepted shell is on `main`. Streaming transport, immersive playback, and local render quality are the current refinement milestone; deployment and product acceptance are not claimed by this branch.
 
 Goal: make the working system feel like a product rather than a lab.
 
@@ -91,7 +91,7 @@ Requirements:
 
 - Existing LIVE Dream keeps running while generation occurs.
 - User can close/dismiss the large generation surface and keep browsing the product.
-- A small persistent job indicator remains visible.
+- A small job indicator remains available whenever chrome is awake; it does not pin immersive chrome on screen.
 - The job has clear states: sending, model working, receiving, checking, ready, failed safely.
 - The user can reopen the job panel at any time.
 - When complete, show an unmistakable in-app notification such as `Dream ready` with `Open`.
@@ -161,6 +161,14 @@ Move or hide behind secondary surfaces:
 - implementation terminology.
 
 Spend protection remains active even when its UI is secondary.
+
+## 6. Streaming and immersive playback quality
+
+- Paid completion transport uses OpenRouter SSE and privately assembles one finished response before validation.
+- Body activity, including documented keep-alive comments, extends an idle deadline; a much longer hard ceiling remains secondary.
+- Partial HTML is diagnostic-only and can never become Ready or LIVE.
+- Passive viewing hides host chrome and cursor; trusted pointer, touch, wheel, focus, or keyboard activity wakes it without stealing iframe interaction.
+- Full, Balanced, and Saver change local DPR and generated cadence only. They never alter prompts, model requests, audio analysis, generated HTML, or saved artifacts.
 
 ---
 
@@ -359,7 +367,7 @@ These are explicitly below the core product path:
 - visualizer battles/leaderboards;
 - automated prompt tournaments;
 - model personality statistics;
-- generation streaming/code-progress visualization;
+- optional partial code-progress visualization (transport streaming itself is core and remains private);
 - optional browser notifications;
 - hardware MIDI/controller input;
 - projection/installation mode;
@@ -383,19 +391,24 @@ Unless new evidence changes the priority, close and validate milestones in this 
    - Featured/Favorites/Recent fast switcher
    - background Dream jobs + ready notification
    - global visual Play/Pause
-   - simplified chrome
+    - simplified chrome
 
-2. **Prompt Productization v1**
+2. **Streaming + Immersive Playback + Render Quality v1**
+   - streamed activity-aware completion transport
+   - immersive chrome hide/wake
+   - host-owned Full/Balanced/Saver playback cost
+
+3. **Prompt Productization v1**
    - friendly preset picker
    - Custom prompt
    - prompt attribution in saved Dreams
 
-3. **Built-in Local Player v1**
+4. **Built-in Local Player v1**
    - local files + queue + transport controls
    - Media Session support
    - clear source-mode distinction
 
-4. **Core UX refinement**
+5. **Core UX refinement**
    - mobile
    - accessibility
    - transitions
@@ -404,9 +417,9 @@ Unless new evidence changes the priority, close and validate milestones in this 
 
 A later deep HCDD/UX polish pass should be driven by observed first-use, model-choice, spend-confirmation, and failed-Dream behavior after the evidence campaign; it is not a substitute for current milestone verification.
 
-5. **Sharing discovery**
+6. **Sharing discovery**
 
-6. **Monetization discovery**
+7. **Monetization discovery**
 
 Model-authored controls remain a later experiment rather than a dependency for product launch.
 
@@ -416,6 +429,6 @@ Model-authored controls remain a later experiment rather than a dependency for p
 
 The next meaningful product checkpoint is:
 
-> A first-time visitor can open the site, immediately see beautiful working examples, connect music, switch among Dreams, pause/resume the visual experience, start a new Dream without being trapped waiting for it, know when it is ready, and reopen/favorite it without ever seeing developer machinery.
+> A first-time visitor can open the site, immediately see beautiful working examples, connect music, switch among Dreams, pause/resume or leave the visual experience running without chrome, start even a slow healthy Dream without being trapped waiting for it, know when it is ready, choose an appropriate local render cost, and reopen/favorite it without ever seeing developer machinery.
 
 When this statement is true on desktop and mobile, the Visualizer has crossed from a successful technical experiment into an early usable product.
