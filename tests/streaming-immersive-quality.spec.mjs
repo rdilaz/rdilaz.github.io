@@ -608,13 +608,25 @@ test('pseudo-fullscreen fallback has synchronized functional and accessible stat
   await expect(page.locator('#fullscreenButton')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.app')).toHaveCSS('position', 'fixed');
   await page.locator('#infoButton').click();
-  await expect(page.locator('#aboutDrawer')).toHaveClass(/is-open/);
-  const drawerOwnsHitTest = await page.locator('#aboutDrawer').evaluate(drawer => {
+  const aboutDrawer = page.locator('#aboutDrawer');
+  await expect(aboutDrawer).toHaveClass(/is-open/);
+  await expect.poll(() => aboutDrawer.evaluate(drawer => {
     const rect = drawer.getBoundingClientRect();
-    return document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)?.closest('#aboutDrawer') === drawer;
-  });
-  expect(drawerOwnsHitTest).toBe(true);
-  await page.locator('#aboutDrawer [data-close-drawer]').click();
+    const close = drawer.querySelector('[data-close-drawer]');
+    const closeRect = close.getBoundingClientRect();
+    const drawerOwnsCenter = document.elementFromPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+    )?.closest('#aboutDrawer') === drawer;
+    const drawerOwnsClose = document.elementFromPoint(
+      closeRect.left + closeRect.width / 2,
+      closeRect.top + closeRect.height / 2,
+    )?.closest('#aboutDrawer') === drawer;
+    return drawerOwnsCenter && drawerOwnsClose;
+  }), { message: 'About drawer should own its center and close control after opening' }).toBe(true);
+  await aboutDrawer.locator('[data-close-drawer]').click();
+  await expect(aboutDrawer).not.toHaveClass(/is-open/);
+  await expect(aboutDrawer).toHaveAttribute('aria-hidden', 'true');
   await page.locator('#fullscreenButton').click();
   await expect(page.locator('body')).not.toHaveClass(/pseudo-fullscreen/);
   await expect(page.locator('#fullscreenButton')).toHaveAttribute('aria-label', 'Enter fullscreen');
