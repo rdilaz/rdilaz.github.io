@@ -450,6 +450,7 @@ function emptyAttempt({ trace, input, id, timestamp }) {
       model: requestedModelId,
       messages: [],
       parameters: {},
+      policy: null,
       headers: {},
       serializedBody: '',
     },
@@ -462,6 +463,8 @@ function emptyAttempt({ trace, input, id, timestamp }) {
       rawOutput: '',
       extractedHtml: '',
       finishReason: '',
+      nativeFinishReason: '',
+      native_finish_reason: '',
       resolvedModel: '',
       requestId: '',
       usage: null,
@@ -564,12 +567,20 @@ function applyProjection(trace) {
   trace.requestId = finalAttempt?.response?.requestId || finalAttempt?.identity?.requestId || '';
   trace.rawOutput = finalAttempt?.response?.rawOutput || finalAttempt?.response?.assistantText || '';
   trace.html = finalAttempt?.response?.extractedHtml || '';
+  trace.requestPolicy = finalAttempt?.request?.policy || null;
+  trace.finalFinishReason = finalAttempt?.response?.finishReason || '';
+  trace.finalNativeFinishReason = finalAttempt?.response?.nativeFinishReason
+    || finalAttempt?.response?.native_finish_reason
+    || '';
   trace.summary = {
     providerRequestCount: trace.providerRequestCount,
     usage,
     exactReportedCost,
     reportedCostComplete: trace.reportedCostComplete,
     finalResolvedModel,
+    finalFinishReason: trace.finalFinishReason,
+    finalNativeFinishReason: trace.finalNativeFinishReason,
+    requestPolicy: trace.requestPolicy,
     repairUsed: trace.repairUsed,
   };
   return trace;
@@ -717,6 +728,12 @@ export function patchDreamAttempt(trace, attemptId, patch = {}, {
   }
   if (patch.response) {
     attempt.response = mergeObjects(attempt.response, patch.response);
+    if (patch.response.nativeFinishReason !== undefined && patch.response.native_finish_reason === undefined) {
+      attempt.response.native_finish_reason = text(patch.response.nativeFinishReason);
+    }
+    if (patch.response.native_finish_reason !== undefined && patch.response.nativeFinishReason === undefined) {
+      attempt.response.nativeFinishReason = text(patch.response.native_finish_reason);
+    }
     if (patch.response.headers !== undefined) attempt.response.headers = sanitizeSafeHeaders(patch.response.headers);
     if (patch.response.rawBody !== undefined) attempt.response.rawBody = redactSecretStrings(patch.response.rawBody);
     if (patch.response.error !== undefined) attempt.response.error = sanitizeError(patch.response.error);
@@ -894,6 +911,7 @@ export function legacyDiagnosticToTrace(diagnostic = {}) {
         messages: [],
         messagesNotice: LEGACY_NOT_CAPTURED,
         parameters: {},
+        policy: null,
         headers: {},
         serializedBody: '',
       },
@@ -906,6 +924,8 @@ export function legacyDiagnosticToTrace(diagnostic = {}) {
         rawOutput: responseBelongsHere ? legacyRawOutput : '',
         extractedHtml: responseBelongsHere ? legacyHtml : '',
         finishReason: '',
+        nativeFinishReason: '',
+        native_finish_reason: '',
         resolvedModel: responseBelongsHere ? text(safe.resolvedModel) : '',
         requestId: responseBelongsHere ? text(safe.requestId) : '',
         usage: responseBelongsHere ? safe.usage ?? null : null,

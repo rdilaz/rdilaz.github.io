@@ -39,6 +39,8 @@
           <strong id="transientStatusTitle">Connecting</strong>
           <span id="transientStatusDetail">The current visual stays live.</span>
         </div>
+        <div class="transport-hud transport-hud--opening" id="favoriteOpeningStatus" aria-hidden="true" hidden></div>
+        <div class="transport-hud transport-hud--sensitivity" id="sensitivityHud" role="status" aria-live="polite" hidden></div>
 
         <div class="dream-job-pill" id="dreamJobPill" hidden>
           <button class="dream-job-pill__main" id="dreamJobPillButton" type="button" aria-label="Open Dream details" aria-expanded="false" aria-controls="dreamJobPanel">
@@ -60,6 +62,7 @@
             <button class="pill-button" id="dreamJobOpen" type="button" hidden>Open Dream</button>
             <button class="job-action" id="dreamJobFavorite" type="button" aria-pressed="false" hidden>♡ Save</button>
             <button class="job-action" id="dreamCancelButton" type="button" hidden>Cancel</button>
+            <button class="job-action" id="dreamJobSpend" type="button" hidden>Spend protection</button>
             <button class="job-action" id="dreamJobDismiss" type="button" hidden>Dismiss</button>
             <button class="job-action" id="dreamJobCollapse" type="button">Collapse</button>
           </div>
@@ -93,14 +96,19 @@
       <div class="connection-card" id="connectionCard"><div><strong id="connectionTitle">Connect OpenRouter</strong><p id="connectionCopy">Authorize a session-only key to dream with hundreds of models.</p></div><button class="pill-button" id="connectOpenRouterButton" type="button">Connect</button></div>
       <button class="model-spend-link" id="spendButton" type="button" aria-label="Open spend protection"><span>Spend protection</span><strong id="spendButtonValue">$0.00 this session</strong></button>
 
+      <section class="reasoning-control" id="reasoningControl" aria-labelledby="reasoningControlLabel">
+        <div class="reasoning-control__copy"><span class="eyebrow" id="reasoningControlLabel">REASONING</span><strong id="reasoningState" aria-live="polite">Choose a model</strong><p id="reasoningHelp">Default preserves the exact model's native reasoning behavior.</p></div>
+        <label class="reasoning-control__select"><span class="sr-only">Reasoning level</span><select id="reasoningSelect" aria-describedby="reasoningHelp" disabled><option value="default">Default</option></select></label>
+      </section>
+
       <section class="model-guide" aria-labelledby="model-guide-heading">
         <div class="model-guide__hero">
-          <div><span class="eyebrow">START HERE</span><h3 id="model-guide-heading">Four easy choices.</h3><p>These update automatically from the live catalog. Pick a vibe, not a spreadsheet.</p></div>
+          <div><span class="eyebrow">START HERE</span><h3 id="model-guide-heading">Recommended AIs</h3><p>Only exact models backed by product approval or successful local evidence appear here.</p></div>
           <button class="model-guide__surprise" id="modelSurpriseButton" type="button">Surprise me ✦</button>
         </div>
-        <div class="model-guide__grid" id="modelGuidePicks" aria-live="polite"><p class="model-guide__loading">Finding good options…</p></div>
-        <details class="model-guide__why"><summary>Why these picks?</summary><p id="modelGuideWhy">Using current model capability, visual/coding benchmark signals and price.</p></details>
-        <button class="model-guide__browse" id="browseAllModels" type="button" aria-expanded="false">Browse every model <span id="modelGuideCount"></span></button>
+        <div class="model-guide__grid" id="modelGuidePicks" aria-live="polite"><p class="model-guide__loading">Checking grounded recommendations…</p></div>
+        <details class="model-guide__why"><summary>How recommendations work</summary><p id="modelGuideWhy">Automated rankings alone never count as proof with this Visualizer.</p></details>
+        <button class="model-guide__browse" id="browseAllModels" type="button" aria-expanded="false">Explore experimental models <span id="modelGuideCount"></span></button>
       </section>
 
       <div class="all-models-panel" id="allModelsPanel">
@@ -127,15 +135,16 @@
       <section class="spend-panel"><div class="spend-panel__head"><span>OpenRouter key</span><strong id="keyBudgetSummary">Not connected</strong></div><p id="keyBudgetCopy">Connect OpenRouter to read the key’s provider-enforced limit.</p></section>
       <section class="spend-panel current-cost">
         <h3 id="currentCostModel">Choose a model</h3>
-        <span>Typical one-pass</span><strong id="currentCostTypical">—</strong>
-        <span>Current request ceiling</span><strong id="currentCostCeiling">—</strong>
+        <span>Observed cost</span><strong id="currentCostTypical">No estimate yet</strong>
+        <span>Dream maximum</span><strong id="currentCostCeiling">—</strong>
+        <span>Initial request maximum</span><strong id="currentRequestCeiling">—</strong>
         <span>Catalog rate</span><strong id="currentCostRates">Waiting for pricing.</strong>
       </section>
       <fieldset class="spend-settings" aria-label="Spend limits">
         <label class="spend-setting"><span>Max per Dream (includes repair)</span><input id="perDreamInput" type="number" min="0.05" max="100" step="0.05" inputmode="decimal" /></label>
         <label class="spend-setting"><span>Max this browser session</span><input id="sessionCapInput" type="number" min="0.05" max="500" step="0.25" inputmode="decimal" /></label>
         <label class="spend-setting"><span>Max Visualizer spend today</span><input id="dailyCapInput" type="number" min="0.05" max="2000" step="0.50" inputmode="decimal" /></label>
-        <label class="spend-setting"><span>Ask me before estimated cost reaches</span><input id="confirmAboveInput" type="number" min="0" max="100" step="0.05" inputmode="decimal" /></label>
+        <label class="spend-setting"><span>Ask me before the enforced maximum exceeds</span><input id="confirmAboveInput" type="number" min="0" max="100" step="0.05" inputmode="decimal" /></label>
         <label class="spend-setting spend-setting--check"><input id="confirmExpensiveInput" type="checkbox" /><span>Confirm expensive Dreams before sending</span></label>
       </fieldset>
       <section class="spend-panel"><div class="spend-panel__head"><span>Exact session ledger</span><strong>OpenRouter usage.cost</strong></div><div class="spend-ledger" id="spendLedger"></div></section>
@@ -144,7 +153,7 @@
 
     <aside class="drawer drawer--about" id="aboutDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="About the visualizer" inert>
       <div class="drawer__head"><div><span class="eyebrow">THE IDEA</span><h2>One blank canvas. Every model.</h2></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
-      <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v1</code>. Runtime: <code>visualizer-audio-v1</code>. Reliability: <code>dream-reliability-v1</code>. Candidates must prove they boot, render, consume VIZ, survive standardized synthetic music, handle the real viewport, and remain alive through an automatic rollback window. The harness never prescribes an aesthetic or rendering technology.</p></details></div>
+      <div class="about-copy"><p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p><p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p><p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p><section class="sensitivity-control" aria-labelledby="sensitivityLabel"><div class="sensitivity-control__head"><div><span class="eyebrow">AUDIO REACTION</span><strong id="sensitivityLabel">Sensitivity</strong></div><output id="sensitivityValue" for="sensitivityInput">100%</output></div><input id="sensitivityInput" type="range" min="50" max="200" step="10" value="100" aria-label="Audio sensitivity" /><div class="sensitivity-control__foot"><p>How strongly the visual reacts after the same local normalization used for every Dream. This is not speaker volume.</p><button class="text-button" id="resetSensitivity" type="button">Reset to 100%</button></div></section><p class="shortcut-hint"><kbd>←</kbd> <kbd>→</kbd> Favorites &nbsp; <kbd>↑</kbd> <kbd>↓</kbd> Sensitivity</p><details><summary>For nerds</summary><p>Prompt: <code>visualizer-prompt-v2</code>. Runtime: <code>visualizer-audio-v1</code>. Reliability: <code>dream-reliability-v1</code>. Candidates must prove they boot, render, consume VIZ, survive standardized synthetic music, handle the real viewport, and remain alive through an automatic rollback window. The harness never prescribes an aesthetic or rendering technology.</p></details></div>
     </aside>
 
     <aside class="drawer drawer--diagnostics" id="diagnosticsDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Developer diagnostics" inert>
@@ -156,6 +165,7 @@
         <button id="exportFeaturedCandidate" type="button">Package Featured candidate</button>
         <button id="retestCurrent" type="button">Retest active</button>
         <button id="transparencySelfTest" type="button">Load no-cost trace demo</button>
+        <button id="copyModelTestMatrix" type="button">Copy model test matrix</button>
         <button id="pickDiagnosticModel" type="button">Pick cheap test model</button>
         <button id="clearDiagnostics" type="button">Clear diagnostics</button>
       </div>
@@ -171,7 +181,7 @@
 
     <div class="drawer-scrim" id="drawerScrim" hidden></div>
     <div class="cost-confirm" id="costConfirmBackdrop" hidden>
-      <section class="cost-confirm__card" role="dialog" aria-modal="true" aria-labelledby="costConfirmModel">
+      <section class="cost-confirm__card" role="dialog" aria-modal="true" aria-labelledby="costConfirmModel" aria-describedby="costConfirmEstimate costConfirmCap">
         <span class="eyebrow">BEFORE SPENDING</span><h2 id="costConfirmModel">Model</h2><p id="costConfirmEstimate"></p><p id="costConfirmCap"></p>
         <div class="cost-confirm__actions"><button class="cost-confirm__cancel" id="costConfirmCancel" type="button">Cancel</button><button class="cost-confirm__continue" id="costConfirmContinue" type="button">Dream</button></div>
       </section>
