@@ -18,6 +18,10 @@ import {
 
   const dreamButton = document.getElementById('dreamButton');
 
+  function storageValue(name, key) {
+    try { return globalThis[name]?.getItem?.(key) || ''; } catch { return ''; }
+  }
+
   const state = {
     active: false,
     startedAt: 0,
@@ -121,8 +125,8 @@ import {
   }
 
   function beginPreparation() {
-    const key = sessionStorage.getItem(OPENROUTER_KEY_STORAGE) || '';
-    const modelId = localStorage.getItem('ai-visualizer.selected-model') || '';
+    const key = storageValue('sessionStorage', OPENROUTER_KEY_STORAGE);
+    const modelId = storageValue('localStorage', 'ai-visualizer.selected-model');
     if (!key || !modelId || dreamButton?.disabled) return;
     state.active = true;
     state.startedAt = performance.now();

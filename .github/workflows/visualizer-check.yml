@@ -62,6 +62,24 @@ jobs:
       - name: Verify one-click debug bundle contract
         run: node --test --test-concurrency=1 tests/debug-bundle.contract.mjs
 
+      - name: Verify reasoning settings contract
+        run: node --test --test-concurrency=1 tests/reasoning-settings.contract.mjs
+
+      - name: Verify generation envelope contract
+        run: node --test --test-concurrency=1 tests/generation-envelope.contract.mjs
+
+      - name: Verify provider quality contract
+        run: node --test --test-concurrency=1 tests/provider-quality.contract.mjs
+
+      - name: Verify model fit evidence contract
+        run: node --test --test-concurrency=1 tests/model-fit-evidence.contract.mjs
+
+      - name: Verify keyboard transport contract
+        run: node --test --test-concurrency=1 tests/keyboard-transport.contract.mjs
+
+      - name: Verify audio sensitivity contract
+        run: node --test --test-concurrency=1 tests/audio-sensitivity.contract.mjs
+
       - name: Install portfolio dependencies
         run: npm ci
 

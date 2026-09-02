@@ -29,6 +29,8 @@ No terminal, localhost service, browser extension, unsigned helper, desktop comp
 - Models may use any allowed browser-native visual technique.
 - The primary qualitative criterion is wow factor and an intentional relationship between arbitrary music and image.
 
+**Neutral creative brief status:** `neutral-v1` remains frozen and unchanged. Reasoning, spend, model-fit, transport, sensitivity, and documentation work must not rewrite it.
+
 ## Reliability without aesthetic censorship
 
 Generated code is untrusted software, but unusual art is not a defect.
@@ -76,6 +78,11 @@ The normal product loop is now:
 - Featured, Favorites, and Recent provide the fast media-style switcher. The full Library, spend controls, battles, traces, and diagnostic detail remain secondary.
 - Normal mode keeps provider and reliability machinery out of the primary canvas loop. `?dev=1` retains local sanitized diagnostics and one-click debug material.
 - Spend caps reserve the maximum dispatched request cost before network execution. Exact usage reconciles that reservation; cancellation or uncertain transport keeps the conservative reservation so repeated aborts cannot bypass session/daily protection.
+- Cost copy keeps three truths separate: compatible exact billed history (`No estimate yet`, `Last`, or median `Usually`), the enforced initial-request maximum, and a developer-only theoretical catalog ceiling. A confirmation names the strict whole-Dream maximum, including one possible repair, before expensive dispatch. Users may deliberately raise Spend protection and authorize an expensive Dream; the product prevents surprise spend rather than imposing a hidden low ceiling.
+- Reasoning begins at native `Default` omission and exposes only choices advertised by the exact live model. Affordability blocks rather than silently lowering a chosen effort.
+- `Recommended` is grounded only by an exact currently eligible model in the operator catalog or a compatible successful run in this browser. Automated live-catalog rankings are disclosed as `Experimental`, never promoted to recommendation; developer mode opens the broad eligible catalog and local evidence statuses without turning them into approval. The operator catalog is currently empty, so no operator-approved starting model is claimed.
+
+Host controls remain outside model authorship. In a safe canvas context, Left/Right wraps through Favorites in their displayed order; from a non-Favorite, Right opens the first and Left the last. A Favorite loads in the standby sandbox and becomes LIVE only after its open watchdog commits, so an absent or failed target leaves current LIVE intact and a background Dream may continue. Up/Down changes host audio sensitivity, while the persisted range and Reset support pointer/touch control from 50% to 200% in 10% steps with a 100% default. Sensitivity is a post-normalization host transform: it changes reactive values delivered through VIZ but not the canonical prompt, provider request, stored/generated artifact, model identity, pointer state, or non-reactive audio facts.
 
 The Featured manifest currently contains one truthful host-created item, Calibration Bloom. Every loadable entry requires a repository-local HTML path, content digest, CI reliability evidence, and accepted curation record. Developer export creates a pending-review package that cannot enter Featured until an operator supplies approval and complete model/request/prompt/trace provenance. One or two additional operator-approved model-generated artifacts remain operator-content work; no regression fixture or hand-authored substitute is presented as model output.
 

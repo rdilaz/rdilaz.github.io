@@ -19,7 +19,7 @@ const catalog = {
     name: MODEL_NAME,
     architecture: { input_modalities: ['text'], output_modalities: ['text'] },
     top_provider: { max_completion_tokens: 32000 },
-    supported_parameters: ['reasoning'],
+    supported_parameters: ['reasoning', 'temperature', 'max_tokens'],
     pricing: { prompt: '0.000001', completion: '0.00001', request: '0' },
     context_length: 131072,
   }],

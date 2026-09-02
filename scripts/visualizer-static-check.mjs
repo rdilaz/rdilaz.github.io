@@ -73,8 +73,51 @@ const [
   read('tests/product-shell.spec.mjs'),
 ]);
 
+const [
+  reasoningSettings,
+  generationEnvelope,
+  generationFailure,
+  modelFitEvidence,
+  modelProductCatalog,
+  keyboardTransport,
+  audioSensitivity,
+  modelEligibility,
+  reasoningSettingsContract,
+  generationEnvelopeContract,
+  providerQualityContract,
+  modelFitEvidenceContract,
+  keyboardTransportContract,
+  audioSensitivityContract,
+  qualityFirstBrowser,
+  playwrightConfig,
+] = await Promise.all([
+  read('public/visualizer/reasoning-settings.js'),
+  read('public/visualizer/generation-envelope.js'),
+  read('public/visualizer/generation-failure.js'),
+  read('public/visualizer/model-fit-evidence.js'),
+  read('public/visualizer/model-product-catalog.js'),
+  read('public/visualizer/keyboard-transport.js'),
+  read('public/visualizer/audio-sensitivity.js'),
+  read('public/visualizer/model-eligibility.js'),
+  read('tests/reasoning-settings.contract.mjs'),
+  read('tests/generation-envelope.contract.mjs'),
+  read('tests/provider-quality.contract.mjs'),
+  read('tests/model-fit-evidence.contract.mjs'),
+  read('tests/keyboard-transport.contract.mjs'),
+  read('tests/audio-sensitivity.contract.mjs'),
+  read('tests/quality-first-controls.spec.mjs'),
+  read('playwright.config.mjs'),
+]);
+
 const failures = [];
-const expect = (condition, message) => { if (!condition) failures.push(message); };
+let assertionCount = 0;
+const expect = (condition, message) => {
+  assertionCount += 1;
+  if (!condition) failures.push(message);
+};
+const ordered = (...positions) => positions.every((position, index) => (
+  position >= 0 && (index === 0 || positions[index - 1] < position)
+));
 
 // Sandbox, audio, prompt and credential invariants.
 expect(/sandbox="allow-scripts"/.test(index), 'Generated visualizer iframes must allow scripts inside a sandbox.');
@@ -83,7 +126,13 @@ expect(audio.includes('getDisplayMedia'), 'Audio engine must use display/system 
 expect(!audio.includes('getUserMedia('), 'Microphone capture is forbidden.');
 expect(audio.includes("audioSelection:'preferred'"), 'Chromium capture must prefer audio-bearing sources.');
 expect(audio.includes('smoothingTimeConstant=.08'), 'Fast analyser smoothing must stay low-latency.');
-expect(prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v2'") && prompt.includes('There are no aesthetic requirements.'), 'Canonical prompt must remain versioned and aesthetically unconstrained.');
+expect(prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v2'") && prompt.includes('There are no aesthetic requirements.'), 'Versioned legacy baseline prompt must remain aesthetically unconstrained.');
+expect(
+  prompt.includes("DEFAULT_PROMPT_PRESET_ID = 'neutral-v1'")
+    && /export const NEUTRAL_CREATIVE_BRIEF = `Create a real-time visual interpretation of arbitrary music\.\r?\n\r?\nYou have complete artistic freedom\. Decide what music looks like\.`;/.test(prompt)
+    && prompt.includes('creativeBrief: NEUTRAL_CREATIVE_BRIEF'),
+  'Neutral must remain the unchanged minimal default creative brief.',
+);
 expect(prompt.includes('WebGL/WebGL2') && prompt.includes('WebGPU when available') && prompt.includes('SVG'), 'Prompt must preserve broad browser-native creative capability.');
 expect(sandbox.includes("connect-src 'none'"), 'Generated visualizer CSP must block network connections.');
 expect(providerRuntime.includes("billing: 'user'") && providerRuntime.includes('browserOnly: true'), 'Current provider contract must remain browser-only and user-funded.');
@@ -95,10 +144,390 @@ expect(!workflow.includes('windows companion') && !deploy.includes('GOOS=windows
 // Spend and guided model selection remain intact.
 expect(index.includes('./cost-guard.js') && index.indexOf('./cost-guard.js') < index.indexOf('./app.js'), 'Spend guard must load before the app module.');
 expect(costGuard.includes('perDream: 0.75') && costGuard.includes('session: 5') && costGuard.includes('daily: 10'), 'Default OpenRouter spend caps changed unexpectedly.');
-expect(costGuard.includes('body.max_tokens = allowedMax') && costGuard.includes('include: true'), 'Spend guard must constrain output and request exact usage accounting.');
+expect(costGuard.includes('body[maxTokenParameter] = envelope.finalMaxTokens') && costGuard.includes('include: true'), 'Spend guard must apply the calculated model-supported output envelope and request exact usage accounting.');
 expect(costGuard.includes('reserveCost({') && costGuard.includes('reconcileReservedCost') && costGuard.includes('uncertain: true'), 'Dispatched requests must reserve spend before cancellation or uncertain transport can occur.');
-expect(index.includes('Four easy choices.') && modelGuide.includes("label:'Fast + great'"), 'Simple guided model selection must remain available.');
+expect(index.includes('Recommended AIs') && index.includes('Explore experimental models') && modelGuide.includes("els.heading.textContent = 'Recommended AIs'"), 'Model guidance must truthfully separate grounded recommendations from experimental exploration.');
 expect(modelGuide.includes("MODEL_ENDPOINT='https://openrouter.ai/api/v1/models'"), 'Model guide must use the live OpenRouter catalog.');
+
+// Quality-first reasoning and generation envelope contracts.
+expect(!/\b14_?000\b/.test(providerRuntime) && !/\b14_?000\b/.test(costGuard), 'Provider runtime and spend guard must not restore a universal 14,000-token default or clamp.');
+expect(
+  reasoningSettings.includes("REASONING_SELECTION_VERSION = 'visualizer-reasoning-selection-v1'")
+    && reasoningSettings.includes("REASONING_SELECTION_STORAGE_PREFIX = 'ai-visualizer.reasoning-selection.v1.'"),
+  'Reasoning selection and per-model persistence must remain explicitly versioned.',
+);
+expect(
+  reasoningSettings.includes('const allGatewayEfforts = supportedField.present && supportedField.value === null;')
+    && reasoningSettings.includes('} else if (Array.isArray(supportedField.value)) {')
+    && reasoningSettings.includes("if (mandatory) supportedEfforts = supportedEfforts.filter(effort => effort !== 'none');"),
+  'Reasoning choices must come from exact catalog metadata, with None removed for mandatory-reasoning models.',
+);
+expect(
+  reasoningSettings.includes("const options = [{ value: 'default', label: 'Default', mode: 'default', effort: null }];")
+    && reasoningSettings.includes('for (const effort of metadata.supportedEfforts)')
+    && reasoningSettings.includes('metadata.supportedEfforts.includes(effort)'),
+  'Reasoning UI and validation must expose only Default plus exact supported efforts.',
+);
+const reasoningRequestStart = reasoningSettings.indexOf('export function createReasoningRequestConfiguration');
+const reasoningRequestEnd = reasoningSettings.indexOf('export function reasoningSelectionStorageKey', reasoningRequestStart);
+const reasoningRequestFlow = reasoningRequestStart >= 0 && reasoningRequestEnd > reasoningRequestStart
+  ? reasoningSettings.slice(reasoningRequestStart, reasoningRequestEnd)
+  : '';
+expect(
+  reasoningRequestFlow.includes("if (normalized.mode !== 'explicit') return undefined;")
+    && reasoningRequestFlow.includes('return deepFreeze({ effort: normalized.effort });'),
+  'Default must be native omission while explicit reasoning uses only the unified effort shape.',
+);
+const requestBuilderStart = providerRuntime.indexOf('export function buildOpenRouterCompletionRequest');
+const requestBuilderEnd = providerRuntime.indexOf('let browserReasoningSelectionStore', requestBuilderStart);
+const requestBuilderFlow = requestBuilderStart >= 0 && requestBuilderEnd > requestBuilderStart
+  ? providerRuntime.slice(requestBuilderStart, requestBuilderEnd)
+  : '';
+expect(
+  requestBuilderFlow.includes('...(dispatchedReasoning === undefined ? {} : {')
+    && requestBuilderFlow.includes('reasoning: dispatchedReasoning')
+    && requestBuilderFlow.includes('provider: { require_parameters: true }'),
+  'OpenRouter requests must omit native Default and enforce explicit reasoning with require_parameters.',
+);
+expect(
+  modelEligibility.includes("reason: 'OUTPUT_LIMIT_UNENFORCEABLE'")
+    && providerRuntime.includes("? 'max_tokens'")
+    && providerRuntime.includes("? 'max_completion_tokens'")
+    && providerRuntime.includes("supportedParameters.has('temperature')"),
+  'Eligible requests must use a model-advertised output limit and omit unsupported temperature.',
+);
+expect(
+  requestBuilderFlow.includes('nativeDefaultUsed: dispatchedReasoning === undefined')
+    && requestBuilderFlow.includes('dispatchedReasoning: dispatchedReasoning ?? null')
+    && requestBuilderFlow.includes('modelReasoningFacts: reasoningFacts'),
+  'Request policy must preserve native-default, dispatched-reasoning and exact metadata facts.',
+);
+const qualityDispatchSources = `${providerRuntime}\n${costGuard}\n${generationEnvelope}`;
+expect(
+  !/(?:reasoningSelection|dispatchedReasoning)\s*\.\s*(?:effort|mode)\s*=/.test(qualityDispatchSources)
+    && !requestBuilderFlow.includes("effort: 'low'")
+    && !requestBuilderFlow.includes("effort: 'high'"),
+  'Provider and spend policy must never invent or silently mutate a Low/High reasoning selection.',
+);
+
+expect(
+  generationEnvelope.includes("GENERATION_ENVELOPE_VERSION = 'visualizer-generation-envelope-v1'")
+    && generationEnvelope.includes('minimumPracticalCompletionTokens = 4500')
+    && generationEnvelope.includes("policy: 'quality-first'"),
+  'Generation envelope version, quality-first policy and practical completion floor must remain explicit.',
+);
+expect(
+  generationEnvelope.includes("if (!entry.present) return { present: false, valid: true, value: null };")
+    && generationEnvelope.includes('if (calculationReady && rootCeiling.present) physicalCeilings.push(rootCeiling.value);'),
+  'Root max_tokens must be an optional explicit ceiling, never a fallback default.',
+);
+expect(
+  generationEnvelope.includes('model.top_provider?.max_completion_tokens')
+    && generationEnvelope.includes('Math.max(0, contextCapacityTokens - promptTokens)')
+    && generationEnvelope.includes('Math.min(...physicalCeilings)'),
+  'The final generation maximum must respect live model and prompt-adjusted context bounds.',
+);
+expect(
+  generationEnvelope.includes('Math.min(budgets.perDream, budgets.session, budgets.daily, budgets.provider)')
+    && generationEnvelope.includes('strictRemainingBudget * safetyFactor')
+    && generationEnvelope.includes("['perDream', 'session', 'daily', 'provider']"),
+  'Affordability must use the strict Dream, session, daily and provider spend remainder.',
+);
+expect(
+  generationEnvelope.includes('contentBytes + messages.length * 32 + 128')
+    && generationEnvelope.includes('requestFeeReserve + promptCostReserve')
+    && generationEnvelope.includes('pricing.completion + pricing.internalReasoning'),
+  'Envelope cost must reserve conservative prompt, request, completion and reasoning bounds.',
+);
+expect(
+  generationEnvelope.includes('fixedCostReserve + finalMaxTokens * completionPriceCeiling')
+    && generationEnvelope.includes('finalRequestCostCeiling > effectiveSpendCeiling')
+    && generationEnvelope.includes('finalMaxTokens = Math.max(0, finalMaxTokens - 1)'),
+  'Final request cost must be calculated from and corrected against the enforced maximum.',
+);
+expect(
+  generationEnvelope.includes('reasoningSelection: options.reasoningSelection')
+    && generationEnvelope.includes('qualityDowngradeApplied: false')
+    && generationEnvelope.includes('canDispatch: !configurationBlocked && !insufficientPracticalEnvelope'),
+  'Insufficient spend must block dispatch without silently downgrading requested quality.',
+);
+expect(
+  generationEnvelope.includes('minimumPracticalTokensForReasoning')
+    && generationEnvelope.includes('high: 80')
+    && generationEnvelope.includes('xhigh: 95')
+    && generationEnvelope.includes('minimumPracticalCompletionTokensForRequest'),
+  'Reasoning-heavy choices must reserve separate artifact room without changing effort.',
+);
+
+const guardedCompletionStart = costGuard.indexOf('async function executeGuardedCompletion');
+const guardedCompletionEnd = costGuard.indexOf('async function guardedCompletion', guardedCompletionStart);
+const guardedCompletionFlow = guardedCompletionStart >= 0 && guardedCompletionEnd > guardedCompletionStart
+  ? costGuard.slice(guardedCompletionStart, guardedCompletionEnd)
+  : '';
+expect(ordered(
+  guardedCompletionFlow.indexOf('const envelope = calculateCostGuardEnvelope({'),
+  guardedCompletionFlow.indexOf('if (!envelope.canDispatch)'),
+  guardedCompletionFlow.indexOf('const requestCeiling = envelope.finalRequestCostCeiling;'),
+  guardedCompletionFlow.indexOf('await askCostConfirmation({'),
+  guardedCompletionFlow.indexOf('body[maxTokenParameter] = envelope.finalMaxTokens;'),
+  guardedCompletionFlow.indexOf('body.usage ='),
+  guardedCompletionFlow.indexOf('enforceProviderPriceCeiling(body, envelope);'),
+  guardedCompletionFlow.indexOf('const serializedBody = JSON.stringify(body);'),
+  guardedCompletionFlow.indexOf('captureFinalRequest(traceContext'),
+  guardedCompletionFlow.indexOf('const reservationId = reserveCost({'),
+  guardedCompletionFlow.indexOf('captureRequestDispatched(traceContext);'),
+  guardedCompletionFlow.indexOf('nativeFetch(input, nextInit)'),
+), 'Guarded dispatch must calculate, authorize, finalize, reserve and trace cost before native transport in that order.');
+expect(
+  guardedCompletionFlow.includes('maximum: dreamCeiling')
+    && guardedCompletionFlow.includes('requestMaximum: requestCeiling')
+    && costGuard.includes('Maximum for this Dream, including one possible repair: ${maximumMoney(maximum)}')
+    && costGuard.includes('Dream up to ${maximumMoney(maximum)}'),
+  'Expensive-Dream confirmation must name and authorize the envelope-enforced maximum.',
+);
+expect(
+  guardedCompletionFlow.includes('${reasoning} reasoning is still selected, and no request was sent.')
+    && guardedCompletionFlow.includes("budgetLimited ? 'INSUFFICIENT_PRACTICAL_ENVELOPE' : 'MODEL_GENERATION_ENVELOPE_TOO_SMALL'"),
+  'A too-small quality envelope must preserve reasoning and block before dispatch.',
+);
+expect(
+  costGuard.includes('pricing.overrides')
+    && costGuard.includes('max_price: maxPrice')
+    && costGuard.includes('filterLiveDreamModels(list)'),
+  'Spend enforcement must use conservative catalog overrides, cap route prices, and exclude ineligible rows.',
+);
+expect(
+  costGuard.includes("SPEND_LOCK_NAME = 'ai-visualizer-spend-guard-v1'")
+    && costGuard.includes('locks.request(SPEND_LOCK_NAME')
+    && costGuard.includes('Math.ceil(number * 100 - 1e-10)'),
+  'Cross-tab spend must serialize where supported and displayed maxima must round upward.',
+);
+
+// Stable evidence-based failure and trace semantics.
+expect(
+  generationFailure.includes("OUTPUT_BUDGET_EXHAUSTED_BEFORE_ARTIFACT: 'OUTPUT_BUDGET_EXHAUSTED_BEFORE_ARTIFACT'")
+    && generationFailure.includes('This model ran out of generation room before it finished the visual. Your current Dream is still here.'),
+  'Output-budget exhaustion must retain its stable category and consumer-safe copy.',
+);
+const exhaustedClassification = generationFailure.indexOf('if (httpSuccess && lengthExhausted)');
+const emptyClassification = generationFailure.indexOf('if (httpSuccess && contentWasReported');
+expect(ordered(exhaustedClassification, emptyClassification) && !/deepseek/i.test(generationFailure), 'Length exhaustion must be classified before generic empty output and without model-specific logic.');
+expect(
+  generationFailure.includes('choice?.error')
+    && generationFailure.includes("['error', 'content_filter'].includes")
+    && generationFailure.includes('[408, 504, 524]'),
+  'Choice-level provider failures and all known timeout statuses must remain terminal provider categories.',
+);
+const providerCompletionStart = providerRuntime.indexOf('async function requestOpenRouterCompletion');
+const providerCompletionEnd = providerRuntime.indexOf('async function generateOpenRouterVisualizer', providerCompletionStart);
+const providerCompletionFlow = providerCompletionStart >= 0 && providerCompletionEnd > providerCompletionStart
+  ? providerRuntime.slice(providerCompletionStart, providerCompletionEnd)
+  : '';
+const completedProviderFailureClassification = providerCompletionFlow.indexOf('const failureCategory = classifyGenerationFailure({');
+expect(
+  completedProviderFailureClassification >= 0
+    && providerCompletionFlow.indexOf('if (failureCategory)', completedProviderFailureClassification) > completedProviderFailureClassification
+    && providerCompletionFlow.indexOf('throw error;', completedProviderFailureClassification) > completedProviderFailureClassification,
+  'Successful HTTP responses with terminal failure evidence must throw before artifact validation or repair.',
+);
+expect(
+  traceBridge.includes("REQUEST_POLICY_SCHEMA = 'visualizer-request-policy-v1'")
+    && traceBridge.includes("if (!record || record.claims.has('request-dispatched')) return false;")
+    && traceBridge.includes('schema: REQUEST_POLICY_SCHEMA'),
+  'Trace request policy must be versioned, merged and immutable after dispatch.',
+);
+expect(
+  traceBridge.includes('parameters: parametersFromBody(safeBody)')
+    && traceBridge.includes('policy: sanitizeTraceValue(detail.policy ?? record.requestPolicy)')
+    && traceBridge.includes('serializedBody'),
+  'Trace capture must retain the sanitized final request parameters, policy and serialized body.',
+);
+expect(
+  traceBridge.includes('detail.nativeFinishReason')
+    && traceBridge.includes('parsedPayload?.choices?.[0]?.native_finish_reason')
+    && traceBridge.includes('native_finish_reason: nativeFinishReason'),
+  'Trace response evidence must retain the provider-native finish reason in both compatibility fields.',
+);
+
+// Bounded local fit evidence and truthful model discovery.
+expect(
+  modelFitEvidence.includes("MODEL_FIT_EVIDENCE_SCHEMA = 'visualizer-model-fit-v1'")
+    && modelFitEvidence.includes("MODEL_FIT_MATRIX_SCHEMA = 'visualizer-model-fit-matrix-v1'")
+    && ['UNTESTED', 'TESTED', 'PROVEN', 'KNOWN_INCOMPATIBLE'].every(status => modelFitEvidence.includes(`${status}: '${status}'`)),
+  'Model-fit evidence and its four truthful statuses must remain explicitly versioned.',
+);
+expect(
+  [
+    'modelId',
+    'reasoningChoice',
+    'promptProfileId',
+    'promptVersion',
+    'promptHash',
+    'generationEnvelopeMajorVersion',
+    'audioApiVersion',
+    'reliabilityVersion',
+    'runtimeVersion',
+  ].every(field => modelFitEvidence.includes(field)),
+  'Model-fit configuration identity must retain every compatibility dimension.',
+);
+expect(
+  modelFitEvidence.includes('MAX_MODEL_FIT_CONFIGURATIONS = 96')
+    && modelFitEvidence.includes('MAX_RECENT_MODEL_FIT_EVIDENCE = 80')
+    && modelFitEvidence.includes('MAX_RECENT_EVIDENCE_PER_CONFIGURATION = 12')
+    && modelFitEvidence.includes('MAX_MODEL_FIT_METRIC_SAMPLES = 31')
+    && modelFitEvidence.includes('document.configurations = document.configurations.slice(0, this.limits.configurations)'),
+  'Persisted model-fit configurations, evidence and metric samples must stay bounded.',
+);
+expect(
+  modelFitEvidence.includes('if (known) return MODEL_FIT_STATUSES.KNOWN_INCOMPATIBLE;')
+    && modelFitEvidence.includes('if (ready > 0 || live > 0) return MODEL_FIT_STATUSES.PROVEN;')
+    && modelFitEvidence.includes('return attempts > 0 ? MODEL_FIT_STATUSES.TESTED : MODEL_FIT_STATUSES.UNTESTED;'),
+  'Model-fit status must derive only from deterministic incompatibility, qualifying proof or actual attempts.',
+);
+expect(
+  modelFitEvidence.includes('MODEL_FIT_RESULT_CATEGORIES.OUTPUT_BUDGET_EXHAUSTED_BEFORE_ARTIFACT')
+    && modelFitEvidence.includes('throw new TypeError(`${code} is observational evidence, not a deterministic incompatibility.`)')
+    && modelFitEvidence.includes("KNOWN_INCOMPATIBLE: 'An explicit deterministic incompatibility mark; never inferred from an ordinary failure.'"),
+  'Output exhaustion and ordinary failures must remain evidence, never inferred incompatibility.',
+);
+expect(
+  modelFitEvidence.includes('export function sanitizeModelFitMatrixValue')
+    && modelFitEvidence.includes('/waveform|spectrum|rawaudio|audiosamples|audioframe|audiodata/')
+    && modelFitEvidence.includes('/song|nowplaying|trackname|tracktitle|artistname|albumname/')
+    && modelFitEvidence.includes('return deepFreeze(sanitizeModelFitMatrixValue(bundle));'),
+  'Model-fit matrix exports must recursively remove secrets, media and song identity before freezing.',
+);
+expect(
+  modelProductCatalog.includes("MODEL_PRODUCT_CATALOG_SCHEMA = 'visualizer-model-product-catalog-v1'")
+    && modelProductCatalog.includes('MODEL_PRODUCT_CATALOG = Object.freeze([])')
+    && modelProductCatalog.includes('OPERATOR_APPROVED_MODEL_ENTRIES = MODEL_PRODUCT_CATALOG'),
+  'The operator-approved product catalog must remain versioned and empty until exact IDs are approved.',
+);
+expect(
+  modelGuide.includes('MODEL_PRODUCT_CATALOG.map(catalogEntryId)')
+    && modelGuide.includes('row.status === MODEL_FIT_STATUSES.PROVEN')
+    && modelGuide.includes('Nothing is promoted automatically. Experimental models remain available when you choose to explore.'),
+  'Recommended models must be grounded in operator catalog entries or successful exact local evidence.',
+);
+expect(
+  modelGuide.includes('let appCatalogReceived = false')
+    && modelGuide.includes('appCatalogReceived = true')
+    && modelGuide.includes('if (!appCatalogReceived)'),
+  'The app-authoritative catalog must not be replaced by a late duplicate discovery response.',
+);
+const experimentalScoreStart = modelGuide.indexOf('function experimentalScore');
+const experimentalScoreEnd = modelGuide.indexOf('function isFastFamily', experimentalScoreStart);
+const experimentalScoreFlow = experimentalScoreStart >= 0 && experimentalScoreEnd > experimentalScoreStart
+  ? modelGuide.slice(experimentalScoreStart, experimentalScoreEnd)
+  : '';
+expect(
+  experimentalScoreFlow.includes('design * 2 + coding * 5 + intelligence * 1.5')
+    && !/reasoning/i.test(experimentalScoreFlow),
+  'Experimental discovery scoring must not award a reasoning-capability bonus.',
+);
+expect(
+  modelGuide.includes('let consumerDisclosed = false;')
+    && modelGuide.includes('return developerMode || consumerDisclosed;')
+    && modelGuide.includes("supplemental.heading.textContent = developerMode ? 'Experimental catalog signals' : 'Experimental starting points';")
+    && modelGuide.includes('It is discovery, not verification.'),
+  'Normal catalog exploration must be progressively disclosed while developer mode opens truthful experimental signals.',
+);
+expect(
+  app.includes('const evidenceByModel = devMode')
+    && app.includes("const modelMeta = [priceLabel(model), devMode ? fitState : ''].filter(Boolean).join(")
+    && app.includes('if (devMode) button.dataset.modelFitState = fitState;'),
+  'Technical model-fit statuses must stay out of normal model rows and appear only in developer mode.',
+);
+
+// Global Favorite transport and post-normalization sensitivity controls.
+expect(
+  keyboardTransport.includes("KEYBOARD_TRANSPORT_VERSION = 'visualizer-keyboard-transport-v1'")
+    && keyboardTransport.includes("ArrowLeft: 'favorite-previous'")
+    && keyboardTransport.includes("ArrowRight: 'favorite-next'")
+    && keyboardTransport.includes("ArrowUp: 'sensitivity-increase'")
+    && keyboardTransport.includes("ArrowDown: 'sensitivity-decrease'"),
+  'The four global arrow commands must retain their exact Favorite and sensitivity mapping.',
+);
+expect(
+  keyboardTransport.includes('if (!Array.isArray(favorites) || favorites.length === 0) return null;')
+    && keyboardTransport.includes('return direction > 0 ? favorites[0] : favorites[favorites.length - 1];')
+    && keyboardTransport.includes('(currentIndex + direction + favorites.length) % favorites.length'),
+  'Favorite transport must safely handle zero entries, non-Favorite LIVE art and wraparound.',
+);
+expect(
+  keyboardTransport.includes('event.defaultPrevented')
+    && keyboardTransport.includes('event.isComposing')
+    && keyboardTransport.includes('event.altKey')
+    && keyboardTransport.includes('candidates.some(elementOrAncestorOwnsArrows)')
+    && keyboardTransport.includes('documentHasOpenSemanticOwner(documentRef)'),
+  'Global arrows must yield to consumed events, modifiers, editors, controls and open overlays.',
+);
+const favoriteKeyboardStart = app.indexOf('async function openFavoriteFromKeyboard');
+const favoriteKeyboardEnd = app.indexOf('async function toggleReadyJobFavorite', favoriteKeyboardStart);
+const favoriteKeyboardFlow = favoriteKeyboardStart >= 0 && favoriteKeyboardEnd > favoriteKeyboardStart
+  ? app.slice(favoriteKeyboardStart, favoriteKeyboardEnd)
+  : '';
+expect(
+  favoriteKeyboardFlow.includes('if (recovering || reopening || deletingGeneration || promotion) return false;')
+    && favoriteKeyboardFlow.includes('groups.favorites')
+    && favoriteKeyboardFlow.includes('return openGeneration(target.generation, { close: false, quiet: true });'),
+  'Favorite arrows must honor operation guards and route through the safe saved-Dream Open path.',
+);
+const openGenerationStart = app.indexOf('async function openGeneration');
+const openGenerationEnd = app.indexOf('function featuredArtifact', openGenerationStart);
+const openGenerationFlow = openGenerationStart >= 0 && openGenerationEnd > openGenerationStart
+  ? app.slice(openGenerationStart, openGenerationEnd)
+  : '';
+expect(
+  openGenerationFlow.includes('withCandidateSlot(async () => {')
+    && openGenerationFlow.includes('const candidateSandbox = standbySlot.sandbox;')
+    && openGenerationFlow.includes('identityToken = stageLiveCandidate(')
+    && openGenerationFlow.includes('const watchdog = await promoteCandidate({')
+    && openGenerationFlow.includes('commitLiveCandidate(identityToken);'),
+  'Favorite and saved-Dream Open must validate in the standby slot and commit LIVE only during promotion.',
+);
+expect(
+  app.includes('openingStatusTimer = setTimeout(() => {')
+    && app.includes('revision !== openingStatusRevision || !reopening')
+    && app.includes('}, 150);')
+    && app.includes('endOpeningStatus(openingRevision);'),
+  'Favorite opening feedback must appear only after 150ms and be cancelled on terminal Open paths.',
+);
+
+expect(
+  audioSensitivity.includes("AUDIO_SENSITIVITY_SCHEMA = 'visualizer-audio-sensitivity-v1'")
+    && audioSensitivity.includes('DEFAULT_AUDIO_SENSITIVITY_PERCENT = 100')
+    && audioSensitivity.includes('MIN_AUDIO_SENSITIVITY_PERCENT = 50')
+    && audioSensitivity.includes('MAX_AUDIO_SENSITIVITY_PERCENT = 200')
+    && audioSensitivity.includes('AUDIO_SENSITIVITY_STEP_PERCENT = 10'),
+  'Audio sensitivity must remain a versioned 50-200% range in 10% steps with a 100% default.',
+);
+expect(
+  audioSensitivity.includes("AUDIO_SENSITIVITY_STORAGE_KEY = 'ai-visualizer.audio-sensitivity.v1'")
+    && audioSensitivity.includes('persisted.schema !== AUDIO_SENSITIVITY_SCHEMA')
+    && audioSensitivity.includes('storage.setItem(AUDIO_SENSITIVITY_STORAGE_KEY, JSON.stringify(state))'),
+  'Sensitivity persistence must reject stale schemas and save only the versioned controller state.',
+);
+expect(
+  audioSensitivity.includes("INTENSITY_FIELDS = Object.freeze(['volume', 'peak', 'transient', 'beat', 'spectralFlux'])")
+    && audioSensitivity.includes("BAND_FIELDS = Object.freeze(['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble'])")
+    && audioSensitivity.includes('scaleWaveform(value, scale)')
+    && audioSensitivity.includes('const transformed = { ...sample };'),
+  'Sensitivity must transform all reactive fields with bounded waveform symmetry without mutating engine samples.',
+);
+expect(
+  app.includes('applyAudioSensitivity(audio.sample(timestamp), sensitivityPercent)')
+    && !/audio-sensitivity|sensitivityPercent/.test(providerRuntime)
+    && !/audio-sensitivity|sensitivityPercent/.test(costGuard),
+  'Sensitivity must run after host audio normalization and remain isolated from provider requests and spend policy.',
+);
+expect(
+  index.includes('id="sensitivityInput" type="range" min="50" max="200" step="10" value="100"')
+    && app.includes('sensitivityPercent,')
+    && app.includes('showSensitivityHud(sensitivityController.increase())')
+    && app.includes('showSensitivityHud(sensitivityController.decrease())'),
+  'Normal sensitivity controls and developer state exposure must stay wired to the same bounded controller.',
+);
 
 // Truthful inference lifecycle remains intact.
 expect(index.includes('./dream-status.js') && index.includes('dreamCancelButton'), 'Dream request lifecycle and cancellation UI must remain loaded.');
@@ -153,6 +582,11 @@ const openStart = app.indexOf('async function openGeneration');
 const dreamFlow = app.slice(dreamStart, openStart);
 expect(dreamStart >= 0 && openStart > dreamStart && !dreamFlow.includes('stageLiveCandidate(') && !dreamFlow.includes('promoteCandidate({'), 'Successful background generation must not stage identity or auto-promote LIVE.');
 expect(dreamFlow.indexOf('await store.put(generation)') < dreamFlow.indexOf('DREAM_JOB_PHASES.READY'), 'Ready UI must be published only after durable local artifact persistence.');
+expect(ordered(
+  dreamFlow.indexOf('result = await generateVisualizer({'),
+  dreamFlow.indexOf('throw error;', dreamFlow.indexOf('result = await generateVisualizer({')),
+  dreamFlow.indexOf('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1)'),
+), 'Provider-terminal failures must leave the Dream before the artifact-only repair loop.');
 const openFlow = app.slice(openStart, app.indexOf('async function renderLibrary'));
 expect(openFlow.includes('stageLiveCandidate(') && openFlow.includes('promoteCandidate({') && openFlow.includes("DREAM_JOB_PHASES.OPENING"), 'Explicit user Open must own staging, watchdog promotion and opening state.');
 expect(providerRuntime.includes('promptProfile') && providerRuntime.includes('buildGenerationMessages(promptProfile)') && providerRuntime.includes('buildRepairMessages(String(raw || \'\').slice(0, 180000), problem, promptProfile)'), 'Background jobs must snapshot and reuse the exact prompt profile for generation and repair.');
@@ -202,9 +636,12 @@ expect(dreamTrace.includes('rawBody') && dreamTrace.includes('rawOutput') && dre
 expect(dreamTrace.includes('recordDreamTraceRollback') && dreamTrace.includes('runtime:rolled-back'), 'Late runtime rollback must remain durable trace aftercare.');
 expect(traceBridge.includes('Symbol') && traceBridge.includes('Map') && traceBridge.includes('correlation'), 'Provider attempts need per-request correlation rather than a global latest request.');
 expect(traceBridge.includes('stripTraceContext') && traceBridge.includes('authorization'), 'Trace metadata must be removed before native fetch and authorization values sanitized.');
-const maxTokenMutation = costGuard.indexOf('body.max_tokens = allowedMax');
-const finalRequestCapture = costGuard.indexOf('captureFinalRequest(traceContext');
-expect(maxTokenMutation >= 0 && finalRequestCapture > maxTokenMutation, 'Final request capture must occur after spend-guard max_tokens mutation.');
+const finalMaxTokenMutation = guardedCompletionFlow.indexOf('body[maxTokenParameter] = envelope.finalMaxTokens;');
+const finalUsageMutation = guardedCompletionFlow.indexOf('body.usage =');
+const finalPriceMutation = guardedCompletionFlow.indexOf('enforceProviderPriceCeiling(body, envelope);');
+const finalRequestSerialization = guardedCompletionFlow.indexOf('const serializedBody = JSON.stringify(body);');
+const finalRequestCapture = guardedCompletionFlow.indexOf('captureFinalRequest(traceContext');
+expect(ordered(finalMaxTokenMutation, finalUsageMutation, finalPriceMutation, finalRequestSerialization, finalRequestCapture), 'Final request capture must follow envelope max, usage-accounting, route-price and serialization mutations.');
 expect(providerRuntime.includes('rawBodyText') && providerRuntime.includes('response.text()'), 'Provider runtime must retain the exact decoded response body before parsing.');
 expect(dreamStatus.includes('dreamTimeoutError') && app.includes("error?.code || 'PROVIDER_OR_PIPELINE_FAILURE'"), 'Response-body timeout must not be mislabeled as user cancellation.');
 expect(!traceViewer.includes('.innerHTML') && !traceViewer.includes('srcdoc') && traceViewer.includes('.textContent'), 'Trace viewer must render provider output and HTML as inert text only.');
@@ -213,8 +650,55 @@ expect(app.includes('runTransparencySelfTest') && app.includes('latestTrace') &&
 expect(development.includes('npm.cmd run dev') && development.includes('LIVE') && development.includes('NEXT') && development.includes('runTransparencySelfTest'), 'VS Code development guide must document setup and Dream Transparency operation.');
 expect(workflow.includes('node --test --test-concurrency=1 tests/dream-transparency.contract.mjs'), 'CI must execute the pure Dream Transparency contract.');
 expect(workflow.includes('node --test --test-concurrency=1 tests/product-shell.contract.mjs'), 'CI must execute the pure Product Shell contract.');
+for (const contractPath of [
+  'tests/reasoning-settings.contract.mjs',
+  'tests/generation-envelope.contract.mjs',
+  'tests/provider-quality.contract.mjs',
+  'tests/model-fit-evidence.contract.mjs',
+  'tests/keyboard-transport.contract.mjs',
+  'tests/audio-sensitivity.contract.mjs',
+]) {
+  expect(workflow.includes(`node --test --test-concurrency=1 ${contractPath}`), `CI must explicitly execute ${contractPath}.`);
+}
 expect(transparencyContract.includes('DREAM_TRACE_SCHEMA') && transparencyBrowser.includes('runTransparencySelfTest'), 'Deterministic trace contract and real-host browser coverage must remain present.');
 expect(productShellContract.includes('ready is distinct from opening and LIVE') && productShellBrowser.includes('slow background job collapses'), 'Product Shell needs deterministic state contracts and real-host browser coverage.');
+
+expect(
+  reasoningSettingsContract.includes('Default is native omission, never an implicit Low or High')
+    && reasoningSettingsContract.includes('options use only metadata values and preserve provider order')
+    && reasoningSettingsContract.includes('mandatory reasoning filters None'),
+  'Reasoning contract must cover native omission, exact metadata order and mandatory-None filtering.',
+);
+expect(
+  generationEnvelopeContract.includes('no universal ceiling; an affordable cheap model receives more than 14k')
+    && generationEnvelopeContract.includes('exact DeepSeek HTTP-200 empty length fixture is output-budget exhaustion')
+    && generationEnvelopeContract.includes('specific evidence must not collapse categories'),
+  'Generation-envelope contract must cover unbounded quality, the exact DeepSeek fixture and distinct failures.',
+);
+expect(
+  providerQualityContract.includes('Default omits reasoning while explicit effort uses the exact enforceable OpenRouter shape')
+    && providerQualityContract.includes('final trace captures policy, exact post-envelope body, sanitization, and native finish reason')
+    && providerQualityContract.includes('finalRequestCostCeiling'),
+  'Provider-quality contract must cover reasoning shape and final request/cost/finish trace evidence.',
+);
+expect(
+  modelFitEvidenceContract.includes('output-budget exhaustion is TESTED and never inferred incompatible')
+    && modelFitEvidenceContract.includes('global, per-configuration, metric, and configuration evidence remain bounded')
+    && modelFitEvidenceContract.includes('recursively remove secrets and media'),
+  'Model-fit contract must cover truthful status, all bounds and recursive export sanitization.',
+);
+expect(
+  keyboardTransportContract.includes('Left selects the previous Favorite')
+    && keyboardTransportContract.includes('zero Favorites is safe')
+    && keyboardTransportContract.includes('dialog, drawer, and open popover state prevent global shortcuts'),
+  'Keyboard contract must cover Favorite direction, empty safety and global shortcut guards.',
+);
+expect(
+  audioSensitivityContract.includes('post-engine transform scales and clamps all reactive fields')
+    && audioSensitivityContract.includes('injected local storage persists a versioned value')
+    && audioSensitivityContract.includes('non-reactive audio truth is unchanged'),
+  'Audio-sensitivity contract must cover post-engine scaling, persistence and unchanged non-reactive truth.',
+);
 
 // Real regression corpus and browser verification.
 expect(aetheriaFixture.includes('AETHERIA :: Resonant Topology') && aetheriaFixture.includes('gl.compileShader'), 'Real Gemini blank-screen output must remain a regression fixture.');
@@ -225,9 +709,24 @@ expect(browserTests.includes('valid-black-webgl'), 'CI must protect intentionall
 expect(browserTests.includes('webgl-dom-fallback'), 'CI must protect resilient DOM fallbacks when an advanced renderer fails.');
 expect(browserTests.includes('valid-css-only'), 'CI must protect CSS-only root-surface visualizers.');
 expect(browserTests.includes('trusted pause suspends generated RAF') && browserTests.includes('Calibration Bloom Featured art'), 'Browser corpus must protect trusted pause and shipped Featured art.');
+expect(
+  playwrightConfig.includes("testMatch: ['**/*.spec.mjs']")
+    && !/testIgnore:[^\n]*quality-first-controls/.test(playwrightConfig)
+    && qualityFirstBrowser.includes("test('exact reasoning metadata snapshots High into one quality-first request'")
+    && qualityFirstBrowser.includes("test('390x844 exposes consumer controls without overflow or developer evidence leakage'"),
+  'Playwright must auto-discover the quality-first browser contract, including mobile disclosure coverage.',
+);
+expect(
+  qualityFirstBrowser.includes('completionRequests).toBe(1)')
+    && qualityFirstBrowser.includes('trace.repairUsed).toBe(false)')
+    && qualityFirstBrowser.includes("failureCode).toBe('OUTPUT_BUDGET_EXHAUSTED_BEFORE_ARTIFACT')")
+    && /Opening \u00b7 Favorite First/.test(qualityFirstBrowser)
+    && /Sensitivity \u00b7 110%/.test(qualityFirstBrowser),
+  'Browser coverage must protect no-retry exhaustion, Favorite standby feedback and sensitivity transport.',
+);
 
 if (failures.length) {
-  console.error('Visualizer reliability contract failed:\n- ' + failures.join('\n- '));
+  console.error(`Visualizer reliability contract: FAIL (${failures.length} of ${assertionCount} assertions failed)\n- ${failures.join('\n- ')}`);
   process.exit(1);
 }
-console.log('Visualizer reliability contract: PASS');
+console.log(`Visualizer reliability contract: PASS (${assertionCount} assertions)`);

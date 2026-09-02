@@ -1,0 +1,43 @@
+{
+  "requestedModel": "deepseek/deepseek-v4-flash-0731",
+  "request": {
+    "model": "deepseek/deepseek-v4-flash-0731",
+    "temperature": 1,
+    "max_tokens": 14000,
+    "stream": false
+  },
+  "response": {
+    "status": 200,
+    "payload": {
+      "id": "deepseek-v4-flash-0731-length-regression",
+      "model": "deepseek/deepseek-v4-flash-0731",
+      "choices": [
+        {
+          "index": 0,
+          "finish_reason": "length",
+          "native_finish_reason": "length",
+          "message": {
+            "role": "assistant",
+            "content": null
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 600,
+        "completion_tokens": 14000,
+        "total_tokens": 14600,
+        "completion_tokens_details": {
+          "reasoning_tokens": 12392
+        },
+        "cost": 0.004004
+      }
+    },
+    "assistantText": "",
+    "extractedHtml": "",
+    "resolvedModel": "deepseek/deepseek-v4-flash-0731"
+  },
+  "providerDurationMs": 190227,
+  "liveIdentity": {
+    "modelName": "Calibration Bloom"
+  }
+}

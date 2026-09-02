@@ -12,7 +12,7 @@ import {
 } from './openrouter.js';
 import { PROMPT_VERSION, AUDIO_API_VERSION, loadPromptProfile } from './prompt.js';
 import { VisualizerSandbox, validateVisualizerHtml } from './sandbox.js';
-import { DreamReliabilityHarness, DreamReliabilityError, FAILURE_CODES } from './reliability.js';
+import { DreamReliabilityHarness, DreamReliabilityError, FAILURE_CODES, RELIABILITY_SCHEMA } from './reliability.js';
 import { GenerationStore, DiagnosticStore } from './storage.js';
 import { createLiveIdentityController } from './live-identity.js';
 import { createPlaybackController, EXTERNAL_CAPTURE_PAUSE_COPY } from './playback-state.js';
@@ -33,6 +33,33 @@ import {
 import { beginTraceCapture, consumeTraceCapture } from './trace-bridge.js';
 import { DreamTraceViewer } from './trace-viewer.js';
 import {
+  createReasoningSelectionStore,
+  listReasoningOptions,
+  normalizeReasoningMetadata,
+} from './reasoning-settings.js';
+import { GENERATION_ENVELOPE_VERSION } from './generation-envelope.js';
+import {
+  MODEL_FIT_RESULT_CATEGORIES,
+  MODEL_FIT_STATUSES,
+  createModelFitConfigurationIdentity,
+  createModelFitEvidenceStore,
+  modelFitConfigurationKey,
+  modelFitMatrixText,
+  modelFitObservationFromDreamTrace,
+} from './model-fit-evidence.js';
+import {
+  GENERATION_FAILURE_CATEGORIES,
+  generationFailureCopy,
+} from './generation-failure.js';
+import {
+  applyAudioSensitivity,
+  createAudioSensitivityController,
+} from './audio-sensitivity.js';
+import {
+  favoriteTargetForArrow,
+  globalArrowCommand,
+} from './keyboard-transport.js';
+import {
   addDiagnosticTimeline,
   applyProviderResult,
   copyText,
@@ -46,6 +73,20 @@ import {
 } from './diagnostics.js';
 
 const $ = selector => document.querySelector(selector);
+const localSettingsStorage = (() => {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return null;
+    return {
+      getItem(key) { try { return storage.getItem(key); } catch { return null; } },
+      setItem(key, value) { try { storage.setItem(key, value); } catch { /* Keep the page usable without persistence. */ } },
+      removeItem(key) { try { storage.removeItem(key); } catch { /* Keep the page usable without persistence. */ } },
+    };
+  } catch {
+    return null;
+  }
+})();
+const VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v1';
 const els = {
   stage: $('#stage'),
   frame: $('#visualizerFrame'),
@@ -58,6 +99,10 @@ const els = {
   liveIdentityName: $('#liveIdentityName'),
   modelButton: $('#modelButton'),
   selectedModelName: $('#selectedModelName'),
+  reasoningControl: $('#reasoningControl'),
+  reasoningSelect: $('#reasoningSelect'),
+  reasoningState: $('#reasoningState'),
+  reasoningHelp: $('#reasoningHelp'),
   switcherCurrent: $('#switcherCurrent'),
   switcherButton: $('#switcherButton'),
   dreamButton: $('#dreamButton'),
@@ -65,6 +110,11 @@ const els = {
   audioButton: $('#audioButton'),
   audioButtonLabel: $('#audioButtonLabel'),
   audioDot: $('#audioDot'),
+  sensitivityInput: $('#sensitivityInput'),
+  sensitivityValue: $('#sensitivityValue'),
+  resetSensitivity: $('#resetSensitivity'),
+  sensitivityHud: $('#sensitivityHud'),
+  favoriteOpeningStatus: $('#favoriteOpeningStatus'),
   libraryButton: $('#libraryButton'),
   fullscreenButton: $('#fullscreenButton'),
   infoButton: $('#infoButton'),
@@ -100,6 +150,7 @@ const els = {
   exportFeaturedCandidate: $('#exportFeaturedCandidate'),
   retestCurrent: $('#retestCurrent'),
   transparencySelfTest: $('#transparencySelfTest'),
+  copyModelTestMatrix: $('#copyModelTestMatrix'),
   pickDiagnosticModel: $('#pickDiagnosticModel'),
   clearDiagnostics: $('#clearDiagnostics'),
   traceViewer: $('#traceViewer'),
@@ -154,11 +205,19 @@ const MAX_VOLATILE_DIAGNOSTICS = 8;
 const identityController = createLiveIdentityController();
 const playbackController = createPlaybackController();
 const dreamJobController = createDreamJobController();
+const reasoningSelectionStore = createReasoningSelectionStore({ storage: localSettingsStorage });
+const sensitivityController = createAudioSensitivityController({ storage: localSettingsStorage });
+const modelFitEvidenceStore = createModelFitEvidenceStore({ storage: localSettingsStorage });
 const fixtureDiagnostics = new Map();
 let dreamSwitcher = null;
 let featuredDreams = [];
 let currentDreamKey = 'featured:calibration-bloom';
 let drawerReturnFocus = null;
+let selectedReasoningSelection = null;
+let sensitivityHudTimer = 0;
+let openingStatusTimer = 0;
+let openingStatusRevision = 0;
+let sensitivityPercent = sensitivityController.snapshot().sensitivityPercent;
 
 function renderIdentity(snapshot = identityController.snapshot()) {
   els.liveIdentityName.textContent = snapshot.live.displayName;
@@ -312,6 +371,112 @@ function updateAudioState(state) {
   if (!connected && state.label) showToast(state.label);
 }
 
+function effortLabel(effort) {
+  const value = String(effort || '');
+  return value ? `${value[0].toUpperCase()}${value.slice(1)}` : 'Default';
+}
+
+function announceReasoningSelection(selection) {
+  window.dispatchEvent(new CustomEvent('visualizer:reasoning-selection-changed', {
+    detail: {
+      modelId: selection?.modelId || '',
+      mode: selection?.mode || 'default',
+      effort: selection?.effort || null,
+    },
+  }));
+}
+
+function renderReasoningControl({ announceStale = false } = {}) {
+  if (!els.reasoningSelect || !els.reasoningState || !els.reasoningHelp) return null;
+  if (!selectedModel) {
+    selectedReasoningSelection = null;
+    els.reasoningSelect.replaceChildren(new Option('Default', 'default'));
+    els.reasoningSelect.disabled = true;
+    els.reasoningState.textContent = 'Choose a model';
+    els.reasoningHelp.textContent = 'Default preserves the exact model\'s native reasoning behavior.';
+    return null;
+  }
+
+  const metadata = normalizeReasoningMetadata(selectedModel);
+  let selection = reasoningSelectionStore.snapshot(selectedModel);
+  if (selection.staleFallback) {
+    selection = reasoningSelectionStore.save(selectedModel, { mode: 'default', effort: null });
+    if (announceStale) showToast('That saved reasoning level is no longer supported. Reasoning returned to Default.');
+  }
+  selectedReasoningSelection = selection;
+  const options = listReasoningOptions(selectedModel);
+  els.reasoningSelect.replaceChildren(...options.map(option => new Option(option.label, option.value)));
+  els.reasoningSelect.value = selection.mode === 'explicit' ? selection.effort : 'default';
+  els.reasoningSelect.disabled = options.length === 1;
+  els.reasoningState.textContent = metadata.hasEffortControls
+    ? (selection.mode === 'explicit' ? effortLabel(selection.effort) : 'Native default')
+    : metadata.source.reasoning || selectedModel.capabilities?.reasoning
+      ? 'Model controlled'
+      : 'Default only';
+  els.reasoningHelp.textContent = metadata.hasEffortControls
+    ? 'Default sends no override. Other choices use only levels this exact model advertises.'
+    : 'This exact model does not advertise selectable reasoning levels.';
+  return selection;
+}
+
+function setReasoningFromUi() {
+  if (!selectedModel || !els.reasoningSelect) return;
+  const value = els.reasoningSelect.value;
+  const selection = reasoningSelectionStore.save(selectedModel, value === 'default'
+    ? { mode: 'default', effort: null }
+    : { mode: 'explicit', effort: value });
+  selectedReasoningSelection = selection;
+  renderReasoningControl();
+  announceReasoningSelection(selection);
+  showToast(`Reasoning set to ${selection.mode === 'explicit' ? effortLabel(selection.effort) : 'Default'}.`);
+}
+
+function renderSensitivity(snapshot = sensitivityController.snapshot()) {
+  const percent = snapshot.sensitivityPercent;
+  sensitivityPercent = percent;
+  if (els.sensitivityInput) els.sensitivityInput.value = String(percent);
+  if (els.sensitivityValue) els.sensitivityValue.textContent = `${percent}%`;
+}
+
+function showSensitivityHud(snapshot = sensitivityController.snapshot()) {
+  if (!els.sensitivityHud) return;
+  clearTimeout(sensitivityHudTimer);
+  els.sensitivityHud.textContent = `Sensitivity · ${snapshot.sensitivityPercent}%`;
+  els.sensitivityHud.hidden = false;
+  sensitivityHudTimer = setTimeout(() => {
+    els.sensitivityHud.hidden = true;
+    els.sensitivityHud.textContent = '';
+  }, 1400);
+}
+
+function beginOpeningStatus(generation) {
+  const revision = ++openingStatusRevision;
+  clearTimeout(openingStatusTimer);
+  if (els.favoriteOpeningStatus) {
+    els.favoriteOpeningStatus.hidden = true;
+    els.favoriteOpeningStatus.textContent = '';
+  }
+  openingStatusTimer = setTimeout(() => {
+    if (revision !== openingStatusRevision || !reopening || !els.favoriteOpeningStatus) return;
+    const name = generation?.title || generation?.modelName || generation?.modelId || 'Dream';
+    els.favoriteOpeningStatus.textContent = `Opening · ${name}`;
+    els.favoriteOpeningStatus.hidden = false;
+  }, 150);
+  return revision;
+}
+
+function endOpeningStatus(revision) {
+  if (revision !== openingStatusRevision) return;
+  clearTimeout(openingStatusTimer);
+  openingStatusRevision += 1;
+  if (els.favoriteOpeningStatus) {
+    els.favoriteOpeningStatus.hidden = true;
+    els.favoriteOpeningStatus.textContent = '';
+  }
+}
+
+sensitivityController.subscribe(renderSensitivity);
+
 playbackController.subscribe(renderPlayback);
 
 function dreamLifecycleDetail(phase, eventDetail = {}) {
@@ -413,13 +578,17 @@ function handleSandboxEvent(sandbox, message) {
 function setSelectedModel(model) {
   selectedModel = model;
   if (model) {
-    localStorage.setItem('ai-visualizer.selected-model', model.id);
+    localSettingsStorage?.setItem('ai-visualizer.selected-model', model.id);
     els.modelButton.title = `${model.id}${priceLabel(model) ? ` · ${priceLabel(model)}` : ''}`;
   } else {
     els.modelButton.removeAttribute('title');
   }
   setNextIdentity(model);
+  renderReasoningControl({ announceStale: els.modelDrawer?.classList.contains('is-open') });
   renderModels();
+  window.dispatchEvent(new CustomEvent('visualizer:selected-model-changed', {
+    detail: { modelId: model?.id || '' },
+  }));
 }
 
 function openDrawer(drawer) {
@@ -504,6 +673,9 @@ function scheduleUiHide() {
 function renderModels() {
   const query = els.modelSearch.value.trim().toLowerCase();
   const filtered = models.filter(model => !query || `${model.name} ${model.id} ${model.provider}`.toLowerCase().includes(query));
+  const evidenceByModel = devMode
+    ? new Map(modelFitEvidenceStore.snapshot().models.map(evidence => [evidence.modelId, evidence]))
+    : new Map();
   const fragment = document.createDocumentFragment();
   filtered.slice(0, 650).forEach(model => {
     const button = document.createElement('button');
@@ -511,7 +683,10 @@ function renderModels() {
     button.className = 'model-option';
     button.setAttribute('role', 'option');
     button.setAttribute('aria-selected', String(selectedModel?.id === model.id));
-    button.innerHTML = `<span><span class="model-option__name">${escapeHtml(model.name)}</span><br><span class="model-option__provider">${escapeHtml(model.provider)}</span></span><span class="model-option__meta">${escapeHtml(priceLabel(model))}</span>`;
+    const fitState = evidenceByModel.get(model.id)?.status || MODEL_FIT_STATUSES.UNTESTED;
+    const modelMeta = [priceLabel(model), devMode ? fitState : ''].filter(Boolean).join(' · ');
+    if (devMode) button.dataset.modelFitState = fitState;
+    button.innerHTML = `<span><span class="model-option__name">${escapeHtml(model.name)}</span><br><span class="model-option__provider">${escapeHtml(model.provider)}</span></span><span class="model-option__meta">${escapeHtml(modelMeta)}</span>`;
     button.addEventListener('click', () => {
       setSelectedModel(model);
       closeDrawers();
@@ -569,7 +744,10 @@ async function getDiagnosticRecord(id) {
   return fixtureDiagnostics.get(id) || volatileDiagnostics.get(id) || diagnosticStore.get(id);
 }
 
-function startTraceAttempt(diagnostic, kind, model) {
+function startTraceAttempt(diagnostic, kind, model, {
+  reasoningSelection = null,
+  generationConfiguration = null,
+} = {}) {
   diagnostic.trace = appendDreamAttempt(diagnostic.trace, {
     kind,
     requestedModelId: model.id,
@@ -579,6 +757,17 @@ function startTraceAttempt(diagnostic, kind, model) {
     diagnosticId: diagnostic.id,
   });
   const attempt = diagnostic.trace.attempts.at(-1);
+  if (reasoningSelection || generationConfiguration) {
+    diagnostic.trace = patchDreamAttempt(diagnostic.trace, attempt.id, {
+      request: {
+        policy: {
+          userReasoningSelection: reasoningSelection,
+          modelFitConfiguration: generationConfiguration,
+          generationEnvelopeVersion: GENERATION_ENVELOPE_VERSION,
+        },
+      },
+    });
+  }
   const captureContext = beginTraceCapture({
     traceId: diagnostic.trace.id,
     attemptId: attempt.id,
@@ -586,6 +775,8 @@ function startTraceAttempt(diagnostic, kind, model) {
     modelId: model.id,
     attemptNumber: attempt.number,
     kind,
+    reasoningSelection,
+    generationConfiguration,
   });
   return { id: attempt.id, number: attempt.number, kind, captureContext, absorbed: false, closed: false };
 }
@@ -978,13 +1169,15 @@ function friendlyFailure(failure, repairUsed) {
     case FAILURE_CODES.PERFORMANCE_COLLAPSE:
       return `${prefix.toLowerCase()}became unstable, so your previous visual is still here.`;
     case FAILURE_CODES.INVALID_HTML:
-      return `${prefix.toLowerCase()}did not return a complete visualizer document.`;
+      return `${prefix.toLowerCase()}did not return a complete visualizer document, so your current Dream is still here.`;
     default:
       return `${prefix.toLowerCase()}could not open safely. Your previous visualizer is still here.`;
   }
 }
 
 function friendlyPipelineFailure(failure) {
+  const classifiedCopy = generationFailureCopy(failure?.code);
+  if (classifiedCopy) return classifiedCopy;
   const sanitized = String(sanitizeTraceValue(failure?.message || 'The AI service could not finish this Dream.'))
     .replace(/OpenRouter/gi, 'The AI service')
     .replace(/\bprovider\b/gi, 'AI service')
@@ -994,12 +1187,108 @@ function friendlyPipelineFailure(failure) {
   return `${sanitized.slice(0, 240)}${/[.!?]$/.test(sanitized) ? '' : '.'}`;
 }
 
-async function runRepair(result, failureReport, diagnostic, signal, requestedModel, promptProfile) {
+function modelFitConfiguration(model, promptProfile, reasoningSelection) {
+  return createModelFitConfigurationIdentity({
+    modelId: model.id,
+    reasoningSelection,
+    promptProfileId: promptProfile.id,
+    promptVersion: PROMPT_VERSION,
+    promptHash: promptProfile.briefHash,
+    generationEnvelopeVersion: GENERATION_ENVELOPE_VERSION,
+    audioApiVersion: AUDIO_API_VERSION,
+    reliabilityVersion: RELIABILITY_SCHEMA,
+    runtimeVersion: VISUALIZER_RUNTIME_VERSION,
+  });
+}
+
+function modelFitConfigurationForTrace(diagnostic, model, promptProfile, fallbackSelection) {
+  const appliedSelection = [...(diagnostic?.trace?.attempts || [])].reverse()
+    .map(attempt => attempt?.request?.policy?.appliedReasoningSelection)
+    .find(Boolean);
+  return modelFitConfiguration(model, promptProfile, appliedSelection || fallbackSelection);
+}
+
+function modelFitVersions(promptProfile = loadPromptProfile()) {
+  return {
+    promptProfileId: promptProfile.id,
+    promptVersion: PROMPT_VERSION,
+    promptHash: promptProfile.briefHash,
+    generationEnvelopeMajorVersion: 1,
+    audioApiVersion: AUDIO_API_VERSION,
+    reliabilityVersion: RELIABILITY_SCHEMA,
+    runtimeVersion: VISUALIZER_RUNTIME_VERSION,
+  };
+}
+
+function publishModelFitEvidence(modelId) {
+  window.dispatchEvent(new CustomEvent('visualizer:model-fit-evidence-changed', {
+    detail: { modelId },
+  }));
+  if (devMode) {
+    renderModels();
+    scheduleDiagnosticsRender();
+  }
+}
+
+function recordDiagnosticModelFit(diagnostic, configuration, result = {}) {
+  try {
+    const observation = modelFitObservationFromDreamTrace(diagnostic.trace, configuration, result);
+    const recorded = modelFitEvidenceStore.recordObservation(observation);
+    if (recorded.recorded) publishModelFitEvidence(configuration.modelId);
+    return recorded;
+  } catch (error) {
+    console.warn('Model-fit evidence could not be recorded:', error);
+    return null;
+  }
+}
+
+function recordOpenModelFit(generation, diagnostic, { succeeded, failureCode = '' } = {}) {
+  const configuration = generation?.modelFitConfiguration;
+  if (!configuration) return null;
+  try {
+    const recorded = modelFitEvidenceStore.recordObservation({
+      observationId: `${diagnostic.id}:${succeeded ? 'live-open' : 'open-failed'}`,
+      configuration,
+      attemptedAt: diagnostic.finishedAt || Date.now(),
+      resultCategory: succeeded
+        ? MODEL_FIT_RESULT_CATEGORIES.LIVE_OPEN
+        : failureCode || MODEL_FIT_RESULT_CATEGORIES.RUNTIME_RELIABILITY_FAILURE,
+      liveSuccess: Boolean(succeeded),
+      openSuccess: Boolean(succeeded),
+      providerAttemptCount: 0,
+      artifactBytes: new TextEncoder().encode(String(generation.html || '')).byteLength,
+    });
+    if (recorded.recorded) publishModelFitEvidence(configuration.modelId);
+    return recorded;
+  } catch (error) {
+    console.warn('Model Open evidence could not be recorded:', error);
+    return null;
+  }
+}
+
+function markDeterministicModelIncompatibility(error, model) {
+  const deterministicReasons = new Set(['BATCH_ONLY', 'EXPIRED', 'NO_TEXT_OUTPUT', 'OUTPUT_TOO_SMALL', 'OUTPUT_LIMIT_UNENFORCEABLE']);
+  if (error?.code !== 'MODEL_NOT_LIVE_DREAM_COMPATIBLE' || !deterministicReasons.has(error?.eligibilityReason)) return;
+  try {
+    modelFitEvidenceStore.markModelKnownIncompatible(model.id, {
+      code: error.eligibilityReason,
+      source: 'openrouter live catalog eligibility',
+    });
+    publishModelFitEvidence(model.id);
+  } catch (evidenceError) {
+    console.warn('Deterministic model incompatibility could not be recorded:', evidenceError);
+  }
+}
+
+async function runRepair(result, failureReport, diagnostic, signal, requestedModel, promptProfile, reasoningSelection, generationConfiguration) {
   const problem = failureReport?.repairProblem
     || `${failureReport?.failure?.code || 'ARTIFACT_FAILURE'}\n${failureReport?.failure?.message || 'The candidate failed its runtime check.'}`;
   diagnostic.repairUsed = true;
   diagnostic.repairProblem = problem;
-  const traceAttempt = startTraceAttempt(diagnostic, 'repair', requestedModel);
+  const traceAttempt = startTraceAttempt(diagnostic, 'repair', requestedModel, {
+    reasoningSelection,
+    generationConfiguration,
+  });
   patchTraceAttempt(diagnostic, traceAttempt, { artifact: { repairProblem: problem } });
   addDiagnosticTimeline(diagnostic, 'repair:requested', {
     failureCode: failureReport?.failure?.code || '',
@@ -1014,6 +1303,7 @@ async function runRepair(result, failureReport, diagnostic, signal, requestedMod
       signal,
       traceContext: traceAttempt.captureContext,
       promptProfile,
+      reasoningSelection,
     });
     absorbTraceCapture(diagnostic, traceAttempt, repaired);
   } catch (error) {
@@ -1050,11 +1340,15 @@ async function dream() {
 
   const requestedModel = structuredClone(selectedModel);
   const promptProfile = structuredClone(loadPromptProfile());
+  const reasoningSelection = structuredClone(reasoningSelectionStore.snapshot(requestedModel));
+  let generationConfiguration = modelFitConfiguration(requestedModel, promptProfile, reasoningSelection);
   const identityAtStart = identityController.snapshot();
   const generationId = crypto.randomUUID();
   const job = dreamJobController.start({
     model: requestedModel,
     promptProfile,
+    reasoningSelection,
+    generationConfiguration,
     detail: 'Your current Dream keeps playing while the model works.',
   });
 
@@ -1072,9 +1366,15 @@ async function dream() {
   diagnostic.promptVersion = PROMPT_VERSION;
   diagnostic.promptProfile = sanitizeTraceValue(promptProfile);
   diagnostic.audioApiVersion = AUDIO_API_VERSION;
+  diagnostic.reasoningSelection = sanitizeTraceValue(reasoningSelection);
+  diagnostic.generationEnvelopeVersion = GENERATION_ENVELOPE_VERSION;
+  diagnostic.modelFitConfiguration = sanitizeTraceValue(generationConfiguration);
   diagnostic.attempts = [];
   addDiagnosticTimeline(diagnostic, 'generation:started');
-  let traceAttempt = startTraceAttempt(diagnostic, 'generation', requestedModel);
+  let traceAttempt = startTraceAttempt(diagnostic, 'generation', requestedModel, {
+    reasoningSelection,
+    generationConfiguration,
+  });
   await persistDiagnostic(diagnostic);
 
   let result;
@@ -1085,8 +1385,16 @@ async function dream() {
         signal,
         traceContext: traceAttempt.captureContext,
         promptProfile,
+        reasoningSelection,
       });
       absorbTraceCapture(diagnostic, traceAttempt, result);
+      generationConfiguration = modelFitConfigurationForTrace(
+        diagnostic,
+        requestedModel,
+        promptProfile,
+        result.reasoningSelection || reasoningSelection,
+      );
+      diagnostic.modelFitConfiguration = sanitizeTraceValue(generationConfiguration);
     } catch (error) {
       absorbTraceCapture(diagnostic, traceAttempt);
       closeTraceAttempt(diagnostic, traceAttempt, 'failed', { error });
@@ -1137,6 +1445,10 @@ async function dream() {
           promptProfileId: promptProfile.id,
           promptProfileName: promptProfile.name,
           promptProfile: sanitizeTraceValue(promptProfile),
+          reasoningSelection: sanitizeTraceValue(result.reasoningSelection || reasoningSelection),
+          generationEnvelopeVersion: GENERATION_ENVELOPE_VERSION,
+          modelFitConfiguration: sanitizeTraceValue(generationConfiguration),
+          modelFitConfigurationKey: modelFitConfigurationKey(generationConfiguration),
           audioApiVersion: AUDIO_API_VERSION,
           createdAt,
           readyAt: createdAt,
@@ -1173,6 +1485,7 @@ async function dream() {
         diagnostic.generationId = generation.id;
         finishDiagnostic(diagnostic, { status: 'ready', generationId: generation.id });
         await persistDiagnostic(diagnostic);
+        recordDiagnosticModelFit(diagnostic, generationConfiguration, { readySuccess: true });
         dreamJobController.transition(job.id, DREAM_JOB_PHASES.READY, {
           artifact: { generationId: generation.id, favorite: false },
           detail: 'Ready whenever you are. Open it now or find it later in Recent.',
@@ -1192,16 +1505,30 @@ async function dream() {
       closeTraceAttempt(diagnostic, traceAttempt, 'repair-required', {
         artifact: { ...reliabilityEvidence(failureReport), repairProblem: failureReport?.repairProblem || '' },
       });
-      const repair = await runRepair(result, failureReport, diagnostic, signal, requestedModel, promptProfile);
+      const repair = await runRepair(
+        result,
+        failureReport,
+        diagnostic,
+        signal,
+        requestedModel,
+        promptProfile,
+        reasoningSelection,
+        generationConfiguration,
+      );
       result = repair.result;
       traceAttempt = repair.traceAttempt;
     }
   } catch (error) {
-    const cancelled = error?.name === 'AbortError' || /cancel/i.test(error?.message || '');
+    const cancelled = error?.name === 'AbortError' || error?.code === 'CANCELLED' || /cancel/i.test(error?.message || '');
+    const failureCode = cancelled
+      ? GENERATION_FAILURE_CATEGORIES.CANCELLED
+      : error?.code === 'DREAM_TIMEOUT'
+        ? GENERATION_FAILURE_CATEGORIES.PROVIDER_TIMEOUT
+        : error?.code || 'PROVIDER_OR_PIPELINE_FAILURE';
     const failure = error instanceof DreamReliabilityError
       ? error.failure
       : {
-          code: cancelled ? 'CANCELLED' : error?.code || 'PROVIDER_OR_PIPELINE_FAILURE',
+          code: failureCode,
           message: error?.message || 'That Dream failed.',
         };
     absorbTraceCapture(diagnostic, traceAttempt);
@@ -1217,6 +1544,14 @@ async function dream() {
       failureMessage: failure.message,
     });
     await persistDiagnostic(diagnostic);
+    generationConfiguration = modelFitConfigurationForTrace(
+      diagnostic,
+      requestedModel,
+      promptProfile,
+      reasoningSelection,
+    );
+    recordDiagnosticModelFit(diagnostic, generationConfiguration);
+    markDeterministicModelIncompatibility(error, requestedModel);
     const message = error instanceof DreamReliabilityError
       ? friendlyFailure(failure, diagnostic.repairUsed)
       : friendlyPipelineFailure(failure);
@@ -1224,7 +1559,7 @@ async function dream() {
     const latestJob = dreamJobController.snapshot();
     try {
       dreamJobController.transition(job.id, cancelled ? DREAM_JOB_PHASES.CANCELLED : DREAM_JOB_PHASES.FAILED, {
-        detail: cancelled ? 'No further request will be sent. Your current Dream is unchanged.' : `${message} Your current Dream is unchanged.`,
+        detail: cancelled ? 'No further request will be sent. Your current Dream is unchanged.' : message,
         failure,
         cancellable: false,
       });
@@ -1242,13 +1577,14 @@ async function dream() {
   }
 }
 
-async function openGeneration(generation, { close = true, jobId = '', source = 'local' } = {}) {
+async function openGeneration(generation, { close = true, jobId = '', source = 'local', quiet = false } = {}) {
   if (recovering || reopening || deletingGeneration || promotion) return false;
   const visibleJob = dreamJobController.snapshot();
   if (!jobId && source === 'local' && visibleJob.phase === DREAM_JOB_PHASES.READY && visibleJob.artifact?.generationId === generation.id) {
     jobId = visibleJob.id;
   }
   reopening = true;
+  const openingRevision = beginOpeningStatus(generation);
   const model = models.find(candidate => candidate.id === generation.modelId) || {
     id: generation.modelId,
     name: generation.modelName || generation.modelId,
@@ -1347,6 +1683,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     finalizeDiagnosticTrace(diagnostic, 'succeeded', { generationId: generation.id });
     finishDiagnostic(diagnostic, { status: 'succeeded', generationId: generation.id });
     await persistDiagnostic(diagnostic);
+    recordOpenModelFit(generation, diagnostic, { succeeded: true });
     renderFavoriteControl();
     els.topStatus.textContent = 'Playing';
     if (jobId) {
@@ -1357,7 +1694,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
       });
     }
     if (close) closeDrawers();
-    showToast('Dream opened');
+    if (!quiet) showToast('Dream opened');
     await renderLibrary();
     return true;
   } catch (error) {
@@ -1389,6 +1726,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     });
     finalizeDiagnosticTrace(diagnostic, 'failed', { failure });
     await persistDiagnostic(diagnostic);
+    recordOpenModelFit(generation, diagnostic, { succeeded: false, failureCode: failure.code });
     if (jobId) {
       dreamJobController.transition(jobId, DREAM_JOB_PHASES.FAILED_OPEN, {
         detail: 'The previous Dream stayed LIVE. You can try this Dream again from Recent.',
@@ -1401,6 +1739,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     return false;
   } finally {
     if (identityToken) discardLiveCandidate(identityToken);
+    endOpeningStatus(openingRevision);
     reopening = false;
     flushPendingActiveFailure();
     scheduleUiHide();
@@ -1589,6 +1928,26 @@ async function toggleFavorite() {
   await renderLibrary();
 }
 
+async function openFavoriteFromKeyboard(direction) {
+  if (recovering || reopening || deletingGeneration || promotion) return false;
+  const groups = buildDreamSwitcherGroups({
+    featured: featuredDreams,
+    generations: await store.list(),
+    activeKey: currentDreamKey,
+  });
+  const target = favoriteTargetForArrow(
+    groups.favorites,
+    currentDreamKey,
+    direction < 0 ? 'favorite-previous' : 'favorite-next',
+  );
+  if (!target) {
+    showToast('No favorites yet.', 2200);
+    return false;
+  }
+  if (target.key === currentDreamKey) return true;
+  return openGeneration(target.generation, { close: false, quiet: true });
+}
+
 async function toggleReadyJobFavorite(jobSnapshot) {
   const generationId = jobSnapshot?.artifact?.generationId;
   if (!generationId) return;
@@ -1655,7 +2014,7 @@ async function releaseWakeLock() {
 }
 
 function composeHostFrame(timestamp) {
-  const sample = audio.sample(timestamp);
+  const sample = applyAudioSensitivity(audio.sample(timestamp), sensitivityPercent);
   return {
     version: AUDIO_API_VERSION,
     time: sample.time,
@@ -1805,9 +2164,9 @@ async function testDiagnosticHtml(html, label = 'manual HTML') {
 
 function devModeFromLocation() {
   const params = new URLSearchParams(location.search);
-  if (params.get('dev') === '1') localStorage.setItem('ai-visualizer.dev-mode', '1');
-  if (params.get('dev') === '0') localStorage.removeItem('ai-visualizer.dev-mode');
-  return localStorage.getItem('ai-visualizer.dev-mode') === '1';
+  if (params.get('dev') === '1') localSettingsStorage?.setItem('ai-visualizer.dev-mode', '1');
+  if (params.get('dev') === '0') localSettingsStorage?.removeItem('ai-visualizer.dev-mode');
+  return localSettingsStorage?.getItem('ai-visualizer.dev-mode') === '1';
 }
 
 function setDevMode(enabled) {
@@ -1822,6 +2181,8 @@ function setDevMode(enabled) {
     scheduleDiagnosticsRender();
     showToast('Visualizer developer diagnostics enabled. Ctrl+Shift+D toggles this mode.');
   }
+  if (models.length) renderModels();
+  window.dispatchEvent(new CustomEvent('visualizer:dev-mode-changed', { detail: { enabled: devMode } }));
 }
 
 function scheduleDiagnosticsRender() {
@@ -1838,6 +2199,9 @@ function runtimeSummary() {
     diagnosticId: currentDiagnosticId,
     heartbeatAgeMs: heartbeatAge,
     audioConnected: Boolean(audio.connected),
+    sensitivityPercent,
+    reasoningSelection: selectedReasoningSelection,
+    generationEnvelope: window.VIZ_COST_GUARD?.currentPreview?.envelope || null,
     generating,
     recovering,
     reopening,
@@ -2136,11 +2500,11 @@ async function recoverFromRuntimeFailure(event) {
 function installDevApi() {
   const api = {
     enable() {
-      localStorage.setItem('ai-visualizer.dev-mode', '1');
+      localSettingsStorage?.setItem('ai-visualizer.dev-mode', '1');
       setDevMode(true);
     },
     disable() {
-      localStorage.removeItem('ai-visualizer.dev-mode');
+      localSettingsStorage?.removeItem('ai-visualizer.dev-mode');
       setDevMode(false);
     },
     async latest() {
@@ -2178,6 +2542,26 @@ function installDevApi() {
       const payload = diagnosticsForExport(records);
       downloadJson(`ai-visualizer-diagnostics-${Date.now()}.json`, payload);
       return payload;
+    },
+    modelFit() {
+      return modelFitEvidenceStore.snapshot();
+    },
+    modelTestMatrix() {
+      return modelFitEvidenceStore.matrix({
+        currentVersions: modelFitVersions(),
+        catalogUpdatedAt: window.VIZ_COST_GUARD?.catalogUpdatedAt || null,
+      });
+    },
+    async copyModelTestMatrix() {
+      const bundle = modelFitEvidenceStore.matrix({
+        currentVersions: modelFitVersions(),
+        catalogUpdatedAt: window.VIZ_COST_GUARD?.catalogUpdatedAt || null,
+      });
+      await copyText(modelFitMatrixText(bundle));
+      return bundle;
+    },
+    theoreticalModelCeilings() {
+      return window.VIZ_COST_GUARD?.theoreticalModelCeilings?.() || [];
     },
     open() {
       setDevMode(true);
@@ -2268,12 +2652,22 @@ function wireEvents() {
   });
   els.modelButton.addEventListener('click', () => {
     updateConnectionUi();
+    renderReasoningControl({ announceStale: true });
     renderModels();
     openDrawer(els.modelDrawer);
   });
+  els.reasoningSelect?.addEventListener('change', setReasoningFromUi);
   els.dreamButton.addEventListener('click', dream);
   els.favoriteButton.addEventListener('click', toggleFavorite);
   els.audioButton.addEventListener('click', toggleAudio);
+  els.sensitivityInput?.addEventListener('input', () => {
+    const snapshot = sensitivityController.setSensitivity(els.sensitivityInput.value);
+    showSensitivityHud(snapshot);
+  });
+  els.resetSensitivity?.addEventListener('click', () => {
+    const snapshot = sensitivityController.reset();
+    showSensitivityHud(snapshot);
+  });
   els.libraryButton.addEventListener('click', async () => {
     dreamSwitcher?.close();
     await renderLibrary();
@@ -2337,13 +2731,23 @@ function wireEvents() {
   }
   document.addEventListener('keydown', event => {
     if (trapDrawerFocus(event)) return;
+    const transportCommand = globalArrowCommand(event, { document });
+    if (transportCommand) {
+      event.preventDefault();
+      showUi();
+      if (transportCommand === 'favorite-previous') void openFavoriteFromKeyboard(-1);
+      if (transportCommand === 'favorite-next') void openFavoriteFromKeyboard(1);
+      if (transportCommand === 'sensitivity-increase') showSensitivityHud(sensitivityController.increase());
+      if (transportCommand === 'sensitivity-decrease') showSensitivityHud(sensitivityController.decrease());
+      return;
+    }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'd') {
       event.preventDefault();
       if (devMode) {
-        localStorage.removeItem('ai-visualizer.dev-mode');
+        localSettingsStorage?.removeItem('ai-visualizer.dev-mode');
         setDevMode(false);
       } else {
-        localStorage.setItem('ai-visualizer.dev-mode', '1');
+        localSettingsStorage?.setItem('ai-visualizer.dev-mode', '1');
         setDevMode(true);
       }
     }
@@ -2376,6 +2780,14 @@ function wireEvents() {
   });
   els.retestCurrent?.addEventListener('click', retestCurrentVisualizer);
   els.transparencySelfTest?.addEventListener('click', () => void runTransparencySelfTest());
+  els.copyModelTestMatrix?.addEventListener('click', async () => {
+    const bundle = modelFitEvidenceStore.matrix({
+      currentVersions: modelFitVersions(),
+      catalogUpdatedAt: window.VIZ_COST_GUARD?.catalogUpdatedAt || null,
+    });
+    await copyText(modelFitMatrixText(bundle));
+    showToast('Copied sanitized model test matrix.');
+  });
   els.pickDiagnosticModel?.addEventListener('click', chooseCheapDiagnosticModel);
   els.clearDiagnostics?.addEventListener('click', async () => {
     if (!confirm('Clear all local Visualizer diagnostics? Saved Dreams are not deleted.')) return;
@@ -2384,6 +2796,22 @@ function wireEvents() {
     volatileDiagnostics.clear();
     await diagnosticStore.clear();
     await renderDiagnostics();
+  });
+  window.addEventListener('visualizer:reasoning-selection-stale', event => {
+    const model = models.find(candidate => candidate.id === event.detail?.modelId);
+    if (!model) return;
+    const current = reasoningSelectionStore.snapshot(model);
+    const requested = event.detail?.requested || {};
+    const stillMatches = current.mode === requested.mode
+      && current.effort === (requested.effort ?? null)
+      && current.selectedAt === (requested.selectedAt ?? null);
+    if (!stillMatches) return;
+    const selection = reasoningSelectionStore.save(model, { mode: 'default', effort: null });
+    if (model.id !== selectedModel?.id) return;
+    selectedReasoningSelection = selection;
+    renderReasoningControl();
+    announceReasoningSelection(selection);
+    showToast('That reasoning level is no longer supported. Future Dreams will use the model\'s native Default.', 6200);
   });
 }
 
@@ -2396,6 +2824,7 @@ async function initialize() {
     onCancel: () => activeDreamController?.abort(),
     onOpen: snapshot => { void openReadyJob(snapshot); },
     onFavorite: snapshot => { void toggleReadyJobFavorite(snapshot); },
+    onSpend: () => window.VIZ_COST_GUARD?.openSpendProtection?.(),
   });
   try {
     featuredDreams = await loadFeaturedDreams();
@@ -2444,7 +2873,7 @@ async function initialize() {
   try {
     models = await fetchModels();
     modelCatalogError = '';
-    const storedModelId = localStorage.getItem('ai-visualizer.selected-model');
+    const storedModelId = localSettingsStorage?.getItem('ai-visualizer.selected-model') || '';
     const storedModel = models.find(model => model.id === storedModelId);
     if (storedModel) setSelectedModel(storedModel);
     else renderModels();

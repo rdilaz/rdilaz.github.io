@@ -37,6 +37,17 @@ export function liveDreamEligibility(model, now = Date.now()) {
     return { eligible: false, reason: 'OUTPUT_TOO_SMALL', maxOutput };
   }
 
+  const supportedParameters = Array.isArray(model?.supported_parameters)
+    ? model.supported_parameters.map(value => String(value).toLowerCase())
+    : [];
+  if (
+    supportedParameters.length
+    && !supportedParameters.includes('max_tokens')
+    && !supportedParameters.includes('max_completion_tokens')
+  ) {
+    return { eligible: false, reason: 'OUTPUT_LIMIT_UNENFORCEABLE' };
+  }
+
   return { eligible: true, reason: 'LIVE_DREAM_COMPATIBLE', expiresAt };
 }
 

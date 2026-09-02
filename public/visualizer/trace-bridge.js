@@ -7,8 +7,10 @@ import {
 } from './dream-trace.js';
 
 export const TRACE_BRIDGE_SCHEMA = 'dream-trace-bridge-v1';
+export const REQUEST_POLICY_SCHEMA = 'visualizer-request-policy-v1';
 
 const TRACE_CONTEXT = Symbol('dream-trace-context');
+const REQUEST_POLICY_CONTEXT = Symbol('visualizer-request-policy');
 const captures = new Map();
 
 function defaultId() {
@@ -156,6 +158,7 @@ export function beginTraceCapture({
       providerDurationMs: null,
     },
     availability: null,
+    requestPolicy: null,
     request: null,
     response: null,
     errors: [],
@@ -186,14 +189,63 @@ export function traceContextFromInit(init) {
   return lookup(context)?.context || null;
 }
 
+export function attachRequestPolicy(init = {}, policy = null) {
+  const output = { ...(init || {}) };
+  const safePolicy = sanitizeTraceValue(policy);
+  if (!safePolicy || typeof safePolicy !== 'object' || Array.isArray(safePolicy)) return output;
+  Object.defineProperty(output, REQUEST_POLICY_CONTEXT, {
+    value: deepFreeze(safePolicy),
+    enumerable: true,
+    configurable: true,
+    writable: false,
+  });
+  return output;
+}
+
+export function requestPolicyFromInit(init) {
+  if (!init || typeof init !== 'object') return null;
+  try {
+    const policy = init[REQUEST_POLICY_CONTEXT];
+    return policy && typeof policy === 'object' ? policy : null;
+  } catch {
+    return null;
+  }
+}
+
 export function stripTraceContext(init = {}) {
   const output = { ...(init || {}) };
   delete output[TRACE_CONTEXT];
+  delete output[REQUEST_POLICY_CONTEXT];
   return output;
 }
 
 export function traceDisplayName(context) {
   return lookup(context)?.displayName || '';
+}
+
+export function captureRequestPolicy(context, detail = {}) {
+  const record = lookup(context);
+  if (!record || record.claims.has('request-dispatched')) return false;
+  const safeDetail = sanitizeTraceValue(detail);
+  if (!safeDetail || typeof safeDetail !== 'object' || Array.isArray(safeDetail)) return false;
+  const at = timestamp(record, detail, ['preparedAt']);
+  record.requestPolicy = {
+    ...(record.requestPolicy || {}),
+    ...safeDetail,
+    schema: REQUEST_POLICY_SCHEMA,
+  };
+  if (record.request) record.request.policy = sanitizeTraceValue(record.requestPolicy);
+  timeline(record, 'request:policy-captured', at, {
+    nativeDefaultUsed: record.requestPolicy.nativeDefaultUsed ?? null,
+    finalMaxTokens: record.requestPolicy.finalMaxTokens ?? null,
+    finalRequestCostCeiling: record.requestPolicy.finalRequestCostCeiling ?? null,
+  });
+  return true;
+}
+
+export function traceRequestPolicy(context) {
+  const policy = lookup(context)?.requestPolicy;
+  return policy ? deepFreeze(sanitizeTraceValue(policy)) : null;
 }
 
 export function captureAvailabilityStart(context, detail = {}) {
@@ -258,6 +310,7 @@ export function captureFinalRequest(context, detail = {}) {
     model: validText(safeBody?.model),
     messages,
     parameters: parametersFromBody(safeBody),
+    policy: sanitizeTraceValue(detail.policy ?? record.requestPolicy),
     headers: sanitizeSafeHeaders(detail.headers),
     body: safeBody,
     serializedBody,
@@ -266,7 +319,7 @@ export function captureFinalRequest(context, detail = {}) {
     method: record.request.method,
     endpoint: record.request.endpoint,
     model: record.request.model,
-    maxTokens: record.request.parameters?.max_tokens ?? null,
+    maxTokens: record.request.parameters?.max_tokens ?? record.request.parameters?.max_completion_tokens ?? null,
   });
   return true;
 }
@@ -299,6 +352,8 @@ export function captureResponseHeaders(context, response, detail = {}) {
     rawOutput: '',
     extractedHtml: '',
     finishReason: '',
+    nativeFinishReason: '',
+    native_finish_reason: '',
     resolvedModel: '',
     requestId: validText(headers['x-request-id'] || headers['request-id']),
     usage: null,
@@ -348,6 +403,12 @@ export function captureProviderResponse(context, detail = {}) {
     : sanitizeSafeHeaders(detail.response?.headers ?? detail.headers);
   const cost = responseCost(detail, usage);
   const assistantText = redactSecretStrings(detail.assistantText ?? '');
+  const nativeFinishReason = validText(
+    detail.nativeFinishReason
+    ?? detail.native_finish_reason
+    ?? parsedPayload?.choices?.[0]?.native_finish_reason
+    ?? parsedPayload?.native_finish_reason,
+  );
   record.response = {
     status: Number.isFinite(responseStatus) ? responseStatus : null,
     headers,
@@ -356,7 +417,9 @@ export function captureProviderResponse(context, detail = {}) {
     assistantText,
     rawOutput: redactSecretStrings(detail.rawOutput ?? assistantText),
     extractedHtml: redactSecretStrings(detail.extractedHtml ?? ''),
-    finishReason: validText(detail.finishReason),
+    finishReason: validText(detail.finishReason ?? parsedPayload?.choices?.[0]?.finish_reason),
+    nativeFinishReason,
+    native_finish_reason: nativeFinishReason,
     resolvedModel: validText(detail.resolvedModel),
     requestId: validText(detail.requestId) || validText(headers['x-request-id'] || headers['request-id']),
     usage,
@@ -374,6 +437,7 @@ export function captureProviderResponse(context, detail = {}) {
   timeline(record, 'provider:response-captured', at, {
     status: record.response.status,
     finishReason: record.response.finishReason,
+    nativeFinishReason: record.response.nativeFinishReason,
     resolvedModel: record.response.resolvedModel,
     requestId: record.response.requestId,
   });
@@ -407,6 +471,8 @@ export function captureTraceError(context, error, detail = {}) {
       rawOutput: '',
       extractedHtml: '',
       finishReason: '',
+      nativeFinishReason: '',
+      native_finish_reason: '',
       resolvedModel: '',
       requestId: '',
       usage: null,
@@ -439,6 +505,7 @@ export function consumeTraceCapture(context) {
     consumedAt,
     timing: record.timing,
     availability: record.availability,
+    requestPolicy: record.requestPolicy,
     request: record.request,
     response: record.response,
     errors: record.errors,
