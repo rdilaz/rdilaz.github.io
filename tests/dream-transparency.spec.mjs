@@ -130,6 +130,11 @@ async function activeScreenshotSignal(page) {
   }, image.toString('base64'));
 }
 
+async function wakeHostUi(page, x = 280, y = 260) {
+  await page.mouse.move(x, y);
+  await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
+}
+
 test('normal mode keeps compact, explicit LIVE and NEXT truth', async ({ page }) => {
   await routeOpenRouter(page, null);
   await page.goto('/visualizer/index.html');
@@ -561,7 +566,11 @@ for (const [fixtureId, html] of [
     await expect(page.locator('#selectedModelName')).toHaveText(CRISP_MODEL_NAME);
     await page.locator('#dreamButton').click();
     await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
-    await page.locator('#dreamJobOpen').click();
+    await wakeHostUi(page);
+    const openButton = page.locator('#dreamJobOpen');
+    await expect(openButton).toBeVisible();
+    await expect(openButton).toBeEnabled();
+    await openButton.click();
     await expect(page.locator('#liveIdentityName')).toContainText(/Gemini 3\.8 Flash.*#[a-f0-9]{8}/i, { timeout: 35000 });
     const firstLiveLabel = await page.locator('#liveIdentityName').textContent();
     const firstActiveSignal = await activeScreenshotSignal(page);
@@ -572,8 +581,16 @@ for (const [fixtureId, html] of [
 
     await page.reload();
     await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
-    await page.locator('#switcherButton').click();
-    await page.locator('#libraryButton').click();
+    await wakeHostUi(page, 320, 240);
+    const switcherButton = page.locator('#switcherButton');
+    await expect(switcherButton).toBeVisible();
+    await expect(switcherButton).toBeEnabled();
+    await switcherButton.click();
+    await wakeHostUi(page, 300, 220);
+    const libraryButton = page.locator('#libraryButton');
+    await expect(libraryButton).toBeVisible();
+    await expect(libraryButton).toBeEnabled();
+    await libraryButton.click();
     const savedCard = page.locator('.library-item').filter({ hasText: CRISP_MODEL_NAME }).first();
     await savedCard.getByRole('button', { name: 'Open', exact: true }).click();
     await expect(page.locator('#liveIdentityName')).toHaveText(firstLiveLabel || '', { timeout: 35000 });
