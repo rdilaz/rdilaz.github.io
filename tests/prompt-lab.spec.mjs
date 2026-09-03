@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   FIXED_RUNTIME_CONTRACT,
   LEGACY_CANONICAL_VISUALIZER_PROMPT,
+  NEUTRAL_CLEAN_CREATIVE_BRIEF,
   PROMPT_VERSION,
   buildGenerationMessages,
   buildRepairMessages,
@@ -77,6 +78,16 @@ test('neutral default removes spectacle and renderer priming while preserving th
   expect(neutralText).toContain('The host does not prefer or recommend any particular implementation or visual approach.');
   expect(FIXED_RUNTIME_CONTRACT).toContain('window.VIZ');
 
+  const clean = promptPreset('neutral-clean-v1');
+  expect(clean).toMatchObject({ id: 'neutral-clean-v1', name: 'Neutral Clean v1', legacy: false });
+  expect(clean.creativeBrief).toBe('Create a real-time visual interpretation of arbitrary music.\n\nYou have complete artistic freedom. Decide what the music looks like. Avoid washed-out brightness, bloom-heavy haze, and overly blurry imagery.');
+  expect(clean.creativeBrief).toBe(NEUTRAL_CLEAN_CREATIVE_BRIEF);
+  expect(buildGenerationMessages(clean)[1].content).toBe(`${NEUTRAL_CLEAN_CREATIVE_BRIEF}\n\n${FIXED_RUNTIME_CONTRACT}`);
+  for (const steeringPhrase of ['architecture', 'technical', 'geometric machine', 'visual clarity', 'distinct structure']) {
+    expect(clean.creativeBrief.toLowerCase()).not.toContain(steeringPhrase);
+  }
+  expect(promptPreset().id).toBe('neutral-v1');
+
   const baseline = promptPreset('baseline-v1');
   const baselineMessages = buildGenerationMessages(baseline);
   expect(baselineMessages[1].content).toBe(LEGACY_CANONICAL_VISUALIZER_PROMPT);
@@ -109,6 +120,9 @@ test('Prompt Lab edits and persists the creative brief without exposing the fixe
   await expect(editor).toHaveValue(/complete artistic freedom/);
   await expect(editor).not.toHaveValue(/window\.VIZ/);
   await expect(page.locator('#promptLabContract')).toContainText('window.VIZ');
+
+  await page.getByRole('button', { name: 'Neutral Clean v1' }).click();
+  await expect(editor).toHaveValue(NEUTRAL_CLEAN_CREATIVE_BRIEF);
 
   await page.getByRole('button', { name: 'Original baseline' }).click();
   await expect(editor).toHaveValue(/wow factor/);

@@ -65,6 +65,10 @@ export const NEUTRAL_CREATIVE_BRIEF = `Create a real-time visual interpretation 
 
 You have complete artistic freedom. Decide what music looks like.`;
 
+export const NEUTRAL_CLEAN_CREATIVE_BRIEF = `Create a real-time visual interpretation of arbitrary music.
+
+You have complete artistic freedom. Decide what the music looks like. Avoid washed-out brightness, bloom-heavy haze, and overly blurry imagery.`;
+
 export const FIXED_RUNTIME_CONTRACT = `RUNTIME CONTRACT — technical reference, not artistic direction:
 - Return exactly one complete self-contained HTML document and nothing else. Do not wrap it in Markdown.
 - The document runs in a sandboxed browser iframe. External network access and external assets are unavailable. Everything required by the result must exist in the returned HTML.
@@ -103,6 +107,13 @@ export const PROMPT_PRESETS = Object.freeze([
     name: 'Neutral blank canvas',
     description: 'Minimal creative direction. The runtime contract is appended separately.',
     creativeBrief: NEUTRAL_CREATIVE_BRIEF,
+    legacy: false,
+  }),
+  Object.freeze({
+    id: 'neutral-clean-v1',
+    name: 'Neutral Clean v1',
+    description: 'Neutral artistic direction with restrained brightness, haze, and blur.',
+    creativeBrief: NEUTRAL_CLEAN_CREATIVE_BRIEF,
     legacy: false,
   }),
   Object.freeze({

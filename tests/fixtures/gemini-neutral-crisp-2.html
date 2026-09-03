@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Harmonic Resonance Architecture</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #05070b;
+    color: #d8e5f2;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #canvas-gl, #canvas-hud {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #canvas-hud {
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas-gl"></canvas>
+<canvas id="canvas-hud"></canvas>
+
+<script>
+(() => {
+  const glCanvas = document.getElementById('canvas-gl');
+  const hudCanvas = document.getElementById('canvas-hud');
+  const hudCtx = hudCanvas.getContext('2d');
+
+  // Initialize WebGL2 with fallback
+  const gl = glCanvas.getContext('webgl2', {
+    antialias: true,
+    alpha: false,
+    depth: true,
+    stencil: false,
+    powerPreference: 'high-performance'
+  }) || glCanvas.getContext('webgl', {
+    antialias: true,
+    alpha: false,
+    depth: true
+  });
+
+  if (!gl) {
+    document.body.innerHTML = '<div style="padding:24px;color:#f66">WebGL not supported in this environment.</div>';
+    return;
+  }
+
+  const isGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+  if (!isGL2) {
+    gl.getExtension('OES_standard_derivatives');
+  }
+
+  // Camera & Interaction state
+  const state = {
+    yaw: 0.28,
+    pitch: 0.38,
+    dist: 38.0,
+    targetYaw: 0.28,
+    targetPitch: 0.38,
+    targetDist: 38.0,
+    dragging: false,
+    lastMouseX: 0,
+    lastMouseY: 0,
+    time: 0,
+    pulseEnergy: 0,
+    rotSpeed: 0.003
+  };
+
+  // Smooth smoothed audio metrics
+  const smooth = {
+    vol: 0.05,
+    transient: 0.0,
+    beat: 0.0,
+    subBass: 0.1,
+    bass: 0.1,
+    lowMid: 0.1,
+    mid: 0.1,
+    highMid: 0.1,
+    treble: 0.1,
+    flux: 0.0,
+    centroid: 0.2,
+    balance: 0.0,
+    width: 0.5
+  };
+
+  // Matrix Math Utilities
+  const Mat4 = {
+    perspective(fovy, aspect, near, far) {
+      const f = 1.0 / Math.tan(fovy / 2);
+      const nf = 1 / (near - far);
+      return [
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (far + near) * nf, -1,
+        0, 0, (2 * far * near) * nf, 0
+      ];
+    },
+    lookAt(eye, center, up) {
+      let z0 = eye[0] - center[0], z1 = eye[1] - center[1], z2 = eye[2] - center[2];
+      let len = Math.hypot(z0, z1, z2);
+      if (len === 0) { z2 = 1; len = 1; }
+      z0 /= len; z1 /= len; z2 /= len;
+
+      let x0 = up[1] * z2 - up[2] * z1;
+      let x1 = up[2] * z0 - up[0] * z2;
+      let x2 = up[0] * z1 - up[1] * z0;
+      len = Math.hypot(x0, x1, x2);
+      if (len === 0) { x0 = 1; len = 1; }
+      x0 /= len; x1 /= len; x2 /= len;
+
+      const y0 = z1 * x2 - z2 * x1;
+      const y1 = z2 * x0 - z0 * x2;
+      const y2 = z0 * x1 - z1 * x0;
+
+      return [
+        x0, y0, z0, 0,
+        x1, y1, z1, 0,
+        x2, y2, z2, 0,
+        -(x0 * eye[0] + x1 * eye[1] + x2 * eye[2]),
+        -(y0 * eye[0] + y1 * eye[1] + y2 * eye[2]),
+        -(z0 * eye[0] + z1 * eye[1] + z2 * eye[2]),
+        1
+      ];
+    },
+    multiply(a, b) {
+      const out = new Float32Array(16);
+      for (let i = 0; i < 4; i++) {
+        const ai0 = a[i], ai1 = a[i+4], ai2 = a[i+8], ai3 = a[i+12];
+        out[i]    = ai0 * b[0] + ai1 * b[1] + ai2 * b[2] + ai3 * b[3];
+        out[i+4]  = ai0 * b[4] + ai1 * b[5] + ai2 * b[6] + ai3 * b[7];
+        out[i+8]  = ai0 * b[8] + ai1 * b[9] + ai2 * b[10] + ai3 * b[11];
+        out[i+12] = ai0 * b[12] + ai1 * b[13] + ai2 * b[14] + ai3 * b[15];
+      }
+      return out;
+    }
+  };
+
+  // Compile Shader Helper
+  function createProgram(vsSrc, fsSrc) {
+    const vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs, vsSrc);
+    gl.compileShader(vs);
+    if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
+      console.error('Vertex Shader Error:', gl.getShaderInfoLog(vs));
+      return null;
+    }
+
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs, fsSrc);
+    gl.compileShader(fs);
+    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+      console.error('Fragment Shader Error:', gl.getShaderInfoLog(fs));
+      return null;
+    }
+
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('Program Link Error:', gl.getProgramInfoLog(prog));
+      return null;
+    }
+    return prog;
+  }
+
+  // --- SHADERS ---
+
+  // 1. Grid & Monolith Shaders (Crisp geometric architectural facets & wire edges)
+  const solidVS = `#version 300 es
+  precision highp float;
+  in vec3 aPosition;
+  in vec3 aNormal;
+  in vec3 aBary;
+
+  uniform mat4 uMVP;
+  uniform mat4 uModel;
+  uniform vec3 uColor;
+  uniform float uPulse;
+
+  out vec3 vNormal;
+  out vec3 vWorldPos;
+  out vec3 vBary;
+  out vec3 vBaseColor;
+
+  void main() {
+    vec4 wp = uModel * vec4(aPosition, 1.0);
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+    vWorldPos = wp.xyz;
+    vNormal = normalize(mat3(uModel) * aNormal);
+    vBary = aBary;
+    vBaseColor = uColor;
+  }`;
+
+  const solidFS = `#version 300 es
+  precision highp float;
+  in vec3 vNormal;
+  in vec3 vWorldPos;
+  in vec3 vBary;
+  in vec3 vBaseColor;
+
+  uniform vec3 uLightPos;
+  uniform vec3 uCameraPos;
+  uniform float uWireframeAlpha;
+  uniform float uFacetAlpha;
+  uniform float uEdgeSharpen;
+
+  out vec4 fragColor;
+
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(uLightPos - vWorldPos);
+    vec3 V = normalize(uCameraPos - vWorldPos);
+    vec3 H = normalize(L + V);
+
+    float diff = max(dot(N, L), 0.0);
+    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.75;
+    float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.45;
+
+    vec3 ambient = vec3(0.04, 0.06, 0.09);
+    vec3 litColor = vBaseColor * (ambient + diff * 0.7 + rim) + vec3(spec);
+
+    // Wireframe edge calculation via screen-space derivatives
+    vec3 d = fwidth(vBary);
+    vec3 a3 = smoothstep(vec3(0.0), d * uEdgeSharpen, vBary);
+    float edgeFactor = min(min(a3.x, a3.y), a3.z);
+    float edgeIntensity = (1.0 - edgeFactor) * uWireframeAlpha;
+
+    vec3 finalColor = mix(litColor * uFacetAlpha, vBaseColor * 1.6 + vec3(0.3, 0.45, 0.6), edgeIntensity);
+    float alpha = max(uFacetAlpha, edgeIntensity);
+
+    fragColor = vec4(finalColor, alpha);
+  }`;
+
+  // Fallback GLSL 100 versions if not GL2
+  const solidVS100 = `
+  precision highp float;
+  attribute vec3 aPosition;
+  attribute vec3 aNormal;
+  attribute vec3 aBary;
+  uniform mat4 uMVP;
+  uniform mat4 uModel;
+  uniform vec3 uColor;
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec3 vBary;
+  varying vec3 vBaseColor;
+  void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+    vWorldPos = (uModel * vec4(aPosition, 1.0)).xyz;
+    vNormal = normalize(mat3(uModel[0].xyz, uModel[1].xyz, uModel[2].xyz) * aNormal);
+    vBary = aBary;
+    vBaseColor = uColor;
+  }`;
+
+  const solidFS100 = `
+  #extension GL_OES_standard_derivatives : enable
+  precision highp float;
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec3 vBary;
+  varying vec3 vBaseColor;
+  uniform vec3 uLightPos;
+  uniform vec3 uCameraPos;
+  uniform float uWireframeAlpha;
+  uniform float uFacetAlpha;
+  uniform float uEdgeSharpen;
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(uLightPos - vWorldPos);
+    vec3 V = normalize(uCameraPos - vWorldPos);
+    vec3 H = normalize(L + V);
+    float diff = max(dot(N, L), 0.0);
+    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.75;
+    float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.45;
+    vec3 ambient = vec3(0.04, 0.06, 0.09);
+    vec3 litColor = vBaseColor * (ambient + diff * 0.7 + rim) + vec3(spec);
+    #ifdef GL_OES_standard_derivatives
+      vec3 d = fwidth(vBary);
+      vec3 a3 = smoothstep(vec3(0.0), d * uEdgeSharpen, vBary);
+      float edgeFactor = min(min(a3.x, a3.y), a3.z);
+      float edgeIntensity = (1.0 - edgeFactor) * uWireframeAlpha;
+    #else
+      float edgeIntensity = 0.0;
+    #endif
+    vec3 finalColor = mix(litColor * uFacetAlpha, vBaseColor * 1.5 + vec3(0.3, 0.45, 0.6), edgeIntensity);
+    gl_FragColor = vec4(finalColor, max(uFacetAlpha, edgeIntensity));
+  }`;
+
+  // 2. Continuous Waveform & Spectrum Ribbon Shader
+  const ribbonVS = isGL2 ? `#version 300 es
+  in vec3 aPosition;
+  in vec2 aUV;
+  uniform mat4 uMVP;
+  out vec2 vUV;
+  void main() {
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+  }` : `
+  attribute vec3 aPosition;
+  attribute vec2 aUV;
+  uniform mat4 uMVP;
+  varying vec2 vUV;
+  void main() {
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+  }`;
+
+  const ribbonFS = isGL2 ? `#version 300 es
+  precision highp float;
+  in vec2 vUV;
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  uniform float uEnergy;
+  out vec4 fragColor;
+  void main() {
+    // Sharp razor border on ribbon edges
+    float edgeDist = abs(vUV.y - 0.5) * 2.0;
+    float edgeLine = smoothstep(0.85, 0.98, edgeDist);
+    vec3 base = mix(uColorA, uColorB, vUV.x);
+    vec3 edgeGlow = mix(base, vec3(0.9, 0.95, 1.0), 0.7);
+    vec3 col = mix(base * 0.65, edgeGlow, edgeLine);
+    float alpha = mix(0.55, 0.95, edgeLine) * (0.6 + 0.4 * uEnergy);
+    fragColor = vec4(col, alpha);
+  }` : `
+  precision highp float;
+  varying vec2 vUV;
+  uniform vec3 uColorA;
+  uniform vec3 uColorB;
+  uniform float uEnergy;
+  void main() {
+    float edgeDist = abs(vUV.y - 0.5) * 2.0;
+    float edgeLine = smoothstep(0.85, 0.98, edgeDist);
+    vec3 base = mix(uColorA, uColorB, vUV.x);
+    vec3 edgeGlow = mix(base, vec3(0.9, 0.95, 1.0), 0.7);
+    vec3 col = mix(base * 0.65, edgeGlow, edgeLine);
+    float alpha = mix(0.55, 0.95, edgeLine) * (0.6 + 0.4 * uEnergy);
+    gl_FragColor = vec4(col, alpha);
+  }`;
+
+  const solidProgram = createProgram(isGL2 ? solidVS : solidVS100, isGL2 ? solidFS : solidFS100);
+  const ribbonProgram = createProgram(ribbonVS, ribbonFS);
+
+  // --- GEOMETRY GENERATION ---
+
+  // Helper to build a faceted mesh with barycentric coordinates
+  function buildBarycentricMesh(positions, normals, indices) {
+    const unindexedPos = [];
+    const unindexedNorm = [];
+    const bary = [];
+
+    for (let i = 0; i < indices.length; i += 3) {
+      const i0 = indices[i] * 3;
+      const i1 = indices[i + 1] * 3;
+      const i2 = indices[i + 2] * 3;
+
+      unindexedPos.push(
+        positions[i0], positions[i0 + 1], positions[i0 + 2],
+        positions[i1], positions[i1 + 1], positions[i1 + 2],
+        positions[i2], positions[i2 + 1], positions[i2 + 2]
+      );
+
+      unindexedNorm.push(
+        normals[i0], normals[i0 + 1], normals[i0 + 2],
+        normals[i1], normals[i1 + 1], normals[i1 + 2],
+        normals[i2], normals[i2 + 1], normals[i2 + 2]
+      );
+
+      bary.push(
+        1, 0, 0,
+        0, 1, 0,
+        0, 0, 1
+      );
+    }
+
+    const posVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, posVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(unindexedPos), gl.STATIC_DRAW);
+
+    const normVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, normVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(unindexedNorm), gl.STATIC_DRAW);
+
+    const baryVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, baryVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(bary), gl.STATIC_DRAW);
+
+    return {
+      posVBO,
+      normVBO,
+      baryVBO,
+      count: unindexedPos.length / 3
+    };
+  }
+
+  // 1. Hexagonal / Beveled Pillar Geometry
+  function createPillarGeometry(radius = 0.9, height = 1.0, segments = 6) {
+    const pos = [];
+    const norm = [];
+    const indices = [];
+
+    // Top cap center
+    pos.push(0, height, 0);
+    norm.push(0, 1, 0);
+
+    // Top perimeter
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      pos.push(Math.cos(a) * radius, height, Math.sin(a) * radius);
+      norm.push(0, 1, 0);
+    }
+
+    // Bottom perimeter
+    const bottomStart = pos.length / 3;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      pos.push(Math.cos(a) * radius, 0, Math.sin(a) * radius);
+      norm.push(Math.cos(a), 0, Math.sin(a));
+    }
+
+    // Side duplicate top perimeter for side normals
+    const sideTopStart = pos.length / 3;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      pos.push(Math.cos(a) * radius, height, Math.sin(a) * radius);
+      norm.push(Math.cos(a), 0, Math.sin(a));
+    }
+
+    // Indices for Top Fan
+    for (let i = 0; i < segments; i++) {
+      const next = ((i + 1) % segments) + 1;
+      indices.push(0, i + 1, next);
+    }
+
+    // Indices for Sides
+    for (let i = 0; i < segments; i++) {
+      const next = (i + 1) % segments;
+      const b0 = bottomStart + i;
+      const b1 = bottomStart + next;
+      const t0 = sideTopStart + i;
+      const t1 = sideTopStart + next;
+      indices.push(t0, b0, t1);
+      indices.push(t1, b0, b1);
+    }
+
+    return buildBarycentricMesh(pos, norm, indices);
+  }
+
+  // 2. Concentric Gyroscope / Gimbal Ring Geometry
+  function createGimbalRingGeometry(innerR, outerR, depth, segments = 48) {
+    const pos = [];
+    const norm = [];
+    const indices = [];
+
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const cos = Math.cos(a);
+      const sin = Math.sin(a);
+
+      // 4 vertices per slice (inner front, outer front, inner back, outer back)
+      pos.push(innerR * cos, innerR * sin,  depth * 0.5);
+      pos.push(outerR * cos, outerR * sin,  depth * 0.5);
+      pos.push(innerR * cos, innerR * sin, -depth * 0.5);
+      pos.push(outerR * cos, outerR * sin, -depth * 0.5);
+
+      norm.push(0, 0, 1);
+      norm.push(0, 0, 1);
+      norm.push(0, 0, -1);
+      norm.push(0, 0, -1);
+    }
+
+    for (let i = 0; i < segments; i++) {
+      const curr = i * 4;
+      const next = ((i + 1) % segments) * 4;
+
+      // Front face
+      indices.push(curr + 0, curr + 1, next + 0);
+      indices.push(next + 0, curr + 1, next + 1);
+
+      // Back face
+      indices.push(curr + 2, next + 2, curr + 3);
+      indices.push(next + 2, next + 3, curr + 3);
+
+      // Outer rim
+      indices.push(curr + 1, curr + 3, next + 1);
+      indices.push(next + 1, curr + 3, next + 3);
+
+      // Inner rim
+      indices.push(curr + 0, next + 0, curr + 2);
+      indices.push(next + 0, next + 2, curr + 2);
+    }
+
+    return buildBarycentricMesh(pos, norm, indices);
+  }
+
+  // 3. Icosahedron for Core Resonator
+  function createIcosahedron(radius = 1.0) {
+    const t = (1.0 + Math.sqrt(5.0)) / 2.0;
+    const v = [
+      -1,  t,  0,   1,  t,  0,  -1, -t,  0,   1, -t,  0,
+       0, -1,  t,   0,  1,  t,   0, -1, -t,   0,  1, -t,
+       t,  0, -1,   t,  0,  1,  -t,  0, -1,  -t,  0,  1
+    ];
+
+    const pos = [];
+    const norm = [];
+    for (let i = 0; i < v.length; i += 3) {
+      const len = Math.hypot(v[i], v[i+1], v[i+2]);
+      const nx = v[i] / len;
+      const ny = v[i+1] / len;
+      const nz = v[i+2] / len;
+      pos.push(nx * radius, ny * radius, nz * radius);
+      norm.push(nx, ny, nz);
+    }
+
+    const indices = [
+      0, 11, 5,   0, 5, 1,    0, 1, 7,    0, 7, 10,   0, 10, 11,
+      1, 5, 9,    5, 11, 4,   11, 10, 2,  10, 7, 6,   7, 1, 8,
+      3, 9, 4,    3, 4, 2,    3, 2, 6,    3, 6, 8,    3, 8, 9,
+      4, 9, 5,    2, 4, 11,   6, 2, 10,   8, 6, 7,    9, 8, 1
+    ];
+
+    return buildBarycentricMesh(pos, norm, indices);
+  }
+
+  // 4. Dynamic Ribbon Geometry (Double buffered or dynamically updated)
+  const RIBBON_SLICES = 160;
+  const ribbonPosBuffer = gl.createBuffer();
+  const ribbonUVBuffer = gl.createBuffer();
+  const ribbonData = {
+    pos: new Float32Array(RIBBON_SLICES * 2 * 3),
+    uv: new Float32Array(RIBBON_SLICES * 2 * 2),
+    indices: []
+  };
+
+  for (let i = 0; i < RIBBON_SLICES - 1; i++) {
+    const v0 = i * 2;
+    const v1 = v0 + 1;
+    const v2 = (i + 1) * 2;
+    const v3 = v2 + 1;
+    ribbonData.indices.push(v0, v1, v2);
+    ribbonData.indices.push(v2, v1, v3);
+  }
+  const ribbonIndexBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ribbonIndexBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(ribbonData.indices), gl.STATIC_DRAW);
+
+  // Initialize UVs for ribbon
+  for (let i = 0; i < RIBBON_SLICES; i++) {
+    const u = i / (RIBBON_SLICES - 1);
+    ribbonData.uv[i * 4 + 0] = u;
+    ribbonData.uv[i * 4 + 1] = 0.0;
+    ribbonData.uv[i * 4 + 2] = u;
+    ribbonData.uv[i * 4 + 3] = 1.0;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, ribbonUVBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, ribbonData.uv, gl.STATIC_DRAW);
+
+  // Pre-instantiate static structural models
+  const pillarMesh = createPillarGeometry(0.55, 1.0, 6);
+  const coreMesh = createIcosahedron(1.85);
+  const ring1Mesh = createGimbalRingGeometry(3.0, 3.25, 0.28, 48);
+  const ring2Mesh = createGimbalRingGeometry(4.4, 4.65, 0.28, 56);
+  const ring3Mesh = createGimbalRingGeometry(6.0, 6.25, 0.28, 64);
+
+  // Pillar positions setup (Array of monolithic resonator columns)
+  const pillars = [];
+  const NUM_RINGS = 3;
+  const PILLARS_PER_RING = [16, 24, 32];
+  const RADII = [9.5, 14.0, 18.5];
+
+  for (let r = 0; r < NUM_RINGS; r++) {
+    const count = PILLARS_PER_RING[r];
+    const radius = RADII[r];
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (r * 0.35);
+      pillars.push({
+        ring: r,
+        index: i,
+        count: count,
+        angle: angle,
+        x: Math.cos(angle) * radius,
+        z: Math.sin(angle) * radius,
+        baseScaleY: 1.0,
+        freqIdx: (i / count),
+        height: 1.0
+      });
+    }
+  }
+
+  // Pointer Interaction
+  let isPointerDown = false;
+  let lastX = 0, lastY = 0;
+
+  window.addEventListener('pointerdown', (e) => {
+    isPointerDown = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+
+  window.addEventListener('pointermove', (e) => {
+    if (!isPointerDown) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    state.targetYaw += dx * 0.007;
+    state.targetPitch += dy * 0.006;
+    state.targetPitch = Math.max(-0.2, Math.min(Math.PI * 0.46, state.targetPitch));
+  });
+
+  window.addEventListener('pointerup', () => { isPointerDown = false; });
+  window.addEventListener('pointercancel', () => { isPointerDown = false; });
+  window.addEventListener('wheel', (e) => {
+    state.targetDist = Math.max(18.0, Math.min(75.0, state.targetDist + e.deltaY * 0.03));
+  }, { passive: true });
+
+  // Draw Mesh Helper
+  function drawSolidMesh(mesh, modelMatrix, vpMatrix, color, wireAlpha, facetAlpha) {
+    gl.useProgram(solidProgram);
+
+    const mvp = Mat4.multiply(vpMatrix, modelMatrix);
+    const uMVP = gl.getUniformLocation(solidProgram, 'uMVP');
+    const uModel = gl.getUniformLocation(solidProgram, 'uModel');
+    const uColor = gl.getUniformLocation(solidProgram, 'uColor');
+    const uLightPos = gl.getUniformLocation(solidProgram, 'uLightPos');
+    const uCameraPos = gl.getUniformLocation(solidProgram, 'uCameraPos');
+    const uWireAlpha = gl.getUniformLocation(solidProgram, 'uWireframeAlpha');
+    const uFacetAlphaLoc = gl.getUniformLocation(solidProgram, 'uFacetAlpha');
+    const uEdgeSharpen = gl.getUniformLocation(solidProgram, 'uEdgeSharpen');
+
+    gl.uniformMatrix4fv(uMVP, false, mvp);
+    gl.uniformMatrix4fv(uModel, false, modelMatrix);
+    gl.uniform3fv(uColor, color);
+    gl.uniform3f(uLightPos, 14.0, 32.0, 20.0);
+    gl.uniform3f(uCameraPos, state.cameraPos[0], state.cameraPos[1], state.cameraPos[2]);
+    gl.uniform1f(uWireAlpha, wireAlpha);
+    gl.uniform1f(uFacetAlphaLoc, facetAlpha);
+    gl.uniform1f(uEdgeSharpen, 1.2);
+
+    const aPos = gl.getAttribLocation(solidProgram, 'aPosition');
+    const aNorm = gl.getAttribLocation(solidProgram, 'aNormal');
+    const aBary = gl.getAttribLocation(solidProgram, 'aBary');
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.posVBO);
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.normVBO);
+    gl.enableVertexAttribArray(aNorm);
+    gl.vertexAttribPointer(aNorm, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.baryVBO);
+    gl.enableVertexAttribArray(aBary);
+    gl.vertexAttribPointer(aBary, 3, gl.FLOAT, false, 0, 0);
+
+    gl.drawArrays(gl.TRIANGLES, 0, mesh.count);
+  }
+
+  // Model matrix creation
+  function createTransformMatrix(tx, ty, tz, rx, ry, rz, sx, sy, sz) {
+    // Basic TRS
+    const cx = Math.cos(rx), sx_ = Math.sin(rx);
+    const cy = Math.cos(ry), sy_ = Math.sin(ry);
+    const cz = Math.cos(rz), sz_ = Math.sin(rz);
+
+    // Rotation Z * Y * X
+    const r00 = cy * cz;
+    const r01 = cy * sz_;
+    const r02 = -sy_;
+
+    const r10 = sx_ * sy_ * cz - cx * sz_;
+    const r11 = sx_ * sy_ * sz_ + cx * cz;
+    const r12 = sx_ * cy;
+
+    const r20 = cx * sy_ * cz + sx_ * sz_;
+    const r21 = cx * sy_ * sz_ - sx_ * cz;
+    const r22 = cx * cy;
+
+    return new Float32Array([
+      r00 * sx, r01 * sx, r02 * sx, 0,
+      r10 * sy, r11 * sy, r12 * sy, 0,
+      r20 * sz, r21 * sz, r22 * sz, 0,
+      tx, ty, tz, 1
+    ]);
+  }
+
+  // --- RENDER HUD LAYER ---
+  function renderHUD(width, height, dpr, audio) {
+    hudCtx.clearRect(0, 0, width, height);
+
+    const pad = 24 * dpr;
+    hudCtx.lineWidth = 1 * dpr;
+
+    // Top Left: Precision Title & Acoustic Telemetry
+    hudCtx.fillStyle = '#6e859e';
+    hudCtx.font = `${9 * dpr}px monospace`;
+    hudCtx.fillText('ACOUSTIC SPECTROGRAPHIC RESONATOR // V-04', pad, pad + 10 * dpr);
+
+    hudCtx.fillStyle = '#c5d8ec';
+    hudCtx.font = `bold ${12 * dpr}px monospace`;
+    hudCtx.fillText(`RMS_LVL: ${(smooth.vol * 100).toFixed(1)}% | FLUX: ${(smooth.flux * 100).toFixed(1)} | BAL: ${smooth.balance >= 0 ? '+' : ''}${smooth.balance.toFixed(2)}`, pad, pad + 26 * dpr);
+
+    // Dynamic Reticle Crosshairs in Corners
+    hudCtx.strokeStyle = 'rgba(100, 140, 180, 0.28)';
+    const retLen = 14 * dpr;
+    const corners = [
+      [pad, pad],
+      [width - pad, pad],
+      [pad, height - pad],
+      [width - pad, height - pad]
+    ];
+    for (const [cx, cy] of corners) {
+      hudCtx.beginPath();
+      const sx = cx === pad ? 1 : -1;
+      const sy = cy === pad ? 1 : -1;
+      hudCtx.moveTo(cx, cy + sy * retLen);
+      hudCtx.lineTo(cx, cy);
+      hudCtx.lineTo(cx + sx * retLen, cy);
+      hudCtx.stroke();
+    }
+
+    // Bottom Left: Discrete Band Equalizer Barometer
+    const bands = [
+      { name: 'SUB', val: smooth.subBass },
+      { name: 'BAS', val: smooth.bass },
+      { name: 'LMD', val: smooth.lowMid },
+      { name: 'MID', val: smooth.mid },
+      { name: 'HMD', val: smooth.highMid },
+      { name: 'TRB', val: smooth.treble }
+    ];
+
+    const barW = 28 * dpr;
+    const barGap = 6 * dpr;
+    const maxBarH = 64 * dpr;
+    let bx = pad;
+    const by = height - pad - 20 * dpr;
+
+    hudCtx.fillStyle = '#49617a';
+    hudCtx.font = `${8 * dpr}px monospace`;
+    hudCtx.fillText('FREQUENCY DISPERSION LATTICE', pad, by - maxBarH - 8 * dpr);
+
+    bands.forEach((b, i) => {
+      const bh = Math.max(3 * dpr, b.val * maxBarH);
+      const isPeak = b.val > 0.65;
+
+      // Track background
+      hudCtx.fillStyle = 'rgba(20, 32, 48, 0.6)';
+      hudCtx.fillRect(bx, by - maxBarH, barW, maxBarH);
+
+      // Level fill
+      hudCtx.fillStyle = isPeak ? '#9de7ff' : (i % 2 === 0 ? '#4fa2d8' : '#3582be');
+      hudCtx.fillRect(bx, by - bh, barW, bh);
+
+      // Border outline
+      hudCtx.strokeStyle = 'rgba(120, 165, 210, 0.4)';
+      hudCtx.strokeRect(bx, by - maxBarH, barW, maxBarH);
+
+      // Label
+      hudCtx.fillStyle = '#839bb5';
+      hudCtx.font = `${8 * dpr}px monospace`;
+      hudCtx.fillText(b.name, bx + 3 * dpr, by + 12 * dpr);
+
+      bx += barW + barGap;
+    });
+
+    // Bottom Right: Vector Polar Oscilloscope (Stereo & Transient Scope)
+    const scopeR = 48 * dpr;
+    const scX = width - pad - scopeR - 10 * dpr;
+    const scY = height - pad - scopeR - 10 * dpr;
+
+    hudCtx.strokeStyle = 'rgba(60, 90, 120, 0.4)';
+    hudCtx.beginPath();
+    hudCtx.arc(scX, scY, scopeR, 0, Math.PI * 2);
+    hudCtx.stroke();
+    hudCtx.beginPath();
+    hudCtx.arc(scX, scY, scopeR * 0.5, 0, Math.PI * 2);
+    hudCtx.stroke();
+
+    hudCtx.beginPath();
+    hudCtx.moveTo(scX - scopeR, scY);
+    hudCtx.lineTo(scX + scopeR, scY);
+    hudCtx.moveTo(scX, scY - scopeR);
+    hudCtx.lineTo(scX, scY + scopeR);
+    hudCtx.stroke();
+
+    // Waveform Lissajous / Polar plot
+    const wave = audio.waveform;
+    if (wave && wave.length > 0) {
+      hudCtx.strokeStyle = smooth.transient > 0.4 ? '#8ef3ff' : '#4ba8e6';
+      hudCtx.lineWidth = 1.2 * dpr;
+      hudCtx.beginPath();
+      const step = Math.max(1, Math.floor(wave.length / 96));
+      for (let i = 0; i < wave.length; i += step) {
+        const theta = (i / wave.length) * Math.PI * 2;
+        const amp = 0.5 + (wave[i] || 0) * 0.48 * (1.0 + smooth.vol * 0.5);
+        const px = scX + Math.cos(theta) * (scopeR * amp);
+        const py = scY + Math.sin(theta) * (scopeR * amp);
+        if (i === 0) hudCtx.moveTo(px, py);
+        else hudCtx.lineTo(px, py);
+      }
+      hudCtx.closePath();
+      hudCtx.stroke();
+    }
+
+    hudCtx.fillStyle = '#839bb5';
+    hudCtx.font = `${8 * dpr}px monospace`;
+    hudCtx.fillText('PHASE / POLAR VECTOR', scX - 44 * dpr, scY + scopeR + 14 * dpr);
+  }
+
+  // --- ANIMATION & RENDER LOOP ---
+
+  let lastTime = 0;
+  state.cameraPos = [0, 15, 38];
+
+  function render(now) {
+    const t = now * 0.001;
+    const dt = Math.min(0.1, lastTime ? t - lastTime : 0.016);
+    lastTime = t;
+    state.time = t;
+
+    // Fetch latest frame from window.VIZ if present
+    const hostFrame = window.VIZ ? window.VIZ.frame : null;
+    let audio = hostFrame ? hostFrame.audio : null;
+
+    // Autonomous fallback drift if silence or disconnected
+    if (!audio || audio.silence || !audio.connected) {
+      const ambientPulse = Math.sin(t * 1.8) * 0.5 + 0.5;
+      const bassPulse = Math.sin(t * 0.9) * 0.5 + 0.5;
+      audio = {
+        connected: false,
+        silence: true,
+        volume: 0.12 + ambientPulse * 0.08,
+        transient: ambientPulse > 0.88 ? 0.4 : 0.0,
+        beat: ambientPulse > 0.85 ? 0.7 : 0.0,
+        bands: {
+          subBass: 0.15 + bassPulse * 0.25,
+          bass: 0.2 + ambientPulse * 0.2,
+          lowMid: 0.18 + Math.sin(t * 2.2) * 0.1,
+          mid: 0.15 + Math.cos(t * 1.7) * 0.08,
+          highMid: 0.12 + Math.sin(t * 3.1) * 0.07,
+          treble: 0.1 + Math.cos(t * 4.0) * 0.06
+        },
+        stereo: { balance: Math.sin(t * 0.5) * 0.3, width: 0.5 },
+        spectralFlux: 0.1,
+        spectralCentroid: 0.3,
+        waveform: null,
+        spectrum: null
+      };
+    }
+
+    // Adaptive smoothing of dynamic values
+    const lerpRate = 1.0 - Math.exp(-dt * 18);
+    const slowRate = 1.0 - Math.exp(-dt * 6);
+
+    smooth.vol += (audio.volume - smooth.vol) * lerpRate;
+    smooth.transient += ((audio.transient || 0) - smooth.transient) * lerpRate;
+    smooth.beat += ((audio.beat || 0) - smooth.beat) * lerpRate;
+    smooth.flux += ((audio.spectralFlux || 0) - smooth.flux) * lerpRate;
+    smooth.centroid += ((audio.spectralCentroid || 0.3) - smooth.centroid) * slowRate;
+
+    if (audio.bands) {
+      smooth.subBass += (audio.bands.subBass - smooth.subBass) * lerpRate;
+      smooth.bass += (audio.bands.bass - smooth.bass) * lerpRate;
+      smooth.lowMid += (audio.bands.lowMid - smooth.lowMid) * lerpRate;
+      smooth.mid += (audio.bands.mid - smooth.mid) * lerpRate;
+      smooth.highMid += (audio.bands.highMid - smooth.highMid) * lerpRate;
+      smooth.treble += (audio.bands.treble - smooth.treble) * lerpRate;
+    }
+
+    if (audio.stereo) {
+      smooth.balance += (audio.stereo.balance - smooth.balance) * lerpRate;
+      smooth.width += (audio.stereo.width - smooth.width) * lerpRate;
+    }
+
+    // Continuous slow camera rotation + drag interpolation
+    if (!isPointerDown) {
+      state.targetYaw += (0.0025 + smooth.flux * 0.004);
+    }
+    state.yaw += (state.targetYaw - state.yaw) * 0.1;
+    state.pitch += (state.targetPitch - state.pitch) * 0.1;
+    state.dist += (state.targetDist - state.dist) * 0.1;
+
+    // Viewport resizing
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    if (glCanvas.width !== Math.floor(width * dpr) || glCanvas.height !== Math.floor(height * dpr)) {
+      glCanvas.width = Math.floor(width * dpr);
+      glCanvas.height = Math.floor(height * dpr);
+      hudCanvas.width = Math.floor(width * dpr);
+      hudCanvas.height = Math.floor(height * dpr);
+    }
+
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    // Deep architectural background with subtle slate nuance
+    gl.clearColor(0.02, 0.032, 0.048, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // Camera Calculation
+    const camX = Math.sin(state.yaw) * Math.cos(state.pitch) * state.dist;
+    const camY = Math.sin(state.pitch) * state.dist + 3.0;
+    const camZ = Math.cos(state.yaw) * Math.cos(state.pitch) * state.dist;
+    state.cameraPos = [camX, camY, camZ];
+
+    const aspect = width / height;
+    const projMatrix = Mat4.perspective(45 * Math.PI / 180, aspect, 0.5, 200.0);
+    const viewMatrix = Mat4.lookAt(state.cameraPos, [0, 2.0, 0], [0, 1, 0]);
+    const vpMatrix = Mat4.multiply(projMatrix, viewMatrix);
+
+    // 1. Draw Concentric Gimbal Rings (Mechanical Gyroscope Core)
+    const ringT = t * 0.6;
+    const r1Mat = createTransformMatrix(0, 4.0, 0, ringT * 1.1, ringT * 0.8, 0, 1, 1, 1);
+    const r2Mat = createTransformMatrix(0, 4.0, 0, -ringT * 0.7, 0, ringT * 1.3, 1, 1, 1);
+    const r3Mat = createTransformMatrix(0, 4.0, 0, ringT * 0.5, ringT * 0.9, -ringT * 0.4, 1, 1, 1);
+
+    const ringColA = [0.25, 0.55, 0.82];
+    const ringColB = [0.35, 0.75, 0.95];
+    const ringColC = [0.18, 0.38, 0.58];
+
+    drawSolidMesh(ring1Mesh, r1Mat, vpMatrix, ringColA, 1.5, 0.35);
+    drawSolidMesh(ring2Mesh, r2Mat, vpMatrix, ringColB, 1.6, 0.3);
+    drawSolidMesh(ring3Mesh, r3Mat, vpMatrix, ringColC, 1.4, 0.25);
+
+    // 2. Draw Central Harmonic Icosahedron Resonator
+    const coreScale = 1.0 + smooth.subBass * 0.6 + smooth.transient * 0.3;
+    const coreMat = createTransformMatrix(
+      0, 4.0, 0,
+      t * 0.8 + smooth.balance * 0.5,
+      t * 1.2,
+      smooth.transient * 0.4,
+      coreScale, coreScale, coreScale
+    );
+    const coreColor = [
+      0.35 + smooth.mid * 0.5,
+      0.65 + smooth.highMid * 0.35,
+      0.95 + smooth.treble * 0.05
+    ];
+    drawSolidMesh(coreMesh, coreMat, vpMatrix, coreColor, 2.0, 0.45);
+
+    // 3. Draw Cylindrical Acoustic Ribbon Matrix (Floating Harmonic Helix)
+    const spectrum = audio.spectrum;
+    const waveform = audio.waveform;
+    const ribbonRadius = 7.5;
+    const ribbonHeight = 3.6;
+
+    let rPosIdx = 0;
+    for (let i = 0; i < RIBBON_SLICES; i++) {
+      const u = i / (RIBBON_SLICES - 1);
+      const theta = u * Math.PI * 4.0 + (t * 0.4);
+
+      // Sample raw spectrum and waveform if available
+      let sVal = 0.1;
+      let wVal = 0.0;
+      if (spectrum && spectrum.length > 0) {
+        const specIdx = Math.floor(u * (spectrum.length - 1));
+        sVal = spectrum[specIdx] || 0.0;
+      } else {
+        sVal = Math.sin(u * 18.0 + t * 4.0) * 0.25 + 0.3;
+      }
+
+      if (waveform && waveform.length > 0) {
+        const waveIdx = Math.floor(u * (waveform.length - 1));
+        wVal = (waveform[waveIdx] || 0.0) * 1.5;
+      } else {
+        wVal = Math.cos(u * 12.0 - t * 3.0) * 0.3;
+      }
+
+      const rad = ribbonRadius + sVal * 4.2 + (smooth.subBass * 1.5);
+      const rx = Math.cos(theta) * rad;
+      const rz = Math.sin(theta) * rad;
+      const ry = 4.0 + (u - 0.5) * ribbonHeight + wVal * 2.0;
+
+      // Bottom and Top vertex of the ribbon strip
+      const halfThick = 0.45 + sVal * 0.5;
+      ribbonData.pos[rPosIdx++] = rx;
+      ribbonData.pos[rPosIdx++] = ry - halfThick;
+      ribbonData.pos[rPosIdx++] = rz;
+
+      ribbonData.pos[rPosIdx++] = rx;
+      ribbonData.pos[rPosIdx++] = ry + halfThick;
+      ribbonData.pos[rPosIdx++] = rz;
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ribbonPosBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, ribbonData.pos, gl.DYNAMIC_DRAW);
+
+    gl.useProgram(ribbonProgram);
+    const uRibbonMVP = gl.getUniformLocation(ribbonProgram, 'uMVP');
+    const uRibbonColA = gl.getUniformLocation(ribbonProgram, 'uColorA');
+    const uRibbonColB = gl.getUniformLocation(ribbonProgram, 'uColorB');
+    const uRibbonEnergy = gl.getUniformLocation(ribbonProgram, 'uEnergy');
+
+    gl.uniformMatrix4fv(uRibbonMVP, false, vpMatrix);
+    gl.uniform3f(uRibbonColA, 0.2, 0.65, 0.95);
+    gl.uniform3f(uRibbonColB, 0.45, 0.92, 0.85);
+    gl.uniform1f(uRibbonEnergy, smooth.vol + smooth.transient);
+
+    const aRibbonPos = gl.getAttribLocation(ribbonProgram, 'aPosition');
+    const aRibbonUV = gl.getAttribLocation(ribbonProgram, 'aUV');
+
+    gl.enableVertexAttribArray(aRibbonPos);
+    gl.vertexAttribPointer(aRibbonPos, 3, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, ribbonUVBuffer);
+    gl.enableVertexAttribArray(aRibbonUV);
+    gl.vertexAttribPointer(aRibbonUV, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ribbonIndexBuffer);
+    gl.drawElements(gl.TRIANGLES, ribbonData.indices.length, gl.UNSIGNED_SHORT, 0);
+
+    // 4. Draw Array of Resonant Monolith Pillars
+    for (let i = 0; i < pillars.length; i++) {
+      const p = pillars[i];
+
+      // Frequency mapping by column position
+      let bandVal = smooth.mid;
+      if (p.ring === 0) {
+        bandVal = p.freqIdx < 0.5 ? smooth.subBass : smooth.bass;
+      } else if (p.ring === 1) {
+        bandVal = p.freqIdx < 0.5 ? smooth.lowMid : smooth.mid;
+      } else {
+        bandVal = p.freqIdx < 0.5 ? smooth.highMid : smooth.treble;
+      }
+
+      // Spectrum index override if fine spectrum is available
+      if (spectrum && spectrum.length > 0) {
+        const idx = Math.min(spectrum.length - 1, Math.floor(p.freqIdx * (spectrum.length * 0.8)));
+        bandVal = Math.max(bandVal * 0.4, spectrum[idx] * 1.5);
+      }
+
+      // Elevation dynamics
+      const targetH = 0.8 + bandVal * 7.5 + (smooth.transient > 0.4 ? smooth.transient * 2.0 : 0.0);
+      p.height += (targetH - p.height) * 0.22;
+
+      const pModel = createTransformMatrix(
+        p.x, -2.5, p.z,
+        0, -p.angle + Math.PI / 2, 0,
+        1.0, p.height, 1.0
+      );
+
+      const ringBaseShade = p.ring === 0 ? 0.35 : (p.ring === 1 ? 0.28 : 0.22);
+      const pillarColor = [
+        ringBaseShade + bandVal * 0.3,
+        ringBaseShade * 1.4 + bandVal * 0.4,
+        ringBaseShade * 2.2 + bandVal * 0.45
+      ];
+
+      drawSolidMesh(pillarMesh, pModel, vpMatrix, pillarColor, 1.3, 0.5);
+    }
+
+    // 5. Draw Ground Geometric Acoustic Foundation Grid
+    const groundSegments = 16;
+    const groundRadius = 24.0;
+    const baseCol = [0.12, 0.2, 0.3];
+    const groundMat = createTransformMatrix(0, -2.5, 0, 0, 0, 0, groundRadius, 0.1, groundRadius);
+    // Draw a large stabilizing anchor pedestal
+    drawSolidMesh(pillarMesh, groundMat, vpMatrix, baseCol, 1.1, 0.2);
+
+    // 6. Draw HUD Layer
+    renderHUD(glCanvas.width, glCanvas.height, dpr, audio);
+
+    requestAnimationFrame(render);
+  }
+
+  // Hook host subscription
+  if (window.VIZ && typeof window.VIZ.onFrame === 'function') {
+    window.VIZ.onFrame((frame) => {
+      // Host frame is automatically accessible via window.VIZ.frame in animation loop
+    });
+  }
+
+  // Start rendering
+  requestAnimationFrame(render);
+
+})();
+</script>
+</body>
+</html>

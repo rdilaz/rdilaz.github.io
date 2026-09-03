@@ -18,6 +18,7 @@ import {
   DreamReliabilityHarness,
   DreamReliabilityError,
   FAILURE_CODES,
+  latestCurrentVisualReport,
   RELIABILITY_SCHEMA,
 } from './reliability.js';
 import { GenerationStore, DiagnosticStore } from './storage.js';
@@ -1196,7 +1197,7 @@ function swapSlots() {
   standbySlot.sandbox.setPresentation('standby');
 }
 
-async function promoteCandidate({ harness, candidateSandbox, candidateSessionId, diagnostic, signal, traceAttempt = null, onCommit = () => {} }) {
+async function promoteCandidate({ harness, qualification, candidateSandbox, candidateSessionId, diagnostic, signal, traceAttempt = null, onCommit = () => {} }) {
   if (
     !candidateSandbox
     || standbySlot.sandbox !== candidateSandbox
@@ -1228,7 +1229,7 @@ async function promoteCandidate({ harness, candidateSandbox, candidateSessionId,
   try {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     watchdog = await Promise.race([
-      harness.watchdog({ durationMs: 3600, signal }),
+      harness.watchdog({ durationMs: 3600, signal, previousReport: latestCurrentVisualReport(qualification) }),
       immediateFailure,
     ]);
   } catch (error) {
@@ -1787,6 +1788,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
         if (!checked.passed) throw new DreamReliabilityError(checked.health.failure, checked.health);
         const watchdog = await promoteCandidate({
           harness: checked.harness,
+          qualification: checked.health,
           candidateSandbox: checked.candidateSandbox,
           candidateSessionId: checked.candidateSessionId,
           diagnostic,
@@ -2665,6 +2667,7 @@ async function recoverFromRuntimeFailure(event) {
       if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
       return promoteCandidate({
         harness: candidate.harness,
+        qualification: candidate.health,
         candidateSandbox: candidate.candidateSandbox,
         candidateSessionId: candidate.candidateSessionId,
         diagnostic: recoveryDiagnostic,

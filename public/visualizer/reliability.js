@@ -304,16 +304,50 @@ function fingerprint(report) {
 }
 
 
-function currentVisualSignal(report) {
+function freshUnpreservedWebGLProof(report, dominant, previous) {
+  const type = dominant?.activity?.type;
+  if (!['webgl', 'experimental-webgl', 'webgl2'].includes(type)) return false;
+  if (dominant.activity?.preserveDrawingBuffer !== false || !dominant.successfulActivity) return false;
+  if ((report?.renderer?.contextLosses || []).some(item => !item.restored)) return false;
+  if ((report?.renderer?.shaderFailures || []).length || (report?.renderer?.programFailures || []).length) return false;
+  if (!dominant.renderPixel?.informative) return false;
+  if (Number(dominant.renderCaptureRequest) !== Number(report?.visual?.renderCaptureRequest)) return false;
+  if (!previous) return true;
+  const prior = (previous?.visual?.canvases || []).find(canvas => (
+    (dominant.id && canvas.id === dominant.id)
+    || (dominant.elementId && canvas.elementId === dominant.elementId)
+  ));
+  return Boolean(
+    prior
+    && Number(dominant.renderCaptureRequest) > Number(prior.renderCaptureRequest)
+    && Number(dominant.renderPixelDrawCalls) > Number(prior.activity?.drawCalls)
+    && Number(dominant.activity?.drawCalls) > Number(prior.activity?.drawCalls)
+    && Number(dominant.activity?.programsLinked) > 0
+    && Number(dominant.activity?.lastActivityAt) > Number(prior.activity?.lastActivityAt)
+  );
+}
+
+export function currentVisualSignal(report, previous = null) {
   const canvases = report?.visual?.canvases || [];
   const dominant = canvases[0] || null;
   const canvasSignal = canvases.some(canvas => Boolean(canvas.pixel?.informative));
   const domSignal = Boolean(report?.visual?.dom?.visible);
   if (dominant?.coverage >= 0.45) {
-    if (dominant.pixel?.sampled) return Boolean(dominant.pixel.informative);
+    if (dominant.pixel?.sampled) {
+      return Boolean(dominant.pixel.informative || freshUnpreservedWebGLProof(report, dominant, previous));
+    }
     return Boolean(dominant.successfulActivity);
   }
   return canvasSignal || domSignal;
+}
+
+export function latestCurrentVisualReport(qualification) {
+  const stages = Array.isArray(qualification?.stages) ? qualification.stages : [];
+  for (let index = stages.length - 1; index >= 0; index -= 1) {
+    const report = stages[index]?.report;
+    if (report && currentVisualSignal(report)) return report;
+  }
+  return null;
 }
 
 function firstFatal(report) {
@@ -702,7 +736,7 @@ export class DreamReliabilityHarness {
     };
   }
 
-  async watchdog({ durationMs = 3600, signal } = {}) {
+  async watchdog({ durationMs = 3600, signal, previousReport = null } = {}) {
     const startedAt = nowIso();
     const eventStart = this.sandbox.events.length;
     let before = null;
@@ -748,14 +782,15 @@ export class DreamReliabilityHarness {
     }
     let after = liveness.report;
 
-    if (currentVisualSignal(before) && !currentVisualSignal(after)) {
+    const visualBaseline = currentVisualSignal(before) ? before : previousReport;
+    if (currentVisualSignal(visualBaseline) && !currentVisualSignal(after, visualBaseline)) {
       await wait(420, signal);
       const confirmation = await this.sandbox.probe('post-launch-visual-loss-confirmation', { signal, timeoutMs: 2600 });
-      if (!currentVisualSignal(confirmation)) {
+      if (!currentVisualSignal(confirmation, after)) {
         const failure = makeFailure(
           FAILURE_CODES.NO_VISIBLE_OUTPUT,
           'The candidate rendered during preflight, then lost its visible output after promotion.',
-          { before: before.visual, after: after.visual, confirmation: confirmation.visual },
+          { qualification: previousReport?.visual || null, before: before?.visual || null, after: after.visual, confirmation: confirmation.visual },
         );
         return failedReport({
           startedAt,

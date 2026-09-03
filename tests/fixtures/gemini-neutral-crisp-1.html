@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Acoustic Resonance Monolith</title>
+<style>
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background-color: #030508;
+    color: #e2ecf8;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #display-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas#gl-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 1;
+  }
+  canvas#hud-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 2;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="display-container">
+  <canvas id="gl-canvas"></canvas>
+  <canvas id="hud-canvas"></canvas>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // --- Canvas & Context Setup ---
+  const glCanvas = document.getElementById('gl-canvas');
+  const hudCanvas = document.getElementById('hud-canvas');
+
+  const gl = glCanvas.getContext('webgl2', {
+    alpha: false,
+    antialias: true,
+    depth: true,
+    stencil: false,
+    powerPreference: 'high-performance'
+  }) || glCanvas.getContext('webgl', {
+    alpha: false,
+    antialias: true,
+    depth: true,
+    stencil: false,
+    powerPreference: 'high-performance'
+  });
+
+  if (!gl) {
+    document.body.innerHTML = '<p style="color:#f66;padding:24px;">WebGL unsupported.</p>';
+    return;
+  }
+
+  const isWebGL2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
+  if (!isWebGL2) {
+    gl.getExtension('OES_standard_derivatives');
+  }
+
+  const hudCtx = hudCanvas.getContext('2d', { alpha: true });
+
+  // --- Internal Audio State Fallback & Smoothing ---
+  const state = {
+    time: 0,
+    dt: 0.016,
+    connected: false,
+    silence: true,
+    volume: 0,
+    peak: 0,
+    transient: 0,
+    beat: 0,
+    tempo: 120,
+    spectralFlux: 0,
+    spectralCentroid: 0.3,
+    bands: { subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0 },
+    stereo: { balance: 0, width: 0.5 },
+    waveform: new Float32Array(128),
+    spectrum: new Float32Array(96),
+    
+    // Derived continuous parameters
+    coreRotX: 0,
+    coreRotY: 0,
+    coreRotZ: 0,
+    gimbal1: 0,
+    gimbal2: 0,
+    gimbal3: 0,
+    camRot: 0,
+    camPitch: 0.28,
+    targetPitch: 0.28,
+    targetCamRot: 0,
+    pulseEnergy: 0,
+    bassAccum: 0
+  };
+
+  for (let i = 0; i < 128; i++) state.waveform[i] = 0;
+  for (let i = 0; i < 96; i++) state.spectrum[i] = 0;
+
+  // --- Matrix Math Helpers ---
+  const Mat4 = {
+    create() {
+      return new Float32Array([
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+      ]);
+    },
+    perspective(out, fovy, aspect, near, far) {
+      const f = 1.0 / Math.tan(fovy / 2);
+      const nf = 1 / (near - far);
+      out[0] = f / aspect; out[1] = 0; out[2] = 0; out[3] = 0;
+      out[4] = 0; out[5] = f; out[6] = 0; out[7] = 0;
+      out[8] = 0; out[9] = 0; out[10] = (far + near) * nf; out[11] = -1;
+      out[12] = 0; out[13] = 0; out[14] = (2 * far * near) * nf; out[15] = 0;
+      return out;
+    },
+    lookAt(out, eye, center, up) {
+      let x0, x1, x2, y0, y1, y2, z0, z1, z2, len;
+      let eyex = eye[0], eyey = eye[1], eyez = eye[2];
+      let upx = up[0], upy = up[1], upz = up[2];
+      let centerx = center[0], centery = center[1], centerz = center[2];
+
+      z0 = eyex - centerx; z1 = eyey - centery; z2 = eyez - centerz;
+      len = 1 / Math.hypot(z0, z1, z2);
+      z0 *= len; z1 *= len; z2 *= len;
+
+      x0 = upy * z2 - upz * z1;
+      x1 = upz * z0 - upx * z2;
+      x2 = upx * z1 - upy * z0;
+      len = Math.hypot(x0, x1, x2);
+      if (!len) { x0 = 0; x1 = 0; x2 = 0; }
+      else { len = 1 / len; x0 *= len; x1 *= len; x2 *= len; }
+
+      y0 = z1 * x2 - z2 * x1;
+      y1 = z2 * x0 - z0 * x2;
+      y2 = z0 * x1 - z1 * x0;
+      len = Math.hypot(y0, y1, y2);
+      if (!len) { y0 = 0; y1 = 0; y2 = 0; }
+      else { len = 1 / len; y0 *= len; y1 *= len; y2 *= len; }
+
+      out[0] = x0; out[1] = y0; out[2] = z0; out[3] = 0;
+      out[4] = x1; out[5] = y1; out[6] = z1; out[7] = 0;
+      out[8] = x2; out[9] = y2; out[10] = z2; out[11] = 0;
+      out[12] = -(x0 * eyex + x1 * eyey + x2 * eyez);
+      out[13] = -(y0 * eyex + y1 * eyey + y2 * eyez);
+      out[14] = -(z0 * eyex + z1 * eyey + z2 * eyez);
+      out[15] = 1;
+      return out;
+    },
+    multiply(out, a, b) {
+      const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+      const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+      const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+      const a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
+
+      let b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+      out[0] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+      out[1] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+      out[2] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+      out[3] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+      b0 = b[4]; b1 = b[5]; b2 = b[6]; b3 = b[7];
+      out[4] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+      out[5] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+      out[6] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+      out[7] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+      b0 = b[8]; b1 = b[9]; b2 = b[10]; b3 = b[11];
+      out[8] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+      out[9] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+      out[10] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+      out[11] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+
+      b0 = b[12]; b1 = b[13]; b2 = b[14]; b3 = b[15];
+      out[12] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+      out[13] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+      out[14] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+      out[15] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+      return out;
+    },
+    fromRotationTranslationScale(out, q, v, s) {
+      const x = q[0], y = q[1], z = q[2], w = q[3];
+      const x2 = x + x, y2 = y + y, z2 = z + z;
+      const xx = x * x2, xy = x * y2, xz = x * z2;
+      const yy = y * y2, yz = y * z2, zz = z * z2;
+      const wx = w * x2, wy = w * y2, wz = w * z2;
+      const sx = s[0], sy = s[1], sz = s[2];
+
+      out[0] = (1 - (yy + zz)) * sx;
+      out[1] = (xy + wz) * sx;
+      out[2] = (xz - wy) * sx;
+      out[3] = 0;
+      out[4] = (xy - wz) * sy;
+      out[5] = (1 - (xx + zz)) * sy;
+      out[6] = (yz + wx) * sy;
+      out[7] = 0;
+      out[8] = (xz + wy) * sz;
+      out[9] = (yz - wx) * sz;
+      out[10] = (1 - (xx + yy)) * sz;
+      out[11] = 0;
+      out[12] = v[0];
+      out[13] = v[1];
+      out[14] = v[2];
+      out[15] = 1;
+      return out;
+    }
+  };
+
+  const Quat = {
+    setAxisAngle(out, axis, rad) {
+      rad = rad * 0.5;
+      const s = Math.sin(rad);
+      out[0] = s * axis[0];
+      out[1] = s * axis[1];
+      out[2] = s * axis[2];
+      out[3] = Math.cos(rad);
+      return out;
+    },
+    multiply(out, a, b) {
+      const ax = a[0], ay = a[1], az = a[2], aw = a[3];
+      const bx = b[0], by = b[1], bz = b[2], bw = b[3];
+      out[0] = ax * bw + aw * bx + ay * bz - az * by;
+      out[1] = ay * bw + aw * by + az * bx - ax * bz;
+      out[2] = az * bw + aw * bz + ax * by - ay * bx;
+      out[3] = aw * bw - ax * bx - ay * by - az * bz;
+      return out;
+    }
+  };
+
+  // --- WebGL Shader Programs ---
+  function createShader(gl, type, source) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, source);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      const info = gl.getShaderInfoLog(s);
+      gl.deleteShader(s);
+      throw new Error("Shader compile error: " + info);
+    }
+    return s;
+  }
+
+  function createProgram(gl, vsSrc, fsSrc) {
+    const vs = createShader(gl, gl.VERTEX_SHADER, vsSrc);
+    const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      const err = gl.getProgramInfoLog(p);
+      gl.deleteProgram(p);
+      throw new Error("Program link error: " + err);
+    }
+    return p;
+  }
+
+  // 1. Shading Program for Monolith Pillars and Geometric Core (Solid + Facet Lighting)
+  const solidVS = `
+    attribute vec3 aPosition;
+    attribute vec3 aNormal;
+    attribute vec3 aColor;
+
+    uniform mat4 uMVP;
+    uniform mat4 uModel;
+
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying vec3 vColor;
+
+    void main() {
+      vec4 wp = uModel * vec4(aPosition, 1.0);
+      vWorldPos = wp.xyz;
+      vNormal = normalize(mat3(uModel) * aNormal);
+      vColor = aColor;
+      gl_Position = uMVP * vec4(aPosition, 1.0);
+    }
+  `;
+
+  const solidFS = `
+    precision highp float;
+
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying vec3 vColor;
+
+    uniform vec3 uLightDir;
+    uniform vec3 uEyePos;
+    uniform float uEmissive;
+    uniform float uMetallic;
+
+    void main() {
+      vec3 N = normalize(vNormal);
+      vec3 L = normalize(uLightDir);
+      vec3 V = normalize(uEyePos - vWorldPos);
+      vec3 H = normalize(L + V);
+
+      float diff = max(dot(N, L), 0.0);
+      float diffBack = max(dot(N, -L), 0.0) * 0.25;
+      float spec = pow(max(dot(N, H), 0.0), 32.0) * uMetallic;
+      
+      // Rim accent to preserve sharp silhouette
+      float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.45;
+
+      vec3 ambient = vec3(0.04, 0.07, 0.12) * (1.0 - uMetallic * 0.5);
+      vec3 diffuseColor = vColor * (diff + diffBack);
+      vec3 specColor = vec3(0.9, 0.95, 1.0) * spec;
+      vec3 rimColor = vec3(0.3, 0.7, 1.0) * rim;
+
+      vec3 finalCol = ambient + diffuseColor + specColor + rimColor + (vColor * uEmissive);
+      gl_FragColor = vec4(finalCol, 1.0);
+    }
+  `;
+
+  // 2. Vector Lines Program (Gimbals, Oscilloscope, Grids)
+  const lineVS = `
+    attribute vec3 aPosition;
+    attribute vec4 aColor;
+
+    uniform mat4 uMVP;
+
+    varying vec4 vColor;
+
+    void main() {
+      vColor = aColor;
+      gl_Position = uMVP * vec4(aPosition, 1.0);
+    }
+  `;
+
+  const lineFS = `
+    precision mediump float;
+    varying vec4 vColor;
+
+    void main() {
+      gl_FragColor = vColor;
+    }
+  `;
+
+  const solidProg = createProgram(gl, solidVS, solidFS);
+  const lineProg = createProgram(gl, lineVS, lineFS);
+
+  // Attribute & Uniform Locations
+  const solidAttrs = {
+    position: gl.getAttribLocation(solidProg, 'aPosition'),
+    normal: gl.getAttribLocation(solidProg, 'aNormal'),
+    color: gl.getAttribLocation(solidProg, 'aColor')
+  };
+  const solidUniforms = {
+    uMVP: gl.getUniformLocation(solidProg, 'uMVP'),
+    uModel: gl.getUniformLocation(solidProg, 'uModel'),
+    uLightDir: gl.getUniformLocation(solidProg, 'uLightDir'),
+    uEyePos: gl.getUniformLocation(solidProg, 'uEyePos'),
+    uEmissive: gl.getUniformLocation(solidProg, 'uEmissive'),
+    uMetallic: gl.getUniformLocation(solidProg, 'uMetallic')
+  };
+
+  const lineAttrs = {
+    position: gl.getAttribLocation(lineProg, 'aPosition'),
+    color: gl.getAttribLocation(lineProg, 'aColor')
+  };
+  const lineUniforms = {
+    uMVP: gl.getUniformLocation(lineProg, 'uMVP')
+  };
+
+  // --- Geometry Construction ---
+
+  // Unit Box Generator with distinct face normals
+  function createUnitBoxGeometry() {
+    const pos = [];
+    const norm = [];
+
+    const faces = [
+      { n: [0, 0, 1], p: [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]] },
+      { n: [0, 0, -1], p: [[0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5]] },
+      { n: [0, 1, 0], p: [[-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5]] },
+      { n: [0, -1, 0], p: [[-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [-0.5, -0.5, 0.5]] },
+      { n: [1, 0, 0], p: [[0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]] },
+      { n: [-1, 0, 0], p: [[-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5]] }
+    ];
+
+    for (let f of faces) {
+      const [p0, p1, p2, p3] = f.p;
+      // tri 1
+      pos.push(...p0, ...p1, ...p2);
+      norm.push(...f.n, ...f.n, ...f.n);
+      // tri 2
+      pos.push(...p0, ...p2, ...p3);
+      norm.push(...f.n, ...f.n, ...f.n);
+    }
+    return {
+      positions: new Float32Array(pos),
+      normals: new Float32Array(norm),
+      count: pos.length / 3
+    };
+  }
+
+  // Dual-frequency Faceted Icosahedral Core
+  function createIcosahedron() {
+    const t = (1.0 + Math.sqrt(5.0)) / 2.0;
+    const v = [
+      -1,  t,  0,   1,  t,  0,  -1, -t,  0,   1, -t,  0,
+       0, -1,  t,   0,  1,  t,   0, -1, -t,   0,  1, -t,
+       t,  0, -1,   t,  0,  1,  -t,  0, -1,  -t,  0,  1
+    ];
+    // Normalize
+    for (let i = 0; i < v.length; i += 3) {
+      const len = Math.hypot(v[i], v[i+1], v[i+2]);
+      v[i] /= len; v[i+1] /= len; v[i+2] /= len;
+    }
+
+    const indices = [
+      0, 11, 5,   0, 5, 1,    0, 1, 7,    0, 7, 10,   0, 10, 11,
+      1, 5, 9,    5, 11, 4,   11, 10, 2,  10, 7, 6,   7, 1, 8,
+      3, 9, 4,    3, 4, 2,    3, 2, 6,    3, 6, 8,    3, 8, 9,
+      4, 9, 5,    2, 4, 11,   6, 2, 10,   8, 6, 7,    9, 8, 1
+    ];
+
+    const pos = [];
+    const norm = [];
+
+    for (let i = 0; i < indices.length; i += 3) {
+      const i0 = indices[i] * 3, i1 = indices[i+1] * 3, i2 = indices[i+2] * 3;
+      const ax = v[i0], ay = v[i0+1], az = v[i0+2];
+      const bx = v[i1], by = v[i1+1], bz = v[i1+2];
+      const cx = v[i2], cy = v[i2+1], cz = v[i2+2];
+
+      // Flat facet normal
+      const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+      const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+      let nx = e1y * e2z - e1z * e2y;
+      let ny = e1z * e2x - e1x * e2z;
+      let nz = e1x * e2y - e1y * e2x;
+      const nl = 1 / Math.hypot(nx, ny, nz);
+      nx *= nl; ny *= nl; nz *= nl;
+
+      pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+      norm.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    }
+
+    return {
+      positions: new Float32Array(pos),
+      normals: new Float32Array(norm),
+      count: pos.length / 3
+    };
+  }
+
+  // Circle / Ring Line Generator
+  function createRingLine(radius, segments) {
+    const pos = [];
+    const col = [];
+    for (let i = 0; i <= segments; i++) {
+      const theta = (i / segments) * Math.PI * 2;
+      pos.push(Math.cos(theta) * radius, 0, Math.sin(theta) * radius);
+      col.push(0.35, 0.75, 0.95, 0.7);
+    }
+    return {
+      positions: new Float32Array(pos),
+      colors: new Float32Array(col),
+      count: pos.length / 3
+    };
+  }
+
+  // Stepped Concentric Horizon Grid Lines
+  function createConcentricGrid(radii, segs) {
+    const pos = [];
+    const col = [];
+    for (let r of radii) {
+      for (let i = 0; i <= segs; i++) {
+        const t1 = (i / segs) * Math.PI * 2;
+        const t2 = ((i + 1) / segs) * Math.PI * 2;
+        pos.push(Math.cos(t1) * r, -2.2, Math.sin(t1) * r);
+        pos.push(Math.cos(t2) * r, -2.2, Math.sin(t2) * r);
+        const alpha = Math.max(0.08, 0.35 - (r * 0.02));
+        col.push(0.18, 0.32, 0.48, alpha);
+        col.push(0.18, 0.32, 0.48, alpha);
+      }
+    }
+    // Radial crosshairs
+    const spokes = 16;
+    for (let s = 0; s < spokes; s++) {
+      const th = (s / spokes) * Math.PI * 2;
+      const c = Math.cos(th), si = Math.sin(th);
+      pos.push(c * radii[0], -2.2, si * radii[0]);
+      pos.push(c * radii[radii.length - 1], -2.2, si * radii[radii.length - 1]);
+      col.push(0.2, 0.35, 0.5, 0.2);
+      col.push(0.2, 0.35, 0.5, 0.2);
+    }
+    return {
+      positions: new Float32Array(pos),
+      colors: new Float32Array(col),
+      count: pos.length / 3
+    };
+  }
+
+  // Pre-generate static meshes
+  const boxGeom = createUnitBoxGeometry();
+  const boxVBO = {
+    pos: gl.createBuffer(),
+    norm: gl.createBuffer(),
+    col: gl.createBuffer(),
+    count: boxGeom.count
+  };
+  gl.bindBuffer(gl.ARRAY_BUFFER, boxVBO.pos);
+  gl.bufferData(gl.ARRAY_BUFFER, boxGeom.positions, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, boxVBO.norm);
+  gl.bufferData(gl.ARRAY_BUFFER, boxGeom.normals, gl.STATIC_DRAW);
+
+  const icosaGeom = createIcosahedron();
+  const icosaVBO = {
+    pos: gl.createBuffer(),
+    norm: gl.createBuffer(),
+    col: gl.createBuffer(),
+    count: icosaGeom.count
+  };
+  gl.bindBuffer(gl.ARRAY_BUFFER, icosaVBO.pos);
+  gl.bufferData(gl.ARRAY_BUFFER, icosaGeom.positions, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, icosaVBO.norm);
+  gl.bufferData(gl.ARRAY_BUFFER, icosaGeom.normals, gl.STATIC_DRAW);
+
+  // Reusable dynamic color buffer for box instances
+  const dynamicColorData = new Float32Array(boxGeom.count * 3);
+
+  // Gyroscope line buffers
+  const ringGeom1 = createRingLine(2.4, 96);
+  const ringGeom2 = createRingLine(2.7, 96);
+  const ringGeom3 = createRingLine(3.0, 96);
+
+  const ringVBO1 = createLineVBO(ringGeom1);
+  const ringVBO2 = createLineVBO(ringGeom2);
+  const ringVBO3 = createLineVBO(ringGeom3);
+
+  const gridGeom = createConcentricGrid([3.2, 4.5, 6.0, 7.5, 9.2], 72);
+  const gridVBO = createLineVBO(gridGeom);
+
+  // Dynamic Oscilloscope Line Mesh
+  const OSC_SEGS = 128;
+  const oscLinePositions = new Float32Array(OSC_SEGS * 2 * 3);
+  const oscLineColors = new Float32Array(OSC_SEGS * 2 * 4);
+  const oscLineVBO = {
+    pos: gl.createBuffer(),
+    col: gl.createBuffer(),
+    count: OSC_SEGS * 2
+  };
+  gl.bindBuffer(gl.ARRAY_BUFFER, oscLineVBO.pos);
+  gl.bufferData(gl.ARRAY_BUFFER, oscLinePositions, gl.DYNAMIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, oscLineVBO.col);
+  gl.bufferData(gl.ARRAY_BUFFER, oscLineColors, gl.DYNAMIC_DRAW);
+
+  function createLineVBO(geom) {
+    const pos = gl.createBuffer();
+    const col = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, pos);
+    gl.bufferData(gl.ARRAY_BUFFER, geom.positions, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, col);
+    gl.bufferData(gl.ARRAY_BUFFER, geom.colors, gl.STATIC_DRAW);
+    return { pos, col, count: geom.count };
+  }
+
+  // --- Monolith Cylindrical Array Configuration ---
+  const NUM_MONOLITHS = 64;
+  const MONOLITH_RADIUS = 4.6;
+
+  // --- Interaction Tracking ---
+  let isPointerDown = false;
+  let lastPointerX = 0;
+  let lastPointerY = 0;
+
+  window.addEventListener('pointerdown', (e) => {
+    isPointerDown = true;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!isPointerDown) return;
+    const dx = e.clientX - lastPointerX;
+    const dy = e.clientY - lastPointerY;
+    lastPointerX = e.clientX;
+    lastPointerY = e.clientY;
+    state.targetCamRot += dx * 0.005;
+    state.targetPitch = Math.max(0.05, Math.min(1.2, state.targetPitch + dy * 0.005));
+  });
+  window.addEventListener('pointerup', () => { isPointerDown = false; });
+  window.addEventListener('pointercancel', () => { isPointerDown = false; });
+
+  // --- Resize Handler ---
+  let curWidth = 0, curHeight = 0, curDpr = 1;
+  function updateViewport(w, h, dpr) {
+    dpr = Math.min(2, dpr || window.devicePixelRatio || 1);
+    if (w === curWidth && h === curHeight && dpr === curDpr) return;
+    curWidth = w;
+    curHeight = h;
+    curDpr = dpr;
+
+    glCanvas.width = Math.floor(w * dpr);
+    glCanvas.height = Math.floor(h * dpr);
+    hudCanvas.width = Math.floor(w * dpr);
+    hudCanvas.height = Math.floor(h * dpr);
+
+    glCanvas.style.width = w + 'px';
+    glCanvas.style.height = h + 'px';
+    hudCanvas.style.width = w + 'px';
+    hudCanvas.style.height = h + 'px';
+
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+  }
+
+  // --- Main Update & Render ---
+  const projMat = Mat4.create();
+  const viewMat = Mat4.create();
+  const vpMat = Mat4.create();
+  const modelMat = Mat4.create();
+  const mvpMat = Mat4.create();
+
+  const eyePos = new Float32Array([0, 2.5, 9.5]);
+  const centerPos = new Float32Array([0, 0, 0]);
+  const upPos = new Float32Array([0, 1, 0]);
+  const lightDir = new Float32Array([0.5, 0.8, 0.4]);
+
+  const qRot = new Float32Array([0, 0, 0, 1]);
+  const qTemp = new Float32Array([0, 0, 0, 1]);
+
+  function renderScene(audio, dt) {
+    state.time += dt;
+
+    // Smooth inertia camera
+    state.camRot += (state.targetCamRot - state.camRot) * 0.1;
+    state.camPitch += (state.targetPitch - state.camPitch) * 0.1;
+
+    // Autonomous slow orbital pan
+    state.targetCamRot += 0.0018 + (audio.bands.bass * 0.003);
+
+    // Audio-reactive angular velocity
+    const bassDrive = audio.bands.bass + audio.bands.subBass * 0.8;
+    const fluxDrive = audio.spectralFlux;
+    state.coreRotY += dt * (0.4 + bassDrive * 1.5 + audio.beat * 0.5);
+    state.coreRotX += dt * (0.25 + audio.bands.mid * 0.9);
+    state.coreRotZ += dt * (0.15 + audio.bands.treble * 1.2);
+
+    state.gimbal1 += dt * (0.35 + audio.bands.lowMid * 1.2);
+    state.gimbal2 -= dt * (0.28 + audio.bands.mid * 1.4);
+    state.gimbal3 += dt * (0.20 + audio.bands.highMid * 1.6);
+
+    state.pulseEnergy = Math.max(state.pulseEnergy * 0.92, audio.transient * 1.5 + audio.beat * 1.2);
+
+    // Setup Camera
+    const camDist = 9.8 - (audio.bands.subBass * 1.2) - (state.pulseEnergy * 0.4);
+    eyePos[0] = Math.sin(state.camRot) * Math.cos(state.camPitch) * camDist;
+    eyePos[1] = Math.sin(state.camPitch) * camDist + 0.3;
+    eyePos[2] = Math.cos(state.camRot) * Math.cos(state.camPitch) * camDist;
+
+    const aspect = glCanvas.width / glCanvas.height;
+    Mat4.perspective(projMat, Math.PI / 4, aspect, 0.1, 100.0);
+    Mat4.lookAt(viewMat, eyePos, centerPos, upPos);
+    Mat4.multiply(vpMat, projMat, viewMat);
+
+    // Clear Screen (Void Obsidian with Deep Indigo Floor)
+    gl.clearColor(0.015, 0.024, 0.038, 1.0);
+    gl.clearDepth(1.0);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // 1. Draw Concentric Horizon Grid
+    gl.useProgram(lineProg);
+    gl.uniformMatrix4fv(lineUniforms.uMVP, false, vpMat);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gridVBO.pos);
+    gl.vertexAttribPointer(lineAttrs.position, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(lineAttrs.position);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gridVBO.col);
+    gl.vertexAttribPointer(lineAttrs.color, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(lineAttrs.color);
+    gl.drawArrays(gl.LINES, 0, gridVBO.count);
+
+    // 2. Draw Gyroscopic Kinetic Rings
+    drawGimbalRing(ringVBO1, [1, 0, 0], state.gimbal1, [0.85, 0.45, 0.15, 0.85]);
+    drawGimbalRing(ringVBO2, [0, 1, 0.5], state.gimbal2, [0.20, 0.78, 0.95, 0.85]);
+    drawGimbalRing(ringVBO3, [0.5, 0, 1], state.gimbal3, [0.65, 0.35, 0.95, 0.75]);
+
+    // 3. Draw Waveform Ribbon (Spatial Lissajous Cylinder)
+    updateAndDrawWaveformRibbon(audio.waveform, vpMat);
+
+    // 4. Draw Radial Spectral Monolith Pillars (Clarity, Crisp Bevels, Dynamic Heights)
+    drawSpectralMonoliths(audio.spectrum, audio.bands);
+
+    // 5. Draw Faceted Central Core (The Resonating Polyhedral Jewel)
+    drawCentralJewel(audio);
+
+    // 6. Draw Reticle / 2D High-Contrast Vector HUD
+    drawTelemetryHUD(audio);
+  }
+
+  function drawGimbalRing(ringVBO, axis, angle, color) {
+    Quat.setAxisAngle(qRot, axis, angle);
+    Mat4.fromRotationTranslationScale(modelMat, qRot, [0, 0, 0], [1, 1, 1]);
+    Mat4.multiply(mvpMat, vpMat, modelMat);
+
+    gl.useProgram(lineProg);
+    gl.uniformMatrix4fv(lineUniforms.uMVP, false, mvpMat);
+
+    // Dynamic tint
+    gl.bindBuffer(gl.ARRAY_BUFFER, ringVBO.pos);
+    gl.vertexAttribPointer(lineAttrs.position, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(lineAttrs.position);
+
+    // Single custom color passed via vertex buffer or standard attributes
+    gl.bindBuffer(gl.ARRAY_BUFFER, ringVBO.col);
+    gl.vertexAttribPointer(lineAttrs.color, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(lineAttrs.color);
+
+    gl.drawArrays(gl.LINE_STRIP, 0, ringVBO.count);
+  }
+
+  function updateAndDrawWaveformRibbon(waveform, vpMat) {
+    const radius = 3.6;
+    const wfLen = waveform.length;
+    let ptrPos = 0;
+    let ptrCol = 0;
+
+    for (let i = 0; i < OSC_SEGS; i++) {
+      const idx = Math.floor((i / OSC_SEGS) * wfLen);
+      const nextIdx = Math.floor(((i + 1) / OSC_SEGS) * wfLen);
+      
+      const v1 = waveform[idx] || 0;
+      const v2 = waveform[nextIdx] || 0;
+
+      const t1 = (i / OSC_SEGS) * Math.PI * 2;
+      const t2 = ((i + 1) / OSC_SEGS) * Math.PI * 2;
+
+      const r1 = radius + v1 * 0.85;
+      const r2 = radius + v2 * 0.85;
+      const y1 = v1 * 0.95;
+      const y2 = v2 * 0.95;
+
+      // Segment Start
+      oscLinePositions[ptrPos++] = Math.cos(t1) * r1;
+      oscLinePositions[ptrPos++] = y1;
+      oscLinePositions[ptrPos++] = Math.sin(t1) * r1;
+
+      // Segment End
+      oscLinePositions[ptrPos++] = Math.cos(t2) * r2;
+      oscLinePositions[ptrPos++] = y2;
+      oscLinePositions[ptrPos++] = Math.sin(t2) * r2;
+
+      // Gradient Color (Cobalt to Brilliant Cyan)
+      const bright = Math.min(1.0, 0.4 + Math.abs(v1) * 2.2);
+      oscLineColors[ptrCol++] = 0.15;
+      oscLineColors[ptrCol++] = 0.70 * bright;
+      oscLineColors[ptrCol++] = 1.00 * bright;
+      oscLineColors[ptrCol++] = 0.95;
+
+      oscLineColors[ptrCol++] = 0.15;
+      oscLineColors[ptrCol++] = 0.70 * bright;
+      oscLineColors[ptrCol++] = 1.00 * bright;
+      oscLineColors[ptrCol++] = 0.95;
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, oscLineVBO.pos);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, oscLinePositions);
+    gl.bindBuffer(gl.ARRAY_BUFFER, oscLineVBO.col);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, oscLineColors);
+
+    gl.useProgram(lineProg);
+    gl.uniformMatrix4fv(lineUniforms.uMVP, false, vpMat);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, oscLineVBO.pos);
+    gl.vertexAttribPointer(lineAttrs.position, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(lineAttrs.position);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, oscLineVBO.col);
+    gl.vertexAttribPointer(lineAttrs.color, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(lineAttrs.color);
+
+    gl.drawArrays(gl.LINES, 0, OSC_SEGS * 2);
+  }
+
+  function drawSpectralMonoliths(spectrum, bands) {
+    gl.useProgram(solidProg);
+    gl.uniform3fv(solidUniforms.uLightDir, lightDir);
+    gl.uniform3fv(solidUniforms.uEyePos, eyePos);
+    gl.uniform1f(solidUniforms.uMetallic, 0.85);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, boxVBO.pos);
+    gl.vertexAttribPointer(solidAttrs.position, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(solidAttrs.position);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, boxVBO.norm);
+    gl.vertexAttribPointer(solidAttrs.normal, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(solidAttrs.normal);
+
+    const specCount = spectrum.length;
+
+    for (let i = 0; i < NUM_MONOLITHS; i++) {
+      const angle = (i / NUM_MONOLITHS) * Math.PI * 2;
+      
+      // Interpolate spectrum smoothly around the circle (symmetric folding)
+      const normIdx = (i < NUM_MONOLITHS / 2 ? i : NUM_MONOLITHS - i) / (NUM_MONOLITHS / 2);
+      const specIdx = Math.floor(normIdx * (specCount - 1));
+      const val = Math.max(0.04, spectrum[specIdx] || 0);
+
+      // Height with baseline and exponential punch
+      const h = 0.2 + Math.pow(val, 1.25) * 4.2;
+      const w = 0.16;
+      const d = 0.32;
+
+      // Position radially
+      const px = Math.cos(angle) * MONOLITH_RADIUS;
+      const pz = Math.sin(angle) * MONOLITH_RADIUS;
+      const py = -1.2 + h * 0.5;
+
+      // Orientation facing center
+      Quat.setAxisAngle(qRot, [0, 1, 0], -angle + Math.PI * 0.5);
+      Mat4.fromRotationTranslationScale(modelMat, qRot, [px, py, pz], [w, h, d]);
+      Mat4.multiply(mvpMat, vpMat, modelMat);
+
+      gl.uniformMatrix4fv(solidUniforms.uMVP, false, mvpMat);
+      gl.uniformMatrix4fv(solidUniforms.uModel, false, modelMat);
+
+      // Color mapping: bass/mid/treble chromatic progression
+      let r, g, b;
+      if (normIdx < 0.33) {
+        // Sub/Bass: Deep Bronze to Amber
+        r = 0.85; g = 0.42 + val * 0.45; b = 0.12;
+      } else if (normIdx < 0.7) {
+        // Mids: Emerald to Cyan
+        r = 0.12; g = 0.75 + val * 0.25; b = 0.65;
+      } else {
+        // Highs: Electric Azure / Violet
+        r = 0.45 + val * 0.5; g = 0.30; b = 0.95;
+      }
+
+      // Populate color buffer for this pillar
+      for (let c = 0; c < boxGeom.count; c++) {
+        dynamicColorData[c * 3]     = r;
+        dynamicColorData[c * 3 + 1] = g;
+        dynamicColorData[c * 3 + 2] = b;
+      }
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, boxVBO.col);
+      gl.bufferData(gl.ARRAY_BUFFER, dynamicColorData, gl.DYNAMIC_DRAW);
+      gl.vertexAttribPointer(solidAttrs.color, 3, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(solidAttrs.color);
+
+      // Emissive edge highlight on intense transient
+      gl.uniform1f(solidUniforms.uEmissive, val > 0.6 ? (val - 0.6) * 1.5 : 0.0);
+
+      gl.drawArrays(gl.TRIANGLES, 0, boxGeom.count);
+    }
+  }
+
+  function drawCentralJewel(audio) {
+    gl.useProgram(solidProg);
+    gl.uniform3fv(solidUniforms.uLightDir, lightDir);
+    gl.uniform3fv(solidUniforms.uEyePos, eyePos);
+    gl.uniform1f(solidUniforms.uMetallic, 0.95);
+
+    // Multi-axis rotation
+    Quat.setAxisAngle(qRot, [0, 1, 0], state.coreRotY);
+    Quat.setAxisAngle(qTemp, [1, 0, 0], state.coreRotX);
+    Quat.multiply(qRot, qRot, qTemp);
+    Quat.setAxisAngle(qTemp, [0, 0, 1], state.coreRotZ);
+    Quat.multiply(qRot, qRot, qTemp);
+
+    // Core scale pulses sharply with transient, bass and beat
+    const scaleFactor = 1.15 + (audio.bands.subBass * 0.45) + (state.pulseEnergy * 0.35);
+    Mat4.fromRotationTranslationScale(modelMat, qRot, [0, 0, 0], [scaleFactor, scaleFactor, scaleFactor]);
+    Mat4.multiply(mvpMat, vpMat, modelMat);
+
+    gl.uniformMatrix4fv(solidUniforms.uMVP, false, mvpMat);
+    gl.uniformMatrix4fv(solidUniforms.uModel, false, modelMat);
+
+    // Facet colors: platinum titanium with electric cobalt glints
+    const coreColorData = new Float32Array(icosaGeom.count * 3);
+    const cr = 0.25 + audio.bands.treble * 0.4;
+    const cg = 0.50 + audio.bands.mid * 0.35;
+    const cb = 0.85 + audio.transient * 0.15;
+
+    for (let c = 0; c < icosaGeom.count; c++) {
+      coreColorData[c * 3]     = cr;
+      coreColorData[c * 3 + 1] = cg;
+      coreColorData[c * 3 + 2] = cb;
+    }
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, icosaVBO.pos);
+    gl.vertexAttribPointer(solidAttrs.position, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(solidAttrs.position);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, icosaVBO.norm);
+    gl.vertexAttribPointer(solidAttrs.normal, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(solidAttrs.normal);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, icosaVBO.col);
+    gl.bufferData(gl.ARRAY_BUFFER, coreColorData, gl.DYNAMIC_DRAW);
+    gl.vertexAttribPointer(solidAttrs.color, 3, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(solidAttrs.color);
+
+    gl.uniform1f(solidUniforms.uEmissive, 0.15 + state.pulseEnergy * 0.5);
+
+    gl.drawArrays(gl.TRIANGLES, 0, icosaGeom.count);
+  }
+
+  // --- High-Precision Canvas 2D Vector HUD ---
+  function drawTelemetryHUD(audio) {
+    const w = curWidth;
+    const h = curHeight;
+    const dpr = curDpr;
+
+    hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+    hudCtx.save();
+    hudCtx.scale(dpr, dpr);
+
+    // Technical Framing Corner Brackets
+    const pad = 24;
+    const brLen = 16;
+    hudCtx.strokeStyle = 'rgba(70, 140, 200, 0.45)';
+    hudCtx.lineWidth = 1;
+
+    // Top-Left
+    hudCtx.beginPath();
+    hudCtx.moveTo(pad, pad + brLen);
+    hudCtx.lineTo(pad, pad);
+    hudCtx.lineTo(pad + brLen, pad);
+    hudCtx.stroke();
+
+    // Top-Right
+    hudCtx.beginPath();
+    hudCtx.moveTo(w - pad - brLen, pad);
+    hudCtx.lineTo(w - pad, pad);
+    hudCtx.lineTo(w - pad, pad + brLen);
+    hudCtx.stroke();
+
+    // Bottom-Left
+    hudCtx.beginPath();
+    hudCtx.moveTo(pad, h - pad - brLen);
+    hudCtx.lineTo(pad, h - pad);
+    hudCtx.lineTo(pad + brLen, h - pad);
+    hudCtx.stroke();
+
+    // Bottom-Right
+    hudCtx.beginPath();
+    hudCtx.moveTo(w - pad - brLen, h - pad);
+    hudCtx.lineTo(w - pad, h - pad);
+    hudCtx.lineTo(w - pad, h - pad - brLen);
+    hudCtx.stroke();
+
+    // Header Telemetry
+    hudCtx.font = '10px ui-monospace, monospace';
+    hudCtx.fillStyle = 'rgba(170, 210, 245, 0.85)';
+    hudCtx.fillText("MONOLITH RESONANCE ARRAY // V-1", pad + 6, pad + 14);
+
+    hudCtx.fillStyle = 'rgba(100, 160, 220, 0.65)';
+    const statusText = audio.connected ? (audio.silence ? "STANDBY [SILENCE]" : "LIVE AUDIO STREAM") : "SYNTHETIC FLUX";
+    hudCtx.fillText(`STATE: ${statusText}`, pad + 6, pad + 28);
+
+    // Center Top Pitch / Coordinate reticle
+    const cx = w * 0.5;
+    hudCtx.strokeStyle = 'rgba(90, 165, 230, 0.3)';
+    hudCtx.beginPath();
+    hudCtx.moveTo(cx - 30, pad + 4);
+    hudCtx.lineTo(cx + 30, pad + 4);
+    hudCtx.stroke();
+
+    hudCtx.textAlign = 'center';
+    hudCtx.fillStyle = 'rgba(130, 195, 255, 0.7)';
+    const azDeg = (((state.camRot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) * (180 / Math.PI)).toFixed(1);
+    hudCtx.fillText(`AZIMUTH: ${azDeg.padStart(5, '0')}°  |  ELEVATION: ${(state.camPitch * (180 / Math.PI)).toFixed(1)}°`, cx, pad + 18);
+
+    // Band Energy Meter Array (Right Side Vertical Bar Stack)
+    const meterX = w - pad - 120;
+    let meterY = pad + 10;
+    const bandEntries = [
+      ["SUB", audio.bands.subBass],
+      ["BAS", audio.bands.bass],
+      ["LMI", audio.bands.lowMid],
+      ["MID", audio.bands.mid],
+      ["HMI", audio.bands.highMid],
+      ["TRE", audio.bands.treble]
+    ];
+
+    hudCtx.textAlign = 'left';
+    for (let [name, val] of bandEntries) {
+      hudCtx.fillStyle = 'rgba(140, 185, 230, 0.65)';
+      hudCtx.fillText(name, meterX, meterY + 8);
+
+      // Meter rail
+      hudCtx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      hudCtx.fillRect(meterX + 28, meterY + 1, 80, 7);
+
+      // Meter fill
+      const fillW = Math.min(80, Math.max(0, val * 80));
+      hudCtx.fillStyle = val > 0.8 ? '#ffb040' : '#38bdf8';
+      hudCtx.fillRect(meterX + 28, meterY + 1, fillW, 7);
+
+      meterY += 14;
+    }
+
+    // Bottom Telemetry: Centroid, Flux & Stereo Balance
+    const botY = h - pad - 14;
+    hudCtx.textAlign = 'left';
+    hudCtx.fillStyle = 'rgba(120, 180, 230, 0.6)';
+    hudCtx.fillText(`FLUX: ${(audio.spectralFlux || 0).toFixed(3)}   CENTROID: ${(audio.spectralCentroid || 0).toFixed(3)}`, pad + 6, botY);
+
+    // Stereo Width Indicator
+    const stW = 100;
+    const stX = cx - (stW * 0.5);
+    hudCtx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    hudCtx.fillRect(stX, botY - 7, stW, 6);
+
+    const bal = Math.max(-1, Math.min(1, audio.stereo.balance || 0));
+    const balX = stX + (stW * 0.5) + (bal * (stW * 0.45));
+    hudCtx.fillStyle = '#38bdf8';
+    hudCtx.fillRect(balX - 2, botY - 9, 4, 10);
+
+    hudCtx.textAlign = 'center';
+    hudCtx.fillStyle = 'rgba(140, 190, 240, 0.5)';
+    hudCtx.fillText('STEREO POSITION', cx, botY + 12);
+
+    hudCtx.restore();
+  }
+
+  // --- Synthetic Signal Generator (Fallback / Standalone Mode) ---
+  let synthPhase = 0;
+  function updateSyntheticState(dt) {
+    synthPhase += dt;
+    const p = synthPhase;
+
+    // Synthetic rhythmic components
+    const beat = Math.pow(Math.max(0, Math.sin(p * Math.PI * 2.1)), 16);
+    const bass = Math.max(0, Math.sin(p * 2.2)) * 0.6 + beat * 0.4;
+    const mid = Math.max(0, Math.sin(p * 3.8 + 1.2)) * 0.5;
+    const treble = Math.max(0, Math.cos(p * 5.4)) * 0.4;
+
+    state.connected = false;
+    state.silence = false;
+    state.volume = 0.3 + beat * 0.5;
+    state.transient = beat;
+    state.beat = beat;
+    state.spectralFlux = beat * 0.7 + mid * 0.3;
+    state.spectralCentroid = 0.25 + mid * 0.4 + treble * 0.3;
+
+    state.bands.subBass = bass * 0.9;
+    state.bands.bass = bass;
+    state.bands.lowMid = mid * 0.8;
+    state.bands.mid = mid;
+    state.bands.highMid = treble * 0.7;
+    state.bands.treble = treble;
+
+    state.stereo.balance = Math.sin(p * 0.5) * 0.35;
+    state.stereo.width = 0.6;
+
+    // Synthetic waveform (layered harmonic chords)
+    for (let i = 0; i < state.waveform.length; i++) {
+      const theta = (i / state.waveform.length) * Math.PI * 4 + p * 8.0;
+      state.waveform[i] = (Math.sin(theta) * 0.5 + Math.sin(theta * 2.3) * 0.3 + (beat * 0.4 * Math.sin(theta * 5.0)));
+    }
+
+    // Synthetic spectrum
+    for (let i = 0; i < state.spectrum.length; i++) {
+      const f = i / state.spectrum.length;
+      const decay = Math.exp(-f * 4.0);
+      const ripple = Math.sin(f * 24.0 - p * 6.0) * 0.2;
+      state.spectrum[i] = Math.max(0, (decay * bass * 1.5 + ripple * mid + (1.0 - f) * 0.1));
+    }
+  }
+
+  // --- VIZ Interface & Host Integration ---
+  let lastTime = performance.now();
+
+  function onHostFrame(frame) {
+    if (!frame) return;
+
+    const dt = Math.max(0.001, Math.min(0.1, frame.deltaTime || 0.016));
+    const vp = frame.viewport || {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      dpr: window.devicePixelRatio || 1
+    };
+
+    updateViewport(vp.width, vp.height, vp.dpr);
+
+    if (frame.audio && frame.audio.connected && !frame.audio.silence) {
+      const a = frame.audio;
+      state.connected = true;
+      state.silence = false;
+      state.volume = a.volume || 0;
+      state.peak = a.peak || 0;
+      state.transient = a.transient || 0;
+      state.beat = a.beat || 0;
+      state.tempo = a.tempo || 120;
+      state.spectralFlux = a.spectralFlux || 0;
+      state.spectralCentroid = a.spectralCentroid || 0.3;
+
+      if (a.bands) {
+        state.bands.subBass = a.bands.subBass || 0;
+        state.bands.bass = a.bands.bass || 0;
+        state.bands.lowMid = a.bands.lowMid || 0;
+        state.bands.mid = a.bands.mid || 0;
+        state.bands.highMid = a.bands.highMid || 0;
+        state.bands.treble = a.bands.treble || 0;
+      }
+
+      if (a.stereo) {
+        state.stereo.balance = a.stereo.balance || 0;
+        state.stereo.width = a.stereo.width || 0.5;
+      }
+
+      if (a.waveform && a.waveform.length) {
+        if (state.waveform.length !== a.waveform.length) {
+          state.waveform = new Float32Array(a.waveform.length);
+        }
+        for (let i = 0; i < a.waveform.length; i++) state.waveform[i] = a.waveform[i];
+      }
+
+      if (a.spectrum && a.spectrum.length) {
+        if (state.spectrum.length !== a.spectrum.length) {
+          state.spectrum = new Float32Array(a.spectrum.length);
+        }
+        for (let i = 0; i < a.spectrum.length; i++) state.spectrum[i] = a.spectrum[i];
+      }
+    } else {
+      // Audio absent or silent: smoothly transition to standalone autonomous mode
+      updateSyntheticState(dt);
+    }
+
+    renderScene(state, dt);
+  }
+
+  // Check for host subscription API
+  if (window.VIZ && typeof window.VIZ.onFrame === 'function') {
+    window.VIZ.onFrame(onHostFrame);
+  } else {
+    // Fallback autonomous requestAnimationFrame loop
+    function fallbackLoop(now) {
+      const dt = (now - lastTime) * 0.001;
+      lastTime = now;
+      const vp = {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        dpr: window.devicePixelRatio || 1
+      };
+      updateSyntheticState(dt);
+      updateViewport(vp.width, vp.height, vp.dpr);
+      renderScene(state, dt);
+      requestAnimationFrame(fallbackLoop);
+    }
+    requestAnimationFrame(fallbackLoop);
+  }
+
+  // Window resize observer
+  window.addEventListener('resize', () => {
+    updateViewport(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1);
+  });
+})();
+</script>
+</body>
+</html>
