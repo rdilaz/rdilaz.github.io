@@ -76,6 +76,11 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     frameReads: 0,
     listenerRegistrations: 0,
     listenerCallbacks: 0,
+    receivedFrames: 0,
+    deliveredFrames: 0,
+    coalescedFrames: 0,
+    droppedFrames: 0,
+    lastFrameSequence: 0,
     activeListeners: 0,
     rafRequests: 0,
     rafCallbacks: 0,
@@ -308,6 +313,13 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     if (!nextGeneratedFrameAt) nextGeneratedFrameAt = timestamp + interval;
     else nextGeneratedFrameAt += (Math.floor(Math.max(0, timestamp - nextGeneratedFrameAt) / interval) + 1) * interval;
     return true;
+  }
+
+  function applyFrameDeliveryStats(delivery = {}) {
+    state.receivedFrames = Math.max(state.receivedFrames, Number(delivery.receivedFrames) || 0);
+    state.deliveredFrames = Math.max(state.deliveredFrames, Number(delivery.deliveredFrames) || 0);
+    state.coalescedFrames = Math.max(state.coalescedFrames, Number(delivery.coalescedFrames) || 0);
+    state.droppedFrames = Math.max(state.droppedFrames, Number(delivery.droppedFrames) || 0);
   }
 
   function scheduleAnimationFrame(id, record) {
@@ -1034,6 +1046,17 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
       viz: {
         hostFrames: state.hostFrames,
+        receivedFrames: state.receivedFrames,
+        deliveredFrames: state.deliveredFrames,
+        coalescedFrames: state.coalescedFrames,
+        droppedFrames: state.droppedFrames,
+        lastFrameSequence: state.lastFrameSequence,
+        latestFrame: {
+          sequence: state.lastFrameSequence,
+          version: String(currentFrame?.version || ''),
+          time: Number(currentFrame?.time) || 0,
+          deltaTime: Number(currentFrame?.deltaTime) || 0,
+        },
         frameReads: state.frameReads,
         listenerRegistrations: state.listenerRegistrations,
         listenerCallbacks: state.listenerCallbacks,
@@ -1154,9 +1177,22 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       return;
     }
 
+    if (message.type === 'host-frame-stats') {
+      applyFrameDeliveryStats(message.delivery);
+      return;
+    }
+
     if (message.type === 'frame') {
-      if (state.paused) return;
+      const delivery = message.delivery || {};
+      const sequence = Math.max(0, Number(delivery.sequence) || 0);
+      applyFrameDeliveryStats(delivery);
+      if (state.paused) {
+        post('frame-delivered', { sequence, delivered: false });
+        return;
+      }
       state.hostFrames += 1;
+      state.deliveredFrames += 1;
+      state.lastFrameSequence = sequence;
       state.lastHostFrameAt = performance.now();
       currentFrame = message.frame;
       viewport = message.frame?.viewport || viewport;
@@ -1170,6 +1206,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
           recordEvent('fatal', 'VIZ_CALLBACK_ERROR', text);
         }
       });
+      post('frame-delivered', { sequence, delivered: true });
       return;
     }
 
@@ -1372,6 +1409,7 @@ export class VisualizerSandbox {
     this.renderQuality = sandboxRenderQuality();
     this.renderQualityRevision = 0;
     this.appliedRenderQuality = null;
+    this.resetFrameDelivery();
     this.bridgeMessageHandler = event => {
       const message = event.data;
       if (!message || typeof message.type !== 'string') return;
@@ -1391,9 +1429,30 @@ export class VisualizerSandbox {
       if (message.type === 'render-quality-applied') {
         this.appliedRenderQuality = message.quality || null;
       }
+      if (message.type === 'frame-delivered') {
+        const sequence = Math.max(0, Number(message.sequence) || 0);
+        if (sequence === this.frameDelivery?.inFlightSequence) {
+          if (message.delivered) this.frameDelivery.deliveredFrames += 1;
+          else this.frameDelivery.droppedFrames += 1;
+          this.frameDelivery.lastSettledSequence = Math.max(this.frameDelivery.lastSettledSequence, sequence);
+          this.frameDelivery.inFlightSequence = 0;
+          this.flushPendingFrame();
+        }
+      }
       if (message.type === 'diagnostic-event' && message.event) {
         this.events.push(message.event);
         if (this.events.length > 120) this.events.splice(0, this.events.length - 120);
+        if (message.event.severity === 'fatal' && this.frameDelivery) {
+          this.frameDelivery.blockedByFatal = true;
+          if (this.frameDelivery.pending) {
+            this.frameDelivery.lastSettledSequence = Math.max(
+              this.frameDelivery.lastSettledSequence,
+              this.frameDelivery.pending.sequence,
+            );
+            this.frameDelivery.pending = null;
+            this.frameDelivery.droppedFrames += 1;
+          }
+        }
       }
       if (message.type === 'probe-result') {
         const pending = this.pendingProbes.get(message.probeId);
@@ -1432,11 +1491,100 @@ export class VisualizerSandbox {
     }
   }
 
+  resetFrameDelivery() {
+    this.frameDelivery = {
+      receivedFrames: 0,
+      deliveredFrames: 0,
+      coalescedFrames: 0,
+      droppedFrames: 0,
+      nextSequence: 0,
+      inFlightSequence: 0,
+      lastSettledSequence: 0,
+      blockedByFatal: false,
+      pending: null,
+    };
+  }
+
+  flushPendingFrame() {
+    const delivery = this.frameDelivery;
+    if (!delivery || delivery.blockedByFatal || delivery.inFlightSequence || !delivery.pending || !this.bridgePort || this.desiredPaused) return false;
+    const pending = delivery.pending;
+    delivery.pending = null;
+    delivery.inFlightSequence = pending.sequence;
+    const sent = this.sendHost({
+      type: 'frame',
+      frame: pending.frame,
+      delivery: {
+        sequence: pending.sequence,
+        receivedFrames: delivery.receivedFrames,
+        coalescedFrames: delivery.coalescedFrames,
+        droppedFrames: delivery.droppedFrames,
+      },
+    });
+    if (!sent) {
+      delivery.inFlightSequence = 0;
+      delivery.pending = pending;
+    }
+    return sent;
+  }
+
+  frameDeliverySnapshot() {
+    const delivery = this.frameDelivery;
+    return Object.freeze({
+      receivedFrames: delivery?.receivedFrames || 0,
+      deliveredFrames: delivery?.deliveredFrames || 0,
+      coalescedFrames: delivery?.coalescedFrames || 0,
+      droppedFrames: delivery?.droppedFrames || 0,
+      inFlightFrames: delivery?.inFlightSequence ? 1 : 0,
+      pendingFrames: delivery?.pending ? 1 : 0,
+      inFlightSequence: delivery?.inFlightSequence || 0,
+      pendingSequence: delivery?.pending?.sequence || 0,
+      lastSettledSequence: delivery?.lastSettledSequence || 0,
+      blockedByFatal: Boolean(delivery?.blockedByFatal),
+    });
+  }
+
+  async waitForFrameDelivery({ timeoutMs = 2200, signal, label = 'frame-delivery' } = {}) {
+    const sessionId = this.sessionId;
+    const targetSequence = this.frameDelivery?.nextSequence || 0;
+    const started = performance.now();
+    while (true) {
+      if (signal?.aborted) throw abortError();
+      if (this.sessionId !== sessionId) throw new Error('Sandbox was reloaded while waiting for frame delivery.');
+      const delivery = this.frameDelivery;
+      const targetInFlight = (delivery?.inFlightSequence || 0) > 0
+        && delivery.inFlightSequence <= targetSequence;
+      const targetPending = (delivery?.pending?.sequence || 0) > 0
+        && delivery.pending.sequence <= targetSequence;
+      if ((delivery?.lastSettledSequence || 0) >= targetSequence && !targetInFlight && !targetPending) break;
+      if (performance.now() - started >= timeoutMs) {
+        throw new Error(`Visualizer ${label} timed out waiting for frame ${targetSequence}.`);
+      }
+      await wait(10, signal);
+    }
+    return this.frameDeliverySnapshot();
+  }
+
+  sendFrameDeliveryStats() {
+    const delivery = this.frameDelivery;
+    return this.sendHost({
+      type: 'host-frame-stats',
+      delivery: {
+        receivedFrames: delivery?.receivedFrames || 0,
+        deliveredFrames: delivery?.deliveredFrames || 0,
+        coalescedFrames: delivery?.coalescedFrames || 0,
+        droppedFrames: delivery?.droppedFrames || 0,
+      },
+    });
+  }
+
   closeBridge() {
-    if (!this.bridgePort) return;
-    this.bridgePort.removeEventListener('message', this.bridgeMessageHandler);
-    this.bridgePort.close();
-    this.bridgePort = null;
+    if (this.bridgePort) {
+      this.bridgePort.removeEventListener('message', this.bridgeMessageHandler);
+      this.bridgePort.close();
+      this.bridgePort = null;
+    }
+    this.resetFrameDelivery();
   }
 
   setPresentation(state) {
@@ -1462,6 +1610,14 @@ export class VisualizerSandbox {
       || this.renderQuality.effectiveDpr !== next.effectiveDpr;
     this.renderQuality = next;
     if (!changed) return false;
+    if (this.frameDelivery?.pending) {
+      this.frameDelivery.lastSettledSequence = Math.max(
+        this.frameDelivery.lastSettledSequence,
+        this.frameDelivery.pending.sequence,
+      );
+      this.frameDelivery.pending = null;
+      this.frameDelivery.droppedFrames += 1;
+    }
     this.renderQualityRevision += 1;
     this.sendHost({
       type: 'host-render-quality',
@@ -1509,10 +1665,14 @@ export class VisualizerSandbox {
   }
 
   sendFrame(frame) {
-    this.sendHost({
-      type: 'frame',
-      frame,
-    });
+    if (!this.bridgePort || this.desiredPaused || this.frameDelivery?.blockedByFatal) return false;
+    const delivery = this.frameDelivery || (this.resetFrameDelivery(), this.frameDelivery);
+    delivery.receivedFrames += 1;
+    delivery.nextSequence += 1;
+    if (delivery.pending) delivery.coalescedFrames += 1;
+    delivery.pending = { sequence: delivery.nextSequence, frame };
+    this.flushPendingFrame();
+    return true;
   }
 
   setPaused(paused) {
@@ -1520,6 +1680,14 @@ export class VisualizerSandbox {
     if (this.desiredPaused === next) return false;
     this.desiredPaused = next;
     this.paused = next;
+    if (next && this.frameDelivery?.pending) {
+      this.frameDelivery.lastSettledSequence = Math.max(
+        this.frameDelivery.lastSettledSequence,
+        this.frameDelivery.pending.sequence,
+      );
+      this.frameDelivery.pending = null;
+      this.frameDelivery.droppedFrames += 1;
+    }
     this.sendHost({ type: next ? 'host-pause' : 'host-resume' });
     return true;
   }
@@ -1559,6 +1727,7 @@ export class VisualizerSandbox {
         this.pendingProbes.delete(probeId);
         finishReject(abortError());
       }, { once: true });
+      this.sendFrameDeliveryStats();
       this.sendHost({
         type: 'probe',
         probeId,

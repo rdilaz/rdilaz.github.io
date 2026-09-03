@@ -1,4 +1,4 @@
-export const RELIABILITY_SCHEMA = 'dream-reliability-v2';
+export const RELIABILITY_SCHEMA = 'dream-reliability-v3';
 export const HEARTBEAT_STALE_MS = 4200;
 export const STALL_CONFIRM_TIMEOUT_MS = 2600;
 export const STALL_RETRY_TIMEOUT_MS = 900;
@@ -211,14 +211,14 @@ function probeProfile(progress) {
   return { volume: 0.34, peak: 0.42, transient: 0.08, beat: 0, subBass: 0.28, bass: 0.38, lowMid: 0.44, mid: 0.4, highMid: 0.34, treble: 0.28, flux: 0.18, centroid: 0.46, balance: 0.2 * Math.sin(progress * 18), width: 0.7, tempo: 112, confidence: 0.56 };
 }
 
-export function createSyntheticFrame(frameIndex, elapsedMs, viewport) {
+export function createSyntheticFrame(frameIndex, elapsedMs, viewport, frameRate = 60) {
   const cycleMs = 1200;
   const progress = (elapsedMs % cycleMs) / cycleMs;
   const profile = probeProfile(progress);
   return {
     version: 'visualizer-audio-v1',
     time: elapsedMs / 1000,
-    deltaTime: 1 / 60,
+    deltaTime: 1 / Math.min(60, Math.max(1, Number(frameRate) || 60)),
     audio: {
       connected: true,
       silence: false,
@@ -262,17 +262,23 @@ async function stimulate(sandbox, viewport, {
   onFrame,
 } = {}) {
   const started = performance.now();
+  const targetFps = Math.min(60, Math.max(1, Number(sandbox.renderQuality?.maxFps) || 60));
+  const intervalMs = 1000 / targetFps;
   let frameIndex = 0;
+  let attemptedFrames = 0;
   while (performance.now() - started < durationMs) {
     if (signal?.aborted) throw abortError();
+    if (sandbox.fatalEvents?.().length) break;
     const elapsed = performance.now() - started;
-    const frame = createSyntheticFrame(frameIndex, elapsed, viewport);
-    sandbox.sendFrame(frame);
-    onFrame?.(frameIndex, frame);
-    frameIndex += 1;
-    await wait(16, signal);
+    const frame = createSyntheticFrame(frameIndex, elapsed, viewport, targetFps);
+    attemptedFrames += 1;
+    if (sandbox.sendFrame(frame)) {
+      onFrame?.(frameIndex, frame);
+      frameIndex += 1;
+    }
+    await wait(intervalMs, signal);
   }
-  return { frames: frameIndex, durationMs: Math.round(performance.now() - started) };
+  return { frames: frameIndex, attemptedFrames, durationMs: Math.round(performance.now() - started), targetFps, intervalMs };
 }
 
 function rendererTotals(report) {
@@ -530,7 +536,7 @@ export class DreamReliabilityHarness {
   async preflight(html, {
     viewport,
     signal,
-    fastViewport = { width: 640, height: 360, dpr: Math.min(devicePixelRatio || 1, 2) },
+    fastViewport,
   } = {}) {
     const startedAt = nowIso();
     const stages = [];
@@ -540,10 +546,15 @@ export class DreamReliabilityHarness {
       height: Math.max(1, Math.round(viewport?.height || innerHeight)),
       dpr: Math.max(1, Number(viewport?.dpr || devicePixelRatio || 1)),
     };
+    const qualificationViewport = fastViewport || {
+      width: 640,
+      height: 360,
+      dpr: Math.min(Number(this.sandbox.renderQuality?.effectiveDpr) || devicePixelRatio || 1, 2),
+    };
 
     this.sandbox.setPresentation('standby');
-    this.stage('booting', { viewport: fastViewport });
-    const boot = await this.sandbox.load(html, { viewport: fastViewport, signal });
+    this.stage('booting', { viewport: qualificationViewport });
+    const boot = await this.sandbox.load(html, { viewport: qualificationViewport, signal });
     stages.push({ name: 'boot', ...boot });
     if (!boot.ready) {
       const fatal = boot.fatalEvents?.[0];
@@ -564,9 +575,10 @@ export class DreamReliabilityHarness {
       return failedReport({ startedAt, stages, failure, report: null });
     }
 
-    this.stage('stimulating', { viewport: fastViewport });
-    const stimulation = await stimulate(this.sandbox, fastViewport, { durationMs: 1250, signal });
-    stages.push({ name: 'stimulation', ...stimulation });
+    this.stage('stimulating', { viewport: qualificationViewport });
+    const stimulation = await stimulate(this.sandbox, qualificationViewport, { durationMs: 1250, signal });
+    const stimulationDelivery = await this.sandbox.waitForFrameDelivery({ timeoutMs: 2200, signal, label: 'synthetic stimulation drain' });
+    stages.push({ name: 'stimulation', ...stimulation, delivery: stimulationDelivery });
 
     this.stage('proving-visible-output');
     const stimulated = await this.sandbox.probe('after-synthetic-music', { signal });
@@ -585,7 +597,9 @@ export class DreamReliabilityHarness {
 
     this.stage('canary-viewport', { viewport: actualViewport });
     this.sandbox.setViewport(actualViewport);
-    await stimulate(this.sandbox, actualViewport, { durationMs: 720, signal });
+    const viewportStimulation = await stimulate(this.sandbox, actualViewport, { durationMs: 720, signal });
+    const viewportDelivery = await this.sandbox.waitForFrameDelivery({ timeoutMs: 2800, signal, label: 'actual-viewport drain' });
+    stages.push({ name: 'viewport-stimulation', ...viewportStimulation, delivery: viewportDelivery });
     const canary = await this.sandbox.probe('actual-viewport-canary', { signal, timeoutMs: 2800 });
     const canaryEvaluation = evaluateProbe(canary, { requireViz: true, previous: stimulated, stage: 'actual-viewport' });
     stages.push({ name: 'viewport-canary', report: canary, evaluation: canaryEvaluation });
@@ -650,7 +664,8 @@ export class DreamReliabilityHarness {
     const baseline = await this.sandbox.probe('reopen-baseline', { signal, timeoutMs: 2200 });
     stages.push({ name: 'reopen-baseline', report: baseline });
     const stimulation = await stimulate(this.sandbox, actualViewport, { durationMs: stimulationMs, signal });
-    stages.push({ name: 'reopen-stimulation', ...stimulation });
+    const stimulationDelivery = await this.sandbox.waitForFrameDelivery({ timeoutMs: 2400, signal, label: 'reopen stimulation drain' });
+    stages.push({ name: 'reopen-stimulation', ...stimulation, delivery: stimulationDelivery });
     const report = await this.sandbox.probe('reopen-proof', { signal, timeoutMs: 2400 });
     const evaluation = evaluateProbe(report, { requireViz: true, previous: baseline, stage: 'safe-reopen' });
     stages.push({ name: 'reopen-proof', report, evaluation });

@@ -264,6 +264,154 @@
       return { preflight, watchdog, elapsedMs };
     };
 
+    window.runHeavyReliabilityFixture = async html => {
+      sandbox.clear();
+      sandbox.setRenderQuality({ mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 });
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const result = await harness.preflight(html, {
+        viewport: { width: 2048, height: 1100, dpr: 1 },
+      });
+      sandbox.clear();
+      return result;
+    };
+
+    window.runFrameBackpressureFixture = async (html, frameCount = 180) => {
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+      const viewport = { width: 2048, height: 1100, dpr: 1 };
+      sandbox.setRenderQuality({ mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 });
+      const boot = await sandbox.load(html, { viewport });
+      const sessionId = sandbox.sessionId;
+      for (let index = 0; index < frameCount; index += 1) {
+        sandbox.sendFrame(createSyntheticFrame(index, index * 16, viewport, 60));
+      }
+      const queued = sandbox.frameDeliverySnapshot();
+      await sandbox.waitForFrameDelivery({ timeoutMs: 2800, label: 'backpressure stress drain' });
+      const report = await sandbox.probe('backpressure-stress', { timeoutMs: 2800 });
+      const settled = sandbox.frameDeliverySnapshot();
+      const result = { boot, sessionId, queued, settled, report };
+      sandbox.clear();
+      return result;
+    };
+
+    window.runFrameSessionReplacementFixture = async (heavyHtml, replacementHtml) => {
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+      const viewport = { width: 2048, height: 1100, dpr: 1 };
+      await sandbox.load(heavyHtml, { viewport });
+      const oldSessionId = sandbox.sessionId;
+      for (let index = 0; index < 120; index += 1) {
+        sandbox.sendFrame(createSyntheticFrame(index, index * 16, viewport, 60));
+      }
+      const oldDelivery = sandbox.frameDeliverySnapshot();
+      const oldWait = sandbox.waitForFrameDelivery({ timeoutMs: 2200, label: 'old session' })
+        .then(() => null, error => error.message);
+      const replacementBoot = await sandbox.load(replacementHtml, { viewport: { width: 640, height: 360, dpr: 1 } });
+      const oldWaitError = await oldWait;
+      const newSessionId = sandbox.sessionId;
+      const replacementFrame = createSyntheticFrame(0, 999, { width: 640, height: 360, dpr: 1 }, 30);
+      sandbox.sendFrame(replacementFrame);
+      const report = await sandbox.probe('replacement-session', { timeoutMs: 2200 });
+      const newDelivery = sandbox.frameDeliverySnapshot();
+      sandbox.clear();
+      return { oldSessionId, newSessionId, oldDelivery, oldWaitError, replacementBoot, newDelivery, report };
+    };
+
+    window.runFramePauseBackpressureFixture = async html => {
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+      const viewport = { width: 2048, height: 1100, dpr: 1 };
+      await sandbox.load(html, { viewport });
+      for (let index = 0; index < 180; index += 1) {
+        sandbox.sendFrame(createSyntheticFrame(index, index * 16, viewport, 60));
+      }
+      const queued = sandbox.frameDeliverySnapshot();
+      sandbox.setPaused(true);
+      await sandbox.waitForPlayback(true, 1600);
+      const pausedReport = await sandbox.probe('backpressure-paused', { timeoutMs: 2200 });
+      const pausedDelivery = sandbox.frameDeliverySnapshot();
+      const acceptedWhilePaused = sandbox.sendFrame(createSyntheticFrame(180, 10000, viewport, 60));
+      sandbox.setPaused(false);
+      await sandbox.waitForPlayback(false, 1600);
+      sandbox.sendFrame(createSyntheticFrame(181, 20000, viewport, 30));
+      const resumedReport = await sandbox.probe('backpressure-resumed', { timeoutMs: 2200 });
+      const resumedDelivery = sandbox.frameDeliverySnapshot();
+      sandbox.clear();
+      return { queued, pausedReport, pausedDelivery, acceptedWhilePaused, resumedReport, resumedDelivery };
+    };
+
+    window.runFrameQualityBackpressureFixture = async html => {
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+      const viewport = { width: 2048, height: 1100, dpr: 1 };
+      sandbox.setRenderQuality({ mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 });
+      await sandbox.load(html, { viewport });
+      const sessionId = sandbox.sessionId;
+      const srcdoc = iframe.srcdoc;
+      for (let index = 0; index < 180; index += 1) {
+        sandbox.sendFrame(createSyntheticFrame(index, index * 16, viewport, 60));
+      }
+      const queued = sandbox.frameDeliverySnapshot();
+      sandbox.setRenderQuality({ mode: 'balanced', maxFps: 45, effectiveDpr: 1.5, nativeDpr: 2 });
+      const afterQuality = await sandbox.probe('backpressure-quality-applied', { timeoutMs: 2200 });
+      const freshViewport = { ...viewport, dpr: 1.5 };
+      sandbox.sendFrame(createSyntheticFrame(181, 20000, freshViewport, 45));
+      const report = await sandbox.probe('backpressure-quality-fresh-frame', { timeoutMs: 2200 });
+      const delivery = sandbox.frameDeliverySnapshot();
+      const result = {
+        queued,
+        afterQuality,
+        report,
+        delivery,
+        sessionUnchanged: sandbox.sessionId === sessionId,
+        srcdocUnchanged: iframe.srcdoc === srcdoc,
+      };
+      sandbox.clear();
+      return result;
+    };
+
+    window.runFrozenQualificationFixture = async html => {
+      sandbox.clear();
+      sandbox.setRenderQuality({ mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 });
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const started = performance.now();
+      try {
+        const report = await harness.preflight(html, {
+          viewport: { width: 2048, height: 1100, dpr: 1 },
+          fastViewport: { width: 640, height: 360, dpr: 1 },
+        });
+        return { report, error: null, elapsedMs: performance.now() - started };
+      } catch (error) {
+        return { report: null, error: { name: error.name, message: error.message }, elapsedMs: performance.now() - started };
+      } finally {
+        sandbox.clear();
+      }
+    };
+
+    window.runFatalDeliveryFixture = async html => {
+      sandbox.clear();
+      const viewport = { width: 640, height: 360, dpr: 1 };
+      const boot = await sandbox.load(html, { viewport });
+      const started = performance.now();
+      for (let index = 0; index < 180; index += 1) {
+        sandbox.sendFrame(createSyntheticFrame(index, index * 16, viewport));
+      }
+      while (!sandbox.fatalEvents().length && performance.now() - started < 900) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      await sandbox.waitForFrameDelivery({ timeoutMs: 900, label: 'fatal delivery drain' });
+      const acceptedAfterFatal = sandbox.sendFrame(createSyntheticFrame(180, 3000, viewport));
+      const result = {
+        boot,
+        fatal: sandbox.fatalEvents()[0] || null,
+        elapsedMs: performance.now() - started,
+        delivery: sandbox.frameDeliverySnapshot(),
+        acceptedAfterFatal,
+      };
+      sandbox.clear();
+      return result;
+    };
+
     window.__reliabilityHarnessReady = true;
   </script>
 </body>

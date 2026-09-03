@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { chromium, test, expect } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
 const fixture = name => readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
@@ -87,11 +87,13 @@ test('trusted pause suspends generated RAF and host frames without reloading', a
   expect(result.paused.runtime.playback.hostPausedAnimations).toBeGreaterThan(0);
   expect(result.paused.runtime.rafCallbacks).toBe(result.pauseApplied.runtime.rafCallbacks);
   expect(result.paused.viz.hostFrames).toBe(result.pauseApplied.viz.hostFrames);
+  expect(result.paused.viz.deliveredFrames).toBe(result.pauseApplied.viz.deliveredFrames);
   expect(result.pausedHeartbeatAgeMs).toBeLessThan(1300);
   expect(result.resumed.runtime.playback.paused).toBe(false);
   expect(result.resumed.runtime.playback.hostPausedAnimations).toBe(0);
   expect(result.resumed.runtime.rafCallbacks).toBe(result.pauseApplied.runtime.rafCallbacks + 1);
   expect(result.resumed.viz.hostFrames).toBeGreaterThan(result.paused.viz.hostFrames);
+  expect(result.resumed.viz.lastFrameSequence).toBeGreaterThan(result.paused.viz.lastFrameSequence);
 });
 
 test('pause selected before bridge startup is applied before generated RAF can advance', async ({ page }) => {
@@ -166,6 +168,165 @@ test('fixed inset auto canvas keeps CSS geometry through every render-quality tr
   });
   expect(result.markerForgery.runtime.stabilizedViewportCanvasCount).toBe(1);
   expect(result.detachedCanvas.runtime.observedViewportCanvasCount).toBe(3);
+});
+
+test('heavy actual-viewport renderer qualifies at Saver cadence with full canvas geometry', async ({ page }) => {
+  const providerRequests = [];
+  page.on('request', request => {
+    if (/openrouter|chat\/completions/i.test(request.url())) providerRequests.push(request.url());
+  });
+  const result = await run(page, await fixture('heavy-actual-viewport.html'), 'runHeavyReliabilityFixture');
+  expect(result.passed).toBe(true);
+  expect(result.schema).toBe('dream-reliability-v3');
+  const fast = result.stages.find(stage => stage.name === 'stimulation');
+  const actual = result.stages.find(stage => stage.name === 'viewport-stimulation');
+  const canary = result.stages.find(stage => stage.name === 'viewport-canary').report;
+  expect(result.stages.find(stage => stage.name === 'boot').readyDetail.viewport.dpr).toBe(1);
+  expect(fast).toMatchObject({ targetFps: 30 });
+  expect(actual).toMatchObject({ targetFps: 30 });
+  expect(fast.frames).toBeLessThanOrEqual(Math.ceil(fast.durationMs / 1000 * 30) + 1);
+  expect(actual.frames).toBeLessThanOrEqual(Math.ceil(actual.durationMs / 1000 * 30) + 1);
+  expect(fast.delivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0 });
+  expect(actual.delivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0 });
+  expect(canary.viewport).toEqual({ width: 2048, height: 1100, dpr: 1 });
+  expect(canary.visual.visibleProof).toBe(true);
+  expect(canary.viz.consumed).toBe(true);
+  expect(canary.viz.latestFrame.deltaTime).toBeCloseTo(1 / 30, 6);
+  expect(canary.events.filter(event => event.severity === 'fatal')).toEqual([]);
+  expect(canary.visual.canvases[0]).toMatchObject({
+    elementId: 'scene',
+    width: 2048,
+    height: 1100,
+    backingWidth: 2048,
+    backingHeight: 1100,
+    coverage: 1,
+    hostViewportStabilized: true,
+  });
+  expect(canary.visual.canvases[0].width / canary.visual.canvases[0].height).toBeCloseTo(2048 / 1100, 4);
+  expect(providerRequests).toEqual([]);
+});
+
+test('faster producer stays bounded and deterministically delivers the newest frame', async ({ page }) => {
+  const result = await runWithArgs(page, 'runFrameBackpressureFixture', await fixture('heavy-actual-viewport.html'), 180);
+  expect(result.boot.ready).toBe(true);
+  expect(result.queued).toMatchObject({ inFlightFrames: 1, pendingFrames: 1, receivedFrames: 180, coalescedFrames: 178 });
+  expect(result.queued.inFlightFrames + result.queued.pendingFrames).toBeLessThanOrEqual(2);
+  expect(result.settled).toMatchObject({ inFlightFrames: 0, pendingFrames: 0, receivedFrames: 180 });
+  expect(result.report.viz).toMatchObject({
+    receivedFrames: 180,
+    deliveredFrames: 2,
+    coalescedFrames: 178,
+    droppedFrames: 0,
+    lastFrameSequence: 180,
+    latestFrame: { sequence: 180, version: 'visualizer-audio-v1', time: 2.864 },
+  });
+  expect(result.report.visual.visibleProof).toBe(true);
+});
+
+test('session replacement cannot leak an old pending frame', async ({ page }) => {
+  const result = await runWithArgs(
+    page,
+    'runFrameSessionReplacementFixture',
+    await fixture('heavy-actual-viewport.html'),
+    await fixture('valid-canvas2d.html'),
+  );
+  expect(result.oldSessionId).not.toBe(result.newSessionId);
+  expect(result.oldDelivery).toMatchObject({ inFlightFrames: 1, pendingFrames: 1, receivedFrames: 120 });
+  expect(result.oldWaitError).toContain('Sandbox was reloaded');
+  expect(result.replacementBoot.ready).toBe(true);
+  expect(result.newDelivery).toMatchObject({ receivedFrames: 1, deliveredFrames: 1, pendingFrames: 0, inFlightFrames: 0 });
+  expect(result.report.viz).toMatchObject({
+    receivedFrames: 1,
+    deliveredFrames: 1,
+    coalescedFrames: 0,
+    lastFrameSequence: 1,
+    latestFrame: { sequence: 1, time: 0.999 },
+  });
+});
+
+test('pause drops pending work and resume starts from a fresh newest frame', async ({ page }) => {
+  const result = await runWithArgs(page, 'runFramePauseBackpressureFixture', await fixture('heavy-actual-viewport.html'));
+  expect(result.queued).toMatchObject({ inFlightFrames: 1, pendingFrames: 1, receivedFrames: 180, coalescedFrames: 178 });
+  expect(result.pausedReport.runtime.playback.paused).toBe(true);
+  expect(result.pausedReport.viz).toMatchObject({ receivedFrames: 180, coalescedFrames: 178, droppedFrames: 1 });
+  expect(result.pausedDelivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0, droppedFrames: 1 });
+  expect(result.acceptedWhilePaused).toBe(false);
+  expect(result.resumedReport.runtime.playback.paused).toBe(false);
+  expect(result.resumedReport.viz).toMatchObject({
+    receivedFrames: 181,
+    deliveredFrames: 2,
+    coalescedFrames: 178,
+    droppedFrames: 1,
+    lastFrameSequence: 181,
+    latestFrame: { sequence: 181, time: 20 },
+  });
+  expect(result.resumedDelivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0 });
+});
+
+test('render-quality change drops stale pending DPR and keeps the session intact', async ({ page }) => {
+  const result = await runWithArgs(page, 'runFrameQualityBackpressureFixture', await fixture('heavy-actual-viewport.html'));
+  expect(result.queued).toMatchObject({ inFlightFrames: 1, pendingFrames: 1, receivedFrames: 180 });
+  expect(result.sessionUnchanged).toBe(true);
+  expect(result.srcdocUnchanged).toBe(true);
+  expect(result.afterQuality.runtime.renderQuality).toMatchObject({ mode: 'balanced', maxFps: 45, effectiveDpr: 1.5 });
+  expect(result.afterQuality.viz).toMatchObject({ receivedFrames: 180, coalescedFrames: 178, droppedFrames: 1 });
+  expect(result.report.viz).toMatchObject({
+    receivedFrames: 181,
+    deliveredFrames: 2,
+    coalescedFrames: 178,
+    droppedFrames: 1,
+    lastFrameSequence: 181,
+    latestFrame: { sequence: 181, time: 20 },
+  });
+  expect(result.report.visual.canvases[0]).toMatchObject({ width: 2048, height: 1100, backingWidth: 3072, backingHeight: 1650 });
+  expect(result.delivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0 });
+});
+
+test('permanently unresponsive actual-viewport renderer still fails within a bound', async () => {
+  const browser = await chromium.launch({ headless: true, args: ['--site-per-process'] });
+  const isolatedPage = await browser.newPage({ viewport: { width: 2200, height: 1250 } });
+  try {
+    const result = await run(isolatedPage, await fixture('unresponsive-actual-viewport.html'), 'runFrozenQualificationFixture');
+    expect(result.report).toBeNull();
+    expect(result.error.message).toContain('actual-viewport drain');
+    expect(result.error.message).toContain('timed out');
+    expect(result.elapsedMs).toBeLessThan(8000);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('fatal VIZ callback remains an immediate authenticated failure', async ({ page }) => {
+  const result = await run(page, await fixture('fatal-viz-callback.html'), 'runFatalDeliveryFixture');
+  expect(result.boot.ready).toBe(true);
+  expect(result.fatal).toMatchObject({ severity: 'fatal', code: 'VIZ_CALLBACK_ERROR' });
+  expect(result.delivery).toMatchObject({
+    receivedFrames: 180,
+    deliveredFrames: 1,
+    coalescedFrames: 178,
+    droppedFrames: 1,
+    pendingFrames: 0,
+    inFlightFrames: 0,
+    blockedByFatal: true,
+  });
+  expect(result.acceptedAfterFatal).toBe(false);
+  expect(result.elapsedMs).toBeLessThan(900);
+});
+
+test('fatal callback terminates full qualification without completing stimulation', async ({ page }) => {
+  const result = await run(page, await fixture('fatal-viz-callback.html'));
+  expect(result.passed).toBe(false);
+  expect(result.failure.code).toBe('VIZ_CALLBACK_ERROR');
+  expect(result.durationMs).toBeLessThan(1500);
+  const stimulation = result.stages.find(stage => stage.name === 'stimulation');
+  expect(stimulation.frames).toBe(1);
+  expect(stimulation.attemptedFrames).toBe(1);
+});
+
+test('visible renderer that never consumes VIZ still fails closed', async ({ page }) => {
+  const result = await run(page, await fixture('visible-viz-nonconsumer.html'));
+  expect(result.passed).toBe(false);
+  expect(result.failure.code).toBe('VIZ_NOT_CONSUMED');
 });
 
 test('stale heartbeat with a responsive authenticated probe is a transient stall', async ({ page }) => {

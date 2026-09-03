@@ -617,11 +617,22 @@ expect(
   'Long-lived visualizers must confirm inferred heartbeat stalls while retaining deterministic automatic recovery.',
 );
 expect(
-  runtimeVersion.includes("VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v2'")
-    && reliability.includes("RELIABILITY_SCHEMA = 'dream-reliability-v2'")
+  runtimeVersion.includes("VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v3'")
+    && reliability.includes("RELIABILITY_SCHEMA = 'dream-reliability-v3'")
     && costGuard.includes("from './runtime-version.js'")
     && modelGuide.includes("from './runtime-version.js'"),
-  'Runtime and reliability v2 must isolate materially changed model-fit evidence through one shared runtime identity.',
+  'Runtime and reliability v3 must isolate materially changed model-fit evidence through one shared runtime identity.',
+);
+expect(
+  sandbox.includes("post('frame-delivered'")
+    && sandbox.includes('coalescedFrames')
+    && sandbox.includes('pendingFrames: delivery?.pending ? 1 : 0')
+    && sandbox.includes('latestFrame:')
+    && sandbox.includes('waitForFrameDelivery')
+    && sandbox.includes("message.type === 'host-frame-stats'")
+    && reliability.includes('sandbox.renderQuality?.maxFps')
+    && reliability.includes("name: 'viewport-stimulation'"),
+  'Real-time VIZ delivery must keep newest-frame work bounded and qualification must honor render-quality cadence.',
 );
 expect(
   sandbox.includes('data-visualizer-host-viewport-canvas')

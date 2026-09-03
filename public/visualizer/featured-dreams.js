@@ -2,7 +2,7 @@ import { DEFAULT_VISUALIZER_HTML } from './default-visualizer.js';
 import { FEATURED_DREAM_MANIFEST, FEATURED_MANIFEST_SCHEMA } from './featured/manifest.js';
 import { RELIABILITY_SCHEMA } from './reliability.js';
 
-const SUPPORTED_RELIABILITY_CONTRACTS = new Set(['dream-reliability-v1', RELIABILITY_SCHEMA]);
+const SUPPORTED_RELIABILITY_CONTRACTS = new Set(['dream-reliability-v1', 'dream-reliability-v2', RELIABILITY_SCHEMA]);
 
 export { FEATURED_DREAM_MANIFEST, FEATURED_MANIFEST_SCHEMA };
 
