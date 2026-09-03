@@ -74,6 +74,9 @@ jobs:
       - name: Verify model fit evidence contract
         run: node --test --test-concurrency=1 tests/model-fit-evidence.contract.mjs
 
+      - name: Verify Prompt Library contract
+        run: node --test --test-concurrency=1 tests/prompt-library.contract.mjs
+
       - name: Verify keyboard transport contract
         run: node --test --test-concurrency=1 tests/keyboard-transport.contract.mjs
 

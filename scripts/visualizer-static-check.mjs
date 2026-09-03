@@ -37,6 +37,9 @@ const [
   aetheriaFixture,
   productShellContract,
   productShellBrowser,
+  promptLab,
+  promptLibrary,
+  promptLibraryContract,
 ] = await Promise.all([
   read('public/visualizer/index.html'),
   read('public/visualizer/app.js'),
@@ -71,6 +74,9 @@ const [
   read('tests/fixtures/aetheria-gemini-3.7-flash.html'),
   read('tests/product-shell.contract.mjs'),
   read('tests/product-shell.spec.mjs'),
+  read('public/visualizer/prompt-lab.js'),
+  read('public/visualizer/prompt-library.js'),
+  read('tests/prompt-library.contract.mjs'),
 ]);
 
 const [
@@ -158,6 +164,21 @@ expect(
   'Neutral must remain the unchanged minimal default creative brief.',
 );
 expect(prompt.includes('WebGL/WebGL2') && prompt.includes('WebGPU when available') && prompt.includes('SVG'), 'Prompt must preserve broad browser-native creative capability.');
+expect(
+  promptLibrary.includes("PROMPT_LIBRARY_SCHEMA = 'visualizer-prompt-library-v1'")
+    && promptLibrary.includes("PROMPT_LIBRARY_STORAGE_KEY = 'ai-visualizer.prompt-library.v1'")
+    && promptLibrary.includes('profileId: profile.id')
+    && !promptLibrary.includes('FIXED_RUNTIME_CONTRACT'),
+  'Prompt Library must remain additive, content-addressed, and free of runtime-contract duplication.',
+);
+expect(
+  promptLab.includes('Save as new')
+    && promptLab.includes('renameSaved')
+    && promptLab.includes('duplicateSaved')
+    && promptLab.includes('deleteSaved')
+    && promptLibraryContract.includes('modelFitConfigurationKey'),
+  'Prompt Library research actions and identity regression coverage must remain present.',
+);
 expect(sandbox.includes("connect-src 'none'"), 'Generated visualizer CSP must block network connections.');
 expect(providerRuntime.includes("billing: 'user'") && providerRuntime.includes('browserOnly: true'), 'Current provider contract must remain browser-only and user-funded.');
 expect(providerRuntime.includes('sessionStorage') && providerRuntime.includes('code_challenge_method'), 'OpenRouter connection must remain session-scoped PKCE.');
