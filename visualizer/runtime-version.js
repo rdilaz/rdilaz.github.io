@@ -1,1 +1,1 @@
-export const VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v2';
+export const VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v3';
