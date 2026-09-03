@@ -4,7 +4,6 @@ import test from 'node:test';
 import {
   GENERATION_METADATA_RETRY_DELAYS_MS,
   authoritativeGenerationMetadata,
-  qualifiesForDocumentedTerminal429,
   runBoundedGenerationReconciliation,
 } from '../public/visualizer/cost-guard.js';
 
@@ -64,39 +63,5 @@ test('metadata 429, 5xx, and network failures exhaust only the finite schedule a
     assert.equal(result.reason, reason);
     assert.equal(attempts, GENERATION_METADATA_RETRY_DELAYS_MS.length);
     assert.deepEqual(waits, GENERATION_METADATA_RETRY_DELAYS_MS.slice(1));
-  }
-});
-
-test('only the documented terminal no-generation 429 evidence qualifies for policy zero', () => {
-  const qualifying = {
-    status: 429,
-    responseParsed: true,
-    providerGenerationId: '',
-    usagePresent: false,
-    contentBytes: 0,
-    reasoningBytes: 0,
-    partialArtifact: false,
-    terminal: true,
-    cancelled: false,
-    timedOut: false,
-    auxiliaryServices: false,
-  };
-  assert.equal(qualifiesForDocumentedTerminal429(qualifying), true);
-
-  const disqualifying = {
-    status: 503,
-    responseParsed: false,
-    providerGenerationId: 'gen-known',
-    usagePresent: true,
-    contentBytes: 1,
-    reasoningBytes: 1,
-    partialArtifact: true,
-    terminal: false,
-    cancelled: true,
-    timedOut: true,
-    auxiliaryServices: true,
-  };
-  for (const key of Object.keys(disqualifying)) {
-    assert.equal(qualifiesForDocumentedTerminal429({ ...qualifying, [key]: disqualifying[key] }), false, key);
   }
 });

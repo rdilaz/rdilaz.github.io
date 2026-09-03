@@ -740,20 +740,6 @@ export function authoritativeGenerationMetadata(payload, expectedGenerationId) {
   return { accepted: true, reason: 'generation-metadata', usage, cost };
 }
 
-export function qualifiesForDocumentedTerminal429(evidence = {}) {
-  return Number(evidence.status) === 429
-    && evidence.responseParsed === true
-    && !String(evidence.providerGenerationId || '').trim()
-    && evidence.usagePresent === false
-    && Number(evidence.contentBytes) === 0
-    && Number(evidence.reasoningBytes) === 0
-    && evidence.partialArtifact === false
-    && evidence.terminal === true
-    && evidence.cancelled === false
-    && evidence.timedOut === false
-    && evidence.auxiliaryServices === false;
-}
-
 export async function runBoundedGenerationReconciliation({
   delays = GENERATION_METADATA_RETRY_DELAYS_MS,
   wait = delay => new Promise(resolve => setTimeout(resolve, delay)),
@@ -840,21 +826,6 @@ function reconcileGenerationMetadata(reservationId, providerGenerationId) {
   }).finally(() => activeReconciliations.delete(reservationId));
   activeReconciliations.set(reservationId, reconciliation);
   return reconciliation;
-}
-
-async function settleDocumentedTerminal429(reservationId, evidence) {
-  if (!qualifiesForDocumentedTerminal429(evidence)) {
-    await withSpendLock(() => recordReconciliationResult(reservationId, 'terminal-evidence-remains-uncertain'));
-    return { settled: false, reason: 'terminal-evidence-remains-uncertain' };
-  }
-  const settled = await withSpendLock(() => reconcileReservedCost(reservationId, {
-    cost: 0,
-    usage: null,
-    estimated: false,
-    source: 'documented-terminal-429-no-generation',
-    providerGenerationId: '',
-  }));
-  return { settled: Boolean(settled), source: 'documented-terminal-429-no-generation' };
 }
 
 function applyOutstandingSettledCorrections() {
@@ -1238,12 +1209,6 @@ function isRepairRequest(body) {
   return String(body?.messages?.[0]?.content || '').startsWith('Repair the visualizer');
 }
 
-function requestUsesAuxiliaryServices(body) {
-  return (Array.isArray(body?.plugins) && body.plugins.length > 0)
-    || (Array.isArray(body?.tools) && body.tools.length > 0)
-    || Boolean(body?.web_search_options);
-}
-
 function usageNumber(usage, paths) {
   for (const path of paths) {
     let value = usage;
@@ -1436,18 +1401,15 @@ async function executeGuardedCompletion(input, init, traceContext) {
         }));
         return { settled: Boolean(settled), estimated: exact === null };
       },
-      async reconcile({ providerGenerationId = '', ...evidence } = {}) {
+      async reconcile({ providerGenerationId = '' } = {}) {
         const id = String(providerGenerationId || '').trim();
         if (id) {
           const linked = await withSpendLock(() => attachProviderGenerationId(reservationId, id));
           if (!linked) return { settled: false, reason: 'generation-id-link-failed' };
           return reconcileGenerationMetadata(reservationId, id);
         }
-        return settleDocumentedTerminal429(reservationId, {
-          ...evidence,
-          providerGenerationId: '',
-          auxiliaryServices: requestUsesAuxiliaryServices(body),
-        });
+        await withSpendLock(() => recordReconciliationResult(reservationId, 'missing-generation-id'));
+        return { settled: false, reason: 'missing-generation-id' };
       },
     });
   }
