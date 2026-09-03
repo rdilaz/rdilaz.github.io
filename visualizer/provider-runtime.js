@@ -24,6 +24,7 @@ import {
   traceCaptureIdentity,
 } from './trace-bridge.js';
 import {
+  linkCompletionAccounting,
   reconcileCompletionAccounting,
   releaseCompletionAccounting,
   settleCompletionAccounting,
@@ -660,10 +661,6 @@ function emitStreamProgress(traceContext, detail) {
 }
 
 function scheduleMetadataReconciliation(traceContext, providerGenerationId) {
-  if (!providerGenerationId) {
-    releaseCompletionAccounting(traceContext);
-    return;
-  }
   void reconcileCompletionAccounting(traceContext, { providerGenerationId });
 }
 
@@ -754,6 +751,7 @@ async function requestOpenRouterCompletion({
 
   const headerGenerationId = response.headers.get('x-generation-id') || '';
   const headerRequestId = response.headers.get('x-request-id') || '';
+  if (headerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId: headerGenerationId });
   if (!response.ok) {
     const rawBodyText = await readResponseText(response, {
       signal,
@@ -769,6 +767,7 @@ async function requestOpenRouterCompletion({
       parseError = error;
     }
     const providerGenerationId = headerGenerationId || payload?.id || '';
+    if (providerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId });
     const requestId = headerRequestId || payload?.request_id || '';
     const transport = {
       schema: 'openrouter-chat-sse-v1',
@@ -831,6 +830,7 @@ async function requestOpenRouterCompletion({
       payload = rawBodyText ? JSON.parse(rawBodyText) : null;
     } catch { /* The exact bounded body remains in diagnostics when available. */ }
     const providerGenerationId = headerGenerationId || payload?.id || '';
+    if (providerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId });
     const transport = {
       schema: 'openrouter-chat-sse-v1',
       streamed: false,
@@ -874,7 +874,10 @@ async function requestOpenRouterCompletion({
     streamed = await consumeOpenRouterChatStream(response, {
       signal,
       providerGenerationId: headerGenerationId,
-      onProgress: detail => emitStreamProgress(traceContext, detail),
+      onProgress: detail => {
+        if (detail?.providerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId: detail.providerGenerationId });
+        emitStreamProgress(traceContext, detail);
+      },
     });
   } catch (streamError) {
     const partial = streamError?.streamResult || null;
