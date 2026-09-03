@@ -97,6 +97,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     lastDomStyleHash: 0,
     rootSurfaceEverChanged: false,
     qualityChanges: 0,
+    viewportCanvasStabilizations: 0,
     renderQuality,
   };
 
@@ -136,6 +137,81 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   let nextGeneratedFrameAt = 0;
   let allowedGeneratedFrameAt = -1;
   let qualityResizePending = false;
+  const stabilizedViewportCanvases = new Set();
+  const observedViewportCanvases = new Set();
+  let viewportCanvasRecheckTimer = 0;
+  function autoCssSize(canvas) {
+    try {
+      const map = canvas.computedStyleMap?.();
+      return String(map?.get('width') || '').toLowerCase() === 'auto'
+        && String(map?.get('height') || '').toLowerCase() === 'auto';
+    } catch {
+      return false;
+    }
+  }
+
+  function zeroInset(value) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) && Math.abs(parsed) <= 1;
+  }
+
+  function stabilizeViewportCanvas(canvas) {
+    if (!(canvas instanceof HTMLCanvasElement) || !canvas.isConnected) return false;
+    observedViewportCanvases.add(canvas);
+    const wasStabilized = canvas.hasAttribute('data-visualizer-host-viewport-canvas');
+    if (wasStabilized) canvas.removeAttribute('data-visualizer-host-viewport-canvas');
+    const style = getComputedStyle(canvas);
+    if (style.position !== 'fixed'
+      || !autoCssSize(canvas)
+      || ![style.top, style.right, style.bottom, style.left].every(zeroInset)) {
+      stabilizedViewportCanvases.delete(canvas);
+      return false;
+    }
+    canvas.setAttribute('data-visualizer-host-viewport-canvas', '');
+    const rect = canvas.getBoundingClientRect();
+    const matchesViewport = Math.abs(rect.left) <= 1
+      && Math.abs(rect.top) <= 1
+      && Math.abs(rect.width - innerWidth) <= 1
+      && Math.abs(rect.height - innerHeight) <= 1;
+    if (!matchesViewport) {
+      canvas.removeAttribute('data-visualizer-host-viewport-canvas');
+      stabilizedViewportCanvases.delete(canvas);
+      return false;
+    }
+    stabilizedViewportCanvases.add(canvas);
+    if (!wasStabilized) state.viewportCanvasStabilizations += 1;
+    return true;
+  }
+
+  function stabilizeViewportCanvases(root = document) {
+    stabilizedViewportCanvases.forEach(canvas => {
+      if (!canvas.isConnected) stabilizedViewportCanvases.delete(canvas);
+    });
+    observedViewportCanvases.forEach(canvas => {
+      if (!canvas.isConnected) observedViewportCanvases.delete(canvas);
+    });
+    if (root instanceof HTMLCanvasElement) stabilizeViewportCanvas(root);
+    root.querySelectorAll?.('canvas').forEach(stabilizeViewportCanvas);
+  }
+
+  function scheduleViewportCanvasRecheck() {
+    if (viewportCanvasRecheckTimer) return;
+    viewportCanvasRecheckTimer = originalSetTimeout(() => {
+      viewportCanvasRecheckTimer = 0;
+      recheckObservedViewportCanvases();
+    }, 0);
+  }
+
+  function recheckObservedViewportCanvases() {
+    observedViewportCanvases.forEach(canvas => {
+      if (!canvas.isConnected) {
+        stabilizedViewportCanvases.delete(canvas);
+        observedViewportCanvases.delete(canvas);
+        return;
+      }
+      stabilizeViewportCanvas(canvas);
+    });
+  }
 
   function post(type, payload = {}) {
     try {
@@ -346,7 +422,10 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     currentFrame = { ...currentFrame, viewport };
     if (changed) {
       state.qualityChanges += 1;
-      if (previous.effectiveDpr !== next.effectiveDpr) dispatchQualityResize();
+      if (previous.effectiveDpr !== next.effectiveDpr) {
+        stabilizeViewportCanvases();
+        dispatchQualityResize();
+      }
     }
     post('render-quality-applied', {
       revision: Number(revision) || 0,
@@ -457,6 +536,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   const originalGetContext = HTMLCanvasElement.prototype.getContext;
   try {
     HTMLCanvasElement.prototype.getContext = function instrumentedGetContext(type, ...args) {
+      stabilizeViewportCanvas(this);
       let context;
       try {
         context = Reflect.apply(originalGetContext, this, [type, ...args]);
@@ -592,6 +672,47 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     characterData: true,
   });
 
+  const viewportCanvasObserver = new MutationObserver(records => {
+    for (const record of records) {
+      record.addedNodes.forEach(node => {
+        if (node instanceof Element) stabilizeViewportCanvases(node);
+      });
+      const canvasTreeChanged = [...record.addedNodes, ...record.removedNodes].some(node => (
+        node instanceof HTMLCanvasElement || (node instanceof Element && node.querySelector('canvas'))
+      ));
+      if (canvasTreeChanged) scheduleViewportCanvasRecheck();
+      if (record.type === 'attributes' && record.attributeName !== 'data-visualizer-host-viewport-canvas') {
+        const target = record.target;
+        const affectsStabilizedCanvas = target instanceof HTMLCanvasElement
+          || [...observedViewportCanvases].some(canvas => target instanceof Element && target.contains(canvas));
+        if (affectsStabilizedCanvas) scheduleViewportCanvasRecheck();
+      }
+      if (record.type === 'attributes' && record.attributeName === 'data-visualizer-host-viewport-canvas') {
+        const canvas = record.target;
+        if (!stabilizedViewportCanvases.has(canvas) && canvas.hasAttribute('data-visualizer-host-viewport-canvas')) {
+          canvas.removeAttribute('data-visualizer-host-viewport-canvas');
+        } else if (stabilizedViewportCanvases.has(canvas) && !canvas.hasAttribute('data-visualizer-host-viewport-canvas')) {
+          scheduleViewportCanvasRecheck();
+        }
+      }
+      const stylesheetNodeChanged = [...record.addedNodes, ...record.removedNodes].some(node => (
+        node instanceof HTMLStyleElement
+        || (node instanceof HTMLLinkElement && node.relList?.contains('stylesheet'))
+      ));
+      if (stylesheetNodeChanged
+        || record.target instanceof HTMLStyleElement
+        || record.target.parentElement instanceof HTMLStyleElement) {
+        scheduleViewportCanvasRecheck();
+      }
+    }
+  });
+  viewportCanvasObserver.observe(document, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  });
+
   function colorHasInk(value) {
     if (!value || value === 'transparent') return false;
     const normalized = value.replaceAll(' ', '').toLowerCase();
@@ -716,10 +837,19 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
 
     return {
       id: record?.id || null,
+      elementId: canvas.id || '',
       width: Math.round(visible.rect.width),
       height: Math.round(visible.rect.height),
+      left: Math.round(visible.rect.left),
+      top: Math.round(visible.rect.top),
+      right: Math.round(visible.rect.right),
+      bottom: Math.round(visible.rect.bottom),
+      centerX: Math.round(visible.rect.left + visible.rect.width / 2),
+      centerY: Math.round(visible.rect.top + visible.rect.height / 2),
       backingWidth: canvas.width,
       backingHeight: canvas.height,
+      hostViewportStabilized: stabilizedViewportCanvases.has(canvas)
+        && canvas.hasAttribute('data-visualizer-host-viewport-canvas'),
       coverage,
       pixel,
       activity,
@@ -918,6 +1048,9 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
           ...renderQuality,
           changes: state.qualityChanges,
         },
+        viewportCanvasStabilizations: state.viewportCanvasStabilizations,
+        observedViewportCanvasCount: observedViewportCanvases.size,
+        stabilizedViewportCanvasCount: stabilizedViewportCanvases.size,
         monitor: monitorSummary(),
         playback: {
           paused: state.paused,
@@ -1120,6 +1253,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   originalRAF(monitor);
 
   originalSetInterval(() => {
+    recheckObservedViewportCanvases();
     post('heartbeat', {
       heartbeat: {
         atMs: Math.round(performance.now() - state.startedAt),
@@ -1134,6 +1268,8 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   if (initialPaused) pauseGeneratedPlayback();
 
   addEventListener('DOMContentLoaded', () => {
+    stabilizeViewportCanvases();
+    originalSetTimeout(stabilizeViewportCanvases, 0);
     state.readyAt = performance.now();
     post('ready', {
       ready: {
@@ -1160,7 +1296,7 @@ function injectRuntime(html, sessionId, renderQuality, paused) {
   meta.content = SANDBOX_CSP;
   const baseStyle = document.createElement('style');
   baseStyle.dataset.visualizerHostStyle = '';
-  baseStyle.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}';
+  baseStyle.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}canvas[data-visualizer-host-viewport-canvas]{width:100vw!important;height:100vh!important}';
   const bridge = document.createElement('script');
   bridge.dataset.visualizerHostBridge = '';
   bridge.textContent = `;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)},${JSON.stringify(renderQuality)},${JSON.stringify(Boolean(paused))});`.replace(/<\/script/gi, '<\\/script');
@@ -1444,6 +1580,15 @@ export class VisualizerSandbox {
 
   heartbeatAgeMs() {
     return performance.now() - this.lastHeartbeatAt;
+  }
+
+  heartbeatSnapshot() {
+    return Object.freeze({
+      sessionId: this.sessionId,
+      receivedAt: Number.isFinite(this.lastHeartbeatAt) ? this.lastHeartbeatAt : null,
+      sandboxAtMs: Number.isFinite(Number(this.lastHeartbeat?.atMs)) ? Number(this.lastHeartbeat.atMs) : null,
+      ageMs: Math.max(0, this.heartbeatAgeMs()),
+    });
   }
 
   clear() {
