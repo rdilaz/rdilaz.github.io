@@ -24,6 +24,7 @@ import {
   traceCaptureIdentity,
 } from './trace-bridge.js';
 import {
+  linkCompletionAccounting,
   reconcileCompletionAccounting,
   releaseCompletionAccounting,
   settleCompletionAccounting,
@@ -659,24 +660,37 @@ function emitStreamProgress(traceContext, detail) {
   }));
 }
 
-function scheduleMetadataReconciliation(traceContext, providerGenerationId) {
-  if (!providerGenerationId) {
-    releaseCompletionAccounting(traceContext);
-    return;
-  }
-  void reconcileCompletionAccounting(traceContext, { providerGenerationId });
+function scheduleMetadataReconciliation(traceContext, providerGenerationId, evidence = {}) {
+  void reconcileCompletionAccounting(traceContext, { ...evidence, providerGenerationId });
 }
 
-function settleUsageWithoutBlocking(traceContext, usage, providerGenerationId) {
+function settleUsageWithoutBlocking(traceContext, usage, providerGenerationId, evidence = {}) {
   if (!usage || typeof usage !== 'object') {
-    scheduleMetadataReconciliation(traceContext, providerGenerationId);
+    scheduleMetadataReconciliation(traceContext, providerGenerationId, evidence);
     return;
   }
   void settleCompletionAccounting(traceContext, { usage, providerGenerationId })
     .then(result => {
-      if (result.settled !== true) scheduleMetadataReconciliation(traceContext, providerGenerationId);
+      if (result.settled !== true) scheduleMetadataReconciliation(traceContext, providerGenerationId, evidence);
     })
-    .catch(() => scheduleMetadataReconciliation(traceContext, providerGenerationId));
+    .catch(() => scheduleMetadataReconciliation(traceContext, providerGenerationId, evidence));
+}
+
+function terminalHttpErrorEvidence(status, payload) {
+  const choices = Array.isArray(payload?.choices) ? payload.choices : [];
+  const content = choices.map(choice => choice?.message?.content ?? choice?.delta?.content ?? choice?.text ?? '').join('');
+  const reasoning = choices.map(choice => choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? choice?.delta?.reasoning ?? '').join('');
+  const bytes = value => new TextEncoder().encode(String(value || '')).byteLength;
+  return {
+    status,
+    usagePresent: payload?.usage !== null && payload?.usage !== undefined,
+    contentBytes: bytes(content),
+    reasoningBytes: bytes(reasoning),
+    partialArtifact: content.trim().length > 0,
+    terminal: true,
+    cancelled: false,
+    timedOut: false,
+  };
 }
 
 async function readResponseText(response, { signal, traceContext, providerGenerationId, stage }) {
@@ -754,6 +768,7 @@ async function requestOpenRouterCompletion({
 
   const headerGenerationId = response.headers.get('x-generation-id') || '';
   const headerRequestId = response.headers.get('x-request-id') || '';
+  if (headerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId: headerGenerationId });
   if (!response.ok) {
     const rawBodyText = await readResponseText(response, {
       signal,
@@ -769,6 +784,7 @@ async function requestOpenRouterCompletion({
       parseError = error;
     }
     const providerGenerationId = headerGenerationId || payload?.id || '';
+    if (providerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId });
     const requestId = headerRequestId || payload?.request_id || '';
     const transport = {
       schema: 'openrouter-chat-sse-v1',
@@ -791,7 +807,12 @@ async function requestOpenRouterCompletion({
       terminatedAt: Date.now(),
     };
     captureStreamTransport(traceContext, transport);
-    settleUsageWithoutBlocking(traceContext, payload?.usage || null, providerGenerationId);
+    settleUsageWithoutBlocking(
+      traceContext,
+      payload?.usage || null,
+      providerGenerationId,
+      terminalHttpErrorEvidence(response.status, payload),
+    );
     captureProviderResponse(traceContext, {
       response,
       rawBodyText,
@@ -831,6 +852,7 @@ async function requestOpenRouterCompletion({
       payload = rawBodyText ? JSON.parse(rawBodyText) : null;
     } catch { /* The exact bounded body remains in diagnostics when available. */ }
     const providerGenerationId = headerGenerationId || payload?.id || '';
+    if (providerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId });
     const transport = {
       schema: 'openrouter-chat-sse-v1',
       streamed: false,
@@ -874,7 +896,10 @@ async function requestOpenRouterCompletion({
     streamed = await consumeOpenRouterChatStream(response, {
       signal,
       providerGenerationId: headerGenerationId,
-      onProgress: detail => emitStreamProgress(traceContext, detail),
+      onProgress: detail => {
+        if (detail?.providerGenerationId) void linkCompletionAccounting(traceContext, { providerGenerationId: detail.providerGenerationId });
+        emitStreamProgress(traceContext, detail);
+      },
     });
   } catch (streamError) {
     const partial = streamError?.streamResult || null;

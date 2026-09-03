@@ -226,7 +226,7 @@ test('provider failure closes its exact attempt without changing LIVE', async ({
   expect(trace.finalLiveIdentity.candidate).toBe(null);
 });
 
-test('two zero-output 429 responses retain uncertain reservations and shrink protected session headroom without reported usage', async ({ page }) => {
+test('documented no-ID terminal 429 failures release reservations and preserve truthful headroom', async ({ page }) => {
   const diagnosticCatalog = structuredClone(catalog);
   diagnosticCatalog.data[0].pricing = { prompt: '0', completion: '0.00004', request: '0' };
   diagnosticCatalog.data[0].supported_parameters = ['temperature', 'max_tokens'];
@@ -270,6 +270,7 @@ test('two zero-output 429 responses retain uncertain reservations and shrink pro
     await page.locator('#dreamButton').click();
     await expect.poll(() => completionRequests).toBe(attempt);
     await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+    await expect.poll(() => page.evaluate(() => Number(sessionStorage.getItem('ai-visualizer.spend.session.v1')))).toBe(0);
   }
 
   const accounting = await page.evaluate(() => ({
@@ -277,19 +278,16 @@ test('two zero-output 429 responses retain uncertain reservations and shrink pro
     daily: JSON.parse(localStorage.getItem('ai-visualizer.spend.daily.v1')),
     ledger: JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1')),
   }));
-  expect(accounting.sessionSpent).toBeGreaterThan(0.855);
-  expect(accounting.sessionSpent).toBeLessThan(0.857);
-  expect(accounting.daily.spent).toBeCloseTo(accounting.sessionSpent, 8);
-  expect(0.876 - accounting.sessionSpent).toBeGreaterThan(0.019);
-  expect(0.876 - accounting.sessionSpent).toBeLessThan(0.021);
+  expect(accounting.sessionSpent).toBe(0);
+  expect(accounting.daily.spent).toBe(0);
   expect(accounting.ledger).toHaveLength(2);
-  expect(accounting.ledger.every(entry => entry.uncertain === true && entry.estimated === true)).toBe(true);
-  expect(accounting.ledger.every(entry => entry.settlementSource === undefined)).toBe(true);
+  expect(accounting.ledger.every(entry => entry.uncertain === false && entry.estimated === false && entry.cost === 0)).toBe(true);
+  expect(accounting.ledger.every(entry => entry.settlementSource === 'documented-terminal-429-no-generation')).toBe(true);
 
   await page.locator('#dreamButton').click();
+  await expect.poll(() => completionRequests).toBe(3);
   await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
-  expect(completionRequests).toBe(2);
-  await expect(page.locator('#dreamJobDetail')).toContainText(/no request was sent/i);
+  await expect.poll(() => page.evaluate(() => Number(sessionStorage.getItem('ai-visualizer.spend.session.v1')))).toBe(0);
 });
 
 test('availability failure creates no fake completion dispatch', async ({ page }) => {
