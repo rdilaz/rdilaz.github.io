@@ -102,6 +102,17 @@ async function seedReadyDream(page, html, { id = 'saved-while-working', modelNam
       healthStatus: 'ready',
       openStatus: 'ready-to-open',
       preflightEvidence: { passed: true, schema: 'dream-reliability-v1' },
+      modelFitConfiguration: {
+        modelId: 'fixture/saved',
+        reasoningChoice: 'default',
+        promptProfileId: 'neutral-v1',
+        promptVersion: 'visualizer-prompt-v2',
+        promptHash: 'fixture-historical-prompt-hash',
+        generationEnvelopeMajorVersion: 1,
+        audioApiVersion: 'visualizer-audio-v1',
+        reliabilityVersion: 'dream-reliability-v1',
+        runtimeVersion: 'visualizer-runtime-v1',
+      },
     });
     await new Promise((resolve, reject) => {
       transaction.oncomplete = resolve;
@@ -240,6 +251,7 @@ test('slow background job collapses, survives pause and switching, persists Read
 
   await page.locator('#dreamButton').click();
   await expect.poll(() => completionStarted).toBe(true);
+  await expect(page.locator('#dreamJobPhase')).toHaveText('Model working');
   await expect(page.locator('#dreamJobPanel')).toBeVisible();
   await expect(page.locator('#dreamJobPillButton')).toHaveAttribute('aria-expanded', 'true');
   await page.locator('#switcherButton').click();
@@ -266,14 +278,53 @@ test('slow background job collapses, survives pause and switching, persists Read
   await page.locator('#switcherButton').click();
   await page.locator('.dream-switcher__item').filter({ hasText: 'Saved While Working' }).locator('.dream-switcher__choose').click();
   await expect(page.locator('#liveIdentityName')).toContainText('Saved While Working', { timeout: 35000 });
+  await expect(page.locator('#dreamJobPillPhase')).toHaveText('Model working');
+  const reopenedEvidence = await page.evaluate(async () => {
+    const fit = window.VIZ_DEV.modelFit().configurations.find(entry => entry.identity.modelId === 'fixture/saved');
+    const request = indexedDB.open('ai-visualizer-v0', 2);
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const transaction = db.transaction('generations', 'readonly');
+    const getRequest = transaction.objectStore('generations').get('saved-while-working');
+    const generation = await new Promise((resolve, reject) => {
+      getRequest.onsuccess = () => resolve(getRequest.result);
+      getRequest.onerror = () => reject(getRequest.error);
+    });
+    db.close();
+    return { fit, generation };
+  });
+  expect(reopenedEvidence.fit.identity).toMatchObject({
+    reliabilityVersion: 'dream-reliability-v2',
+    runtimeVersion: 'visualizer-runtime-v2',
+  });
+  expect(reopenedEvidence.generation.modelFitConfiguration).toMatchObject({
+    reliabilityVersion: 'dream-reliability-v1',
+    runtimeVersion: 'visualizer-runtime-v1',
+  });
+  expect(reopenedEvidence.generation.preflightEvidence).toMatchObject({
+    schema: 'dream-reliability-v2',
+    passed: true,
+    source: 'full-revalidation',
+  });
   await expect(page.locator('#playbackButton')).toHaveAttribute('aria-pressed', 'true');
   const switchedPaused = await page.evaluate(() => window.VIZ_DEV.probeActive('switched-paused'));
   await page.waitForTimeout(300);
   const switchedHeld = await page.evaluate(() => window.VIZ_DEV.probeActive('switched-held'));
   expect(switchedHeld.runtime.rafCallbacks).toBe(switchedPaused.runtime.rafCallbacks);
   expect(completionRequests).toBe(1);
+  const beforeStaleLifecycle = await page.evaluate(() => window.VIZ_DEV.state().job);
+  await page.evaluate(modelId => {
+    window.dispatchEvent(new CustomEvent('visualizer:dream-lifecycle', {
+      detail: { phase: 'checking', modelId, traceId: 'unrelated-saved-dream-trace' },
+    }));
+  }, MODEL_ID);
+  const afterStaleLifecycle = await page.evaluate(() => window.VIZ_DEV.state().job);
+  expect(afterStaleLifecycle).toEqual(beforeStaleLifecycle);
 
   releaseCompletion();
+  await expect(page.locator('#dreamJobPillPhase')).toHaveText('Checking');
   await expect(page.locator('#dreamJobPillPhase')).toHaveText('Dream ready', { timeout: 35000 });
   await expect(page.locator('#liveIdentityName')).toContainText('Saved While Working');
   await page.locator('#playbackButton').click();

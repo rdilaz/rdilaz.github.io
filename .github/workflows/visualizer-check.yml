@@ -89,6 +89,9 @@ jobs:
       - name: Verify immersive UI contract
         run: node --test --test-concurrency=1 tests/immersive-ui.contract.mjs
 
+      - name: Verify dogfood runtime hardening contract
+        run: node --test --test-concurrency=1 tests/dogfood-runtime.contract.mjs
+
       - name: Install portfolio dependencies
         run: npm ci
 

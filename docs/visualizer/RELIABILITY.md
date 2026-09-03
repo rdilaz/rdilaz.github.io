@@ -1,6 +1,8 @@
 # Dream Reliability Harness
 
-Version: `dream-reliability-v1`
+Version: `dream-reliability-v2`
+
+Runtime compatibility: `visualizer-runtime-v2`
 
 ## Product rule
 
@@ -25,11 +27,11 @@ Nothing changes LIVE at this point. When the user chooses Open, the host perform
 
 `ready artifact → safe reopen → candidate visible with rollback armed → watchdog → commit LIVE`
 
-The previous slot remains warm throughout the post-launch watchdog. A fatal runtime error, context loss, probe failure, or heartbeat stall causes immediate rollback instead of a blank stage.
+The previous slot remains warm throughout the post-launch watchdog. Fatal runtime errors and context loss remain immediate rollback evidence. A stale heartbeat starts one bounded authenticated-probe confirmation: a responsive probe or resumed heartbeat prevents a false stall, while an unchanged stale heartbeat plus failed probe confirms `RUNTIME_STALLED` deterministically.
 
 After the watchdog passes, high-frequency instrumentation is removed from the promoted iframe so the verification system does not become a permanent rendering tax.
 
-Stored artifacts with current ready/verified evidence use the shorter safe-reopen probe instead of repeating the full generation preflight. They still execute only in the opaque-origin sandbox and still pass the visible launch watchdog. A failed Open preserves the prior LIVE Dream and keeps the ready artifact/evidence with `failed-to-open` state for later inspection.
+Stored artifacts with current v2 ready/verified evidence use the shorter safe-reopen probe instead of repeating the full generation preflight. Historical v1 artifacts remain stored and reopenable, but receive a full v2 preflight before promotion. They still execute only in the opaque-origin sandbox and still pass the visible launch watchdog. A failed Open preserves the prior LIVE Dream and keeps the ready artifact/evidence with `failed-to-open` state for later inspection.
 
 The host inserts CSP and the trusted bridge structurally into the actual parsed document head. Host commands and sandbox evidence travel over a closure-private `MessageChannel`; generated code cannot read probe IDs or impersonate readiness, pause, or resume through window messages. All hidden candidate work, including developer retests, shares one serialized standby-slot lease. Active failures during Open/recovery are latched and processed afterward if that failed session is still LIVE.
 
@@ -45,7 +47,7 @@ Visual pause is enforced by the injected host bridge, not by generated-model coo
 - hidden generation preflight and deterministic synthetic candidate frames continue;
 - a Dream opened or switched while globally paused becomes LIVE in the paused state.
 
-Multiple pause/resume commands are idempotent. `Element.animate()` and replayed Web Animations are covered by the trusted pause layer. Timer and `setInterval` loops that do not use RAF may continue in v1; the host does not constrain generated art solely to make those loops perfectly freezable.
+Multiple pause/resume commands are idempotent. `Element.animate()` and replayed Web Animations are covered by the trusted pause layer. Timer and `setInterval` loops that do not use RAF may continue; the host does not constrain generated art solely to make those loops perfectly freezable.
 
 ## What the injected flight recorder observes
 
@@ -61,6 +63,7 @@ The host injects the recorder before generated code. It records only engineering
 - WebGPU canvas configuration and queue submissions when available;
 - bounded DOM/SVG/CSS visibility evidence;
 - sparse, downsampled canvas fingerprints used only inside the browser.
+- CSS geometry and backing dimensions for canvas surfaces, including whether the v2 root-viewport compatibility guard was applied.
 
 It never records captured waveform or spectrum arrays, song names, audio content, OpenRouter credentials, authorization headers, cookies, or browser storage from generated code.
 
@@ -71,6 +74,8 @@ The harness does not require a canvas or animation style.
 Canvas/WebGL/WebGPU candidates can prove life through current pixel evidence or successful rendering activity. DOM/SVG/CSS candidates can prove life through visible graphical/text elements, layout coverage, style state, and animation evidence.
 
 A dominant full-screen canvas must prove itself; a tiny HUD cannot hide a failed renderer. Conversely, an intentionally black renderer is not automatically rejected when its graphics pipeline demonstrably compiled, linked, and drew. Lack of a large visual delta under synthetic music is a warning, not a failure, because subtle interpretations are valid.
+
+`visualizer-runtime-v2` also separates backing resolution from layout for the narrow class of generated canvases that are demonstrably fixed to all four viewport edges while retaining authored `auto` CSS width and height. Only those verified root surfaces receive a closure-owned host marker that pins their CSS box to the viewport; explicit, nested, partial, transformed, and offscreen canvases remain untouched. Authored DOM/style changes trigger coalesced requalification, while the existing one-second runtime heartbeat rechecks only already observed canvases to cover direct CSSOM/adopted-style changes and prune detached nodes.
 
 ## Deterministic music stimulation
 
@@ -125,4 +130,4 @@ Developer mode is intentionally hidden from normal users:
 
 ## Regression corpus
 
-CI runs real Chromium tests for Canvas 2D, DOM/SVG, broken WebGL shaders, a DOMContentLoaded-but-blank page, intentionally black valid WebGL, trusted visual pause/resume, shipped Calibration Bloom Featured art, explicit-Open failure, delayed post-launch failure, and the real Gemini 3.7 Flash `AETHERIA :: Resonant Topology` output that exposed the original blank-screen false positive.
+CI runs real Chromium tests for Canvas 2D, DOM/SVG, fixed-inset auto-sized canvas quality transitions, transient and permanent heartbeat stalls, broken WebGL shaders, a DOMContentLoaded-but-blank page, intentionally black valid WebGL, trusted visual pause/resume, shipped Calibration Bloom Featured art, explicit-Open failure, delayed post-launch failure, and the real Gemini 3.7 Flash `AETHERIA :: Resonant Topology` output that exposed the original blank-screen false positive.

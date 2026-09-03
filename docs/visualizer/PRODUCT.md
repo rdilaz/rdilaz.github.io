@@ -37,7 +37,7 @@ Generated code is untrusted software, but unusual art is not a defect.
 
 The host verifies engineering facts—boot, visible output, VIZ consumption, real viewport compatibility, runtime health, and reversible promotion—without requiring a particular renderer, brightness, amount of motion, composition, color, or visual metaphor.
 
-A generated candidate becomes ready only after `dream-reliability-v1` preflight passes. It does not replace the last-known-good visualizer until the user chooses Open and the reversible launch watchdog succeeds. One same-model repair may use concrete diagnostics. Immediate post-launch failure rolls back automatically.
+A generated candidate becomes ready only after `dream-reliability-v2` preflight passes. It does not replace the last-known-good visualizer until the user chooses Open and the reversible launch watchdog succeeds. One same-model repair may use concrete diagnostics. Fatal post-launch failures roll back immediately; inferred heartbeat stalls require one bounded confirmation probe.
 
 ## Privacy sentence
 

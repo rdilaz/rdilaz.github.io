@@ -12,11 +12,23 @@ import {
 } from './openrouter.js';
 import { PROMPT_VERSION, AUDIO_API_VERSION, loadPromptProfile } from './prompt.js';
 import { VisualizerSandbox, validateVisualizerHtml } from './sandbox.js';
-import { DreamReliabilityHarness, DreamReliabilityError, FAILURE_CODES, RELIABILITY_SCHEMA } from './reliability.js';
+import {
+  confirmSandboxLiveness,
+  activeStallConfirmationDecision,
+  DreamReliabilityHarness,
+  DreamReliabilityError,
+  FAILURE_CODES,
+  RELIABILITY_SCHEMA,
+} from './reliability.js';
 import { GenerationStore, DiagnosticStore } from './storage.js';
 import { createLiveIdentityController } from './live-identity.js';
 import { createPlaybackController, EXTERNAL_CAPTURE_PAUSE_COPY } from './playback-state.js';
-import { createDreamJobController, DREAM_JOB_PHASES, mountDreamJobView } from './dream-job.js';
+import {
+  createDreamJobController,
+  dreamJobOwnsReliabilityStage,
+  DREAM_JOB_PHASES,
+  mountDreamJobView,
+} from './dream-job.js';
 import { loadFeaturedDreams, createFeaturedExportPackage } from './featured-dreams.js';
 import { buildDreamSwitcherGroups, localDreamKey, mountDreamSwitcher } from './dream-switcher.js';
 import {
@@ -60,6 +72,8 @@ import {
   globalArrowCommand,
 } from './keyboard-transport.js';
 import { createImmersiveUiController } from './immersive-ui.js';
+import { modelSearchMatches } from './model-search.js';
+import { VISUALIZER_RUNTIME_VERSION } from './runtime-version.js';
 import {
   createCadenceGate,
   createRenderQualityController,
@@ -92,7 +106,6 @@ const localSettingsStorage = (() => {
     return null;
   }
 })();
-const VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v1';
 const els = {
   stage: $('#stage'),
   frame: $('#visualizerFrame'),
@@ -209,6 +222,8 @@ let promotion = null;
 let devMode = false;
 let runtimeRecoveryQueued = false;
 let pendingActiveFailure = null;
+let activeStallConfirmation = null;
+let activeStallRecheck = null;
 let visualPaused = false;
 let candidateSlotTail = Promise.resolve();
 const liveDiagnosticEvents = [];
@@ -568,8 +583,8 @@ window.addEventListener('visualizer:dream-lifecycle', event => {
   })[detail.phase];
   if (!phase) return;
   const job = dreamJobController.snapshot();
-  if (!job.id || !generating || (detail.modelId && detail.modelId !== job.modelId)) return;
-  if (detail.traceId && activeDreamTraceId && detail.traceId !== activeDreamTraceId) return;
+  if (!job.id || !generating || detail.modelId !== job.modelId) return;
+  if (!detail.traceId || !activeDreamTraceId || detail.traceId !== activeDreamTraceId) return;
   try {
     const patch = { detail: dreamLifecycleDetail(phase, detail) };
     if (phase === DREAM_JOB_PHASES.CHECKING) patch.cancellable = false;
@@ -630,7 +645,7 @@ function handleSandboxEvent(sandbox, message) {
 
   if (promotion?.candidate === sandbox && isFatalEvent(message)) {
     promotion.resolveFatal?.({
-      schema: 'dream-reliability-v1',
+      schema: RELIABILITY_SCHEMA,
       passed: false,
       failure: {
         code: message.event.code || FAILURE_CODES.RUNTIME_ERROR,
@@ -772,11 +787,12 @@ function scheduleUiHide() {
 }
 
 function renderModels() {
-  const query = els.modelSearch.value.trim().toLowerCase();
-  const filtered = models.filter(model => !query || `${model.name} ${model.id} ${model.provider}`.toLowerCase().includes(query));
-  const evidenceByModel = devMode
-    ? new Map(modelFitEvidenceStore.snapshot().models.map(evidence => [evidence.modelId, evidence]))
-    : new Map();
+  const query = els.modelSearch.value;
+  const filtered = models.filter(model => modelSearchMatches(model, query));
+  const evidenceSnapshot = devMode ? modelFitEvidenceStore.snapshot() : null;
+  const configurationEvidence = new Map((evidenceSnapshot?.configurations || []).map(entry => [entry.key, entry]));
+  const modelEvidence = new Map((evidenceSnapshot?.models || []).map(entry => [entry.modelId, entry]));
+  const promptProfile = devMode ? loadPromptProfile() : null;
   const fragment = document.createDocumentFragment();
   filtered.slice(0, 650).forEach(model => {
     const button = document.createElement('button');
@@ -784,7 +800,14 @@ function renderModels() {
     button.className = 'model-option';
     button.setAttribute('role', 'option');
     button.setAttribute('aria-selected', String(selectedModel?.id === model.id));
-    const fitState = evidenceByModel.get(model.id)?.status || MODEL_FIT_STATUSES.UNTESTED;
+    const aggregateState = modelEvidence.get(model.id)?.status;
+    const configuration = devMode
+      ? modelFitConfiguration(model, promptProfile, reasoningSelectionStore.snapshot(model))
+      : null;
+    const fitState = aggregateState === MODEL_FIT_STATUSES.KNOWN_INCOMPATIBLE
+      ? MODEL_FIT_STATUSES.KNOWN_INCOMPATIBLE
+      : configurationEvidence.get(configuration ? modelFitConfigurationKey(configuration) : '')?.status
+        || MODEL_FIT_STATUSES.UNTESTED;
     const modelMeta = [priceLabel(model), devMode ? fitState : ''].filter(Boolean).join(' · ');
     if (devMode) button.dataset.modelFitState = fitState;
     button.innerHTML = `<span><span class="model-option__name">${escapeHtml(model.name)}</span><br><span class="model-option__provider">${escapeHtml(model.provider)}</span></span><span class="model-option__meta">${escapeHtml(modelMeta)}</span>`;
@@ -1042,20 +1065,24 @@ async function runTransparencySelfTest() {
   };
 }
 
-function createHarness(sandbox, diagnostic, traceAttempt = null) {
+function createHarness(sandbox, diagnostic, traceAttempt = null, jobOwner = null) {
   return new DreamReliabilityHarness({
     sandbox,
     onStage: event => {
-      if (generating) {
-        const job = dreamJobController.snapshot();
-        if (job.id && job.phase !== DREAM_JOB_PHASES.READY) {
-          try {
-            dreamJobController.transition(job.id, DREAM_JOB_PHASES.CHECKING, {
-              detail: 'Checking the complete visual safely in the background.',
-            });
-          } catch {
-            // A stale reliability stage cannot reopen a completed job.
-          }
+      const job = dreamJobController.snapshot();
+      if (dreamJobOwnsReliabilityStage({
+        generating,
+        owner: jobOwner,
+        diagnosticTraceId: diagnostic.trace.id,
+        activeTraceId: activeDreamTraceId,
+        job,
+      })) {
+        try {
+          dreamJobController.transition(jobOwner.jobId, DREAM_JOB_PHASES.CHECKING, {
+            detail: 'Checking the complete visual safely in the background.',
+          });
+        } catch {
+          // A stale reliability stage cannot reopen a completed job.
         }
       }
       addDiagnosticTimeline(diagnostic, `artifact:${event.name}`, event);
@@ -1071,7 +1098,7 @@ function createHarness(sandbox, diagnostic, traceAttempt = null) {
 
 function staticFailure(problems) {
   return {
-    schema: 'dream-reliability-v1',
+    schema: RELIABILITY_SCHEMA,
     passed: false,
     failure: {
       code: FAILURE_CODES.INVALID_HTML,
@@ -1096,7 +1123,10 @@ async function withCandidateSlot(operation) {
   }
 }
 
-async function evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt = null, { quickReopen = false } = {}) {
+async function evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt = null, {
+  quickReopen = false,
+  jobOwner = null,
+} = {}) {
   const validationStartedAt = Date.now();
   if (traceAttempt) patchTraceAttempt(diagnostic, traceAttempt, { timing: { artifactValidationStartedAt: validationStartedAt } });
   const attempt = {
@@ -1135,7 +1165,7 @@ async function evaluateCandidate(result, diagnostic, attemptNumber, signal, trac
 
   const candidateSandbox = standbySlot.sandbox;
   candidateSandbox.setPaused(false);
-  const harness = createHarness(candidateSandbox, diagnostic, traceAttempt);
+  const harness = createHarness(candidateSandbox, diagnostic, traceAttempt, jobOwner);
   const health = await (quickReopen ? harness.reopen(result.html, {
     viewport: currentViewport(),
     signal,
@@ -1346,9 +1376,14 @@ function recordDiagnosticModelFit(diagnostic, configuration, result = {}) {
 }
 
 function recordOpenModelFit(generation, diagnostic, { succeeded, failureCode = '' } = {}) {
-  const configuration = generation?.modelFitConfiguration;
-  if (!configuration) return null;
+  const originalConfiguration = generation?.modelFitConfiguration;
+  if (!originalConfiguration) return null;
   try {
+    const configuration = createModelFitConfigurationIdentity({
+      ...originalConfiguration,
+      reliabilityVersion: RELIABILITY_SCHEMA,
+      runtimeVersion: VISUALIZER_RUNTIME_VERSION,
+    });
     const recorded = modelFitEvidenceStore.recordObservation({
       observationId: `${diagnostic.id}:${succeeded ? 'live-open' : 'open-failed'}`,
       configuration,
@@ -1467,6 +1502,7 @@ async function dream() {
     nextSnapshot: identityAtStart.next,
   });
   activeDreamTraceId = diagnostic.trace.id;
+  const reliabilityOwner = Object.freeze({ jobId: job.id, traceId: diagnostic.trace.id });
   diagnostic.promptVersion = PROMPT_VERSION;
   diagnostic.promptProfile = sanitizeTraceValue(promptProfile);
   diagnostic.audioApiVersion = AUDIO_API_VERSION;
@@ -1514,14 +1550,15 @@ async function dream() {
     await persistDiagnostic(diagnostic);
 
     for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1) {
-      const currentJob = dreamJobController.snapshot();
-      dreamJobController.transition(currentJob.id, DREAM_JOB_PHASES.CHECKING, {
+      dreamJobController.transition(job.id, DREAM_JOB_PHASES.CHECKING, {
         detail: 'Checking the complete visual safely in the background.',
       });
       const candidate = await withCandidateSlot(async () => {
         const candidateSandbox = standbySlot.sandbox;
         try {
-          return await evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt);
+          return await evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt, {
+            jobOwner: reliabilityOwner,
+          });
         } finally {
           if (standbySlot.sandbox === candidateSandbox) {
             candidateSandbox.setPresentation('standby');
@@ -1738,7 +1775,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     };
     const quickReopen = ['ready', 'verified'].includes(generation.healthStatus)
       && generation.preflightEvidence?.passed === true
-      && generation.preflightEvidence?.schema === 'dream-reliability-v1';
+      && generation.preflightEvidence?.schema === RELIABILITY_SCHEMA;
     const candidate = await withCandidateSlot(async () => {
       const candidateSandbox = standbySlot.sandbox;
       identityToken = stageLiveCandidate(liveIdentityForGeneration(generation, {
@@ -1779,6 +1816,12 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
           healthStatus: 'verified',
           openStatus: 'verified-live',
           healthSummary: candidate.health.summary,
+          preflightEvidence: {
+            schema: RELIABILITY_SCHEMA,
+            passed: true,
+            checkedAt: Date.now(),
+            source: quickReopen ? 'safe-reopen' : 'full-revalidation',
+          },
           lastDiagnosticId: diagnostic.id,
           lastOpenedAt: Date.now(),
         });
@@ -1871,7 +1914,11 @@ function featuredArtifact(featured) {
     favorite: false,
     healthStatus: 'verified',
     openStatus: 'ready-to-open',
-    preflightEvidence: { passed: true, schema: 'dream-reliability-v1', source: 'featured-manifest' },
+    preflightEvidence: {
+      passed: true,
+      schema: featured.reliability?.contract || 'dream-reliability-v1',
+      source: 'featured-manifest',
+    },
   };
 }
 
@@ -2505,6 +2552,46 @@ function queueRuntimeRecovery(event) {
   }, 0);
 }
 
+async function confirmActiveRuntimeLiveness() {
+  if (activeStallConfirmation) return activeStallConfirmation;
+  const sandbox = activeSlot.sandbox;
+  const sessionId = sandbox.sessionId;
+  const confirmation = confirmSandboxLiveness(sandbox, {
+    label: 'active-runtime-stall-confirmation',
+    staleAfterMs: 8000,
+    timeoutMs: 2600,
+    fatalSince: sandbox.events.length,
+  }).then(result => {
+    if (activeSlot.sandbox !== sandbox || sandbox.sessionId !== sessionId) return result;
+    if (result.status === 'fatal') {
+      queueRuntimeRecovery(result.fatal);
+    } else if (result.status === 'stalled') {
+      queueRuntimeRecovery({
+        code: FAILURE_CODES.RUNTIME_STALLED,
+        message: 'The active visualizer failed its heartbeat and bounded confirmation probe.',
+        liveness: result.evidence,
+      });
+    } else if (result.status === 'probe-failed') {
+      queueRuntimeRecovery({
+        code: FAILURE_CODES.PROBE_FAILED,
+        message: 'The active visualizer heartbeat resumed, but bounded confirmation probes failed.',
+        liveness: result.evidence,
+      });
+    } else {
+      activeStallRecheck = {
+        sessionId,
+        heartbeat: result.evidence.heartbeat.end,
+        recheckAt: performance.now() + 30000,
+      };
+    }
+    return result;
+  }).finally(() => {
+    if (activeStallConfirmation === confirmation) activeStallConfirmation = null;
+  });
+  activeStallConfirmation = confirmation;
+  return confirmation;
+}
+
 async function recoverFromRuntimeFailure(event) {
   if (recovering || reopening || deletingGeneration || promotion) return;
   recovering = true;
@@ -2571,7 +2658,7 @@ async function recoverFromRuntimeFailure(event) {
           targetGeneration
           && ['ready', 'verified'].includes(targetGeneration.healthStatus)
           && targetGeneration.preflightEvidence?.passed === true
-          && targetGeneration.preflightEvidence?.schema === 'dream-reliability-v1'
+          && targetGeneration.preflightEvidence?.schema === RELIABILITY_SCHEMA
         ),
       });
       if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
@@ -3094,13 +3181,11 @@ async function initialize() {
 
   setInterval(() => {
     if (document.hidden || visualPaused || recovering || reopening || deletingGeneration || promotion || !activeSlot.sandbox.ready) return;
-    if (activeSlot.sandbox.heartbeatAgeMs() > 8000) {
-      queueRuntimeRecovery({
-        code: FAILURE_CODES.RUNTIME_STALLED,
-        message: 'The active visualizer stopped responding to its heartbeat.',
-        heartbeatAgeMs: Math.round(activeSlot.sandbox.heartbeatAgeMs()),
-      });
-    }
+    const decision = activeStallConfirmationDecision({
+      heartbeat: activeSlot.sandbox.heartbeatSnapshot(),
+      previousConfirmation: activeStallRecheck,
+    });
+    if (decision.due) void confirmActiveRuntimeLiveness();
   }, 1800);
 }
 

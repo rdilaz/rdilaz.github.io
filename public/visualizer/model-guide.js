@@ -8,6 +8,8 @@ import { MODEL_PRODUCT_CATALOG } from './model-product-catalog.js';
 import { GENERATION_ENVELOPE_VERSION } from './generation-envelope.js';
 import { AUDIO_API_VERSION, PROMPT_VERSION, loadPromptProfile } from './prompt.js';
 import { RELIABILITY_SCHEMA } from './reliability.js';
+import { modelSearchMatches, normalizeModelSearch } from './model-search.js';
+import { VISUALIZER_RUNTIME_VERSION } from './runtime-version.js';
 
 const $ = selector => document.querySelector(selector);
 const els = {
@@ -30,7 +32,6 @@ const MODEL_ENDPOINT='https://openrouter.ai/api/v1/models';
 const TYPICAL_PROMPT_TOKENS = 1450;
 const TYPICAL_OUTPUT_TOKENS = 4500;
 const EXPLORE_LABEL = 'Explore experimental models';
-const RUNTIME_VERSION = 'visualizer-runtime-v1';
 
 let rawModels = [];
 let pickerModels = [];
@@ -172,7 +173,7 @@ function localModelEvidence() {
       && entry.identity.generationEnvelopeMajorVersion === envelopeMajor
       && entry.identity.audioApiVersion === AUDIO_API_VERSION
       && entry.identity.reliabilityVersion === RELIABILITY_SCHEMA
-      && entry.identity.runtimeVersion === RUNTIME_VERSION
+      && entry.identity.runtimeVersion === VISUALIZER_RUNTIME_VERSION
     ));
     const byModel = new Map();
     compatible.forEach(entry => {
@@ -305,14 +306,12 @@ function pickerCatalog() {
   ));
 }
 
-function pickerSearchMatches(model, query) {
-  return `${model?.name || model?.id || ''} ${model?.id || ''} ${providerFor(model)}`.toLowerCase().includes(query);
-}
-
 function exactPickerButton(model) {
   if (!els.list || !els.search) return null;
-  const query = els.search.value.trim().toLowerCase();
-  const visibleModels = pickerCatalog().filter(candidate => !query || pickerSearchMatches(candidate, query));
+  const query = els.search.value;
+  const visibleModels = pickerCatalog().filter(candidate => modelSearchMatches(candidate, query, {
+    provider: providerFor(candidate),
+  }));
   const targetIndex = visibleModels.findIndex(candidate => candidate.id === model.id);
   if (targetIndex < 0) return null;
   const button = els.list.querySelectorAll('.model-option')[targetIndex];
@@ -588,7 +587,7 @@ els.browse?.addEventListener('click', () => {
   else setBrowse(!consumerDisclosed, { focus: !consumerDisclosed });
 });
 els.search?.addEventListener('input', () => {
-  if (els.search.value.trim() && !disclosureOpen()) setBrowse(true);
+  if (normalizeModelSearch(els.search.value) && !disclosureOpen()) setBrowse(true);
 });
 
 for (const eventName of ['visualizer:model-fit-evidence-changed', 'visualizer:model-fit-evidence']) {
