@@ -5,12 +5,24 @@ export function registerCompletionAccounting(context, handlers = {}) {
   if (transactions.has(context)) return false;
   if (typeof handlers.settle !== 'function') return false;
   transactions.set(context, {
+    link: typeof handlers.link === 'function' ? handlers.link : null,
     settle: handlers.settle,
     reconcile: typeof handlers.reconcile === 'function' ? handlers.reconcile : null,
     settled: false,
     reconciliationStarted: false,
   });
   return true;
+}
+
+export function linkCompletionAccounting(context, detail = {}) {
+  const transaction = context && typeof context === 'object' ? transactions.get(context) : null;
+  if (!transaction || transaction.settled || !transaction.link) {
+    return Promise.resolve({ linked: false, reason: 'unavailable-or-settled' });
+  }
+  return Promise.resolve()
+    .then(() => transaction.link(detail))
+    .then(result => ({ linked: result === true || result?.linked === true, ...(typeof result === 'object' ? result : {}) }))
+    .catch(() => ({ linked: false, reason: 'link-failed' }));
 }
 
 export async function settleCompletionAccounting(context, detail = {}) {

@@ -226,7 +226,7 @@ test('provider failure closes its exact attempt without changing LIVE', async ({
   expect(trace.finalLiveIdentity.candidate).toBe(null);
 });
 
-test('two zero-output 429 responses retain uncertain reservations and shrink protected session headroom without reported usage', async ({ page }) => {
+test('two no-ID zero-output 429 failures remain pending and conservatively block request three', async ({ page }) => {
   const diagnosticCatalog = structuredClone(catalog);
   diagnosticCatalog.data[0].pricing = { prompt: '0', completion: '0.00004', request: '0' };
   diagnosticCatalog.data[0].supported_parameters = ['temperature', 'max_tokens'];
@@ -276,20 +276,97 @@ test('two zero-output 429 responses retain uncertain reservations and shrink pro
     sessionSpent: Number(sessionStorage.getItem('ai-visualizer.spend.session.v1')),
     daily: JSON.parse(localStorage.getItem('ai-visualizer.spend.daily.v1')),
     ledger: JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1')),
+    reconciliation: window.VIZ_COST_GUARD.reconciliation,
   }));
   expect(accounting.sessionSpent).toBeGreaterThan(0.855);
   expect(accounting.sessionSpent).toBeLessThan(0.857);
   expect(accounting.daily.spent).toBeCloseTo(accounting.sessionSpent, 8);
-  expect(0.876 - accounting.sessionSpent).toBeGreaterThan(0.019);
-  expect(0.876 - accounting.sessionSpent).toBeLessThan(0.021);
   expect(accounting.ledger).toHaveLength(2);
   expect(accounting.ledger.every(entry => entry.uncertain === true && entry.estimated === true)).toBe(true);
   expect(accounting.ledger.every(entry => entry.settlementSource === undefined)).toBe(true);
+  expect(accounting.reconciliation).toMatchObject({ pendingCount: 2, pendingReservedAmount: accounting.sessionSpent });
+  expect(accounting.reconciliation.entries.every(entry => entry.lastResult === 'missing-generation-id')).toBe(true);
 
   await page.locator('#dreamButton').click();
   await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
   expect(completionRequests).toBe(2);
   await expect(page.locator('#dreamJobDetail')).toContainText(/no request was sent/i);
+});
+
+test('malformed or structured-output no-ID 429 responses remain conservatively reserved', async ({ page }) => {
+  const diagnosticCatalog = structuredClone(catalog);
+  diagnosticCatalog.data[0].pricing = { prompt: '0', completion: '0.00004', request: '0' };
+  diagnosticCatalog.data[0].supported_parameters = ['temperature', 'max_tokens'];
+  let completionRequests = 0;
+  await seedConnectedModel(page);
+  await page.route('https://openrouter.ai/**', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/v1/models') {
+      await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(diagnosticCatalog) });
+      return;
+    }
+    if (url.pathname === '/api/v1/key') {
+      await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify({ data: { limit_remaining: 20 } }) });
+      return;
+    }
+    if (url.pathname === '/api/v1/chat/completions') {
+      completionRequests += 1;
+      await route.fulfill({
+        status: 429,
+        headers: corsHeaders,
+        body: completionRequests === 1
+          ? '{malformed'
+          : JSON.stringify({
+            error: { code: 429, message: 'Fixture rate limit after structured reasoning.' },
+            choices: [{ message: { content: '', reasoning_details: [{ type: 'reasoning.text', text: 'partial' }] } }],
+          }),
+      });
+      return;
+    }
+    await route.abort('blockedbyclient');
+  });
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await page.locator('#dreamButton').click();
+    await expect.poll(() => completionRequests).toBe(attempt);
+    await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+  }
+  const value = await page.evaluate(() => ({
+    sessionSpent: Number(sessionStorage.getItem('ai-visualizer.spend.session.v1')),
+    ledger: JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1')),
+  }));
+  expect(value.sessionSpent).toBeGreaterThan(0.85);
+  expect(value.ledger).toHaveLength(2);
+  expect(value.ledger.every(entry => entry.uncertain === true && entry.settlementSource === undefined)).toBe(true);
+});
+
+test('reconciliation storage failure blocks before completion dispatch', async ({ page }) => {
+  let completionRequests = 0;
+  await seedConnectedModel(page);
+  await page.addInitScript(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function guardedSetItem(key, value) {
+      if (key === 'ai-visualizer.spend.reconciliation.v1') throw new DOMException('Fixture storage denial.', 'QuotaExceededError');
+      return setItem.call(this, key, value);
+    };
+  });
+  await routeOpenRouter(page, async route => {
+    completionRequests += 1;
+    await route.abort('blockedbyclient');
+  });
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
+  await page.locator('#dreamButton').click();
+  await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+  await expect(page.locator('#dreamJobDetail')).toContainText(/could not persist|cannot persist/i);
+  expect(completionRequests).toBe(0);
+  const value = await page.evaluate(() => ({
+    sessionSpent: Number(sessionStorage.getItem('ai-visualizer.spend.session.v1') || 0),
+    ledger: JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1') || '[]'),
+  }));
+  expect(value.sessionSpent).toBe(0);
+  expect(value.ledger).toEqual([]);
 });
 
 test('availability failure creates no fake completion dispatch', async ({ page }) => {

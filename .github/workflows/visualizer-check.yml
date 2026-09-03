@@ -71,6 +71,9 @@ jobs:
       - name: Verify provider quality contract
         run: node --test --test-concurrency=1 tests/provider-quality.contract.mjs
 
+      - name: Verify spend reconciliation contract
+        run: node --test --test-concurrency=1 tests/spend-reconciliation.contract.mjs
+
       - name: Verify model fit evidence contract
         run: node --test --test-concurrency=1 tests/model-fit-evidence.contract.mjs
 

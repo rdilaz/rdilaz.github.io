@@ -351,6 +351,7 @@ test('generation metadata with a contradictory ID cannot settle another reservat
   await expect.poll(() => router.generationLookups).toBe(1);
   const reservation = await page.evaluate(() => JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1'))[0]);
   expect(reservation.uncertain).toBe(true);
+  expect(reservation.providerGenerationId).toBe('gen-controlled-stream');
   expect(reservation.settlementSource).toBeUndefined();
 });
 
@@ -403,6 +404,10 @@ test('cancel aborts one active stream deterministically with no retry or partial
   await expect.poll(() => router.generationLookups).toBe(1);
   await page.waitForTimeout(900);
   expect(router.generationLookups).toBe(1);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1'))[0])).toMatchObject({
+    uncertain: true,
+    providerGenerationId: 'gen-controlled-stream',
+  });
 });
 
 test('cancel during fresh catalog verification remains cancellation with zero completion dispatches', async ({ page }) => {
@@ -461,6 +466,9 @@ test('provider-declared streamed timeouts remain timeout evidence rather than ge
   expect(trace.failureCode).toBe('PROVIDER_TIMEOUT');
   expect(trace.attempts[0].response.transport).toMatchObject({ outcome: 'provider-timeout', timeoutKind: 'provider' });
   expect(trace.providerRequestCount).toBe(1);
+  const timeoutReservation = await page.evaluate(() => JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1'))[0]);
+  expect(timeoutReservation.uncertain).toBe(true);
+  expect(timeoutReservation.settlementSource).toBeUndefined();
 });
 
 test('premature SSE EOF remains incomplete in both trace and live transport status', async ({ page }) => {
@@ -479,6 +487,9 @@ test('premature SSE EOF remains incomplete in both trace and live transport stat
   expect(evidence.trace.attempts[0].response.transport.outcome).toBe('incomplete');
   expect(evidence.status.terminal).toBe('incomplete');
   expect(await generationCount(page)).toBe(0);
+  const partialReservation = await page.evaluate(() => JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1'))[0]);
+  expect(partialReservation.uncertain).toBe(true);
+  expect(partialReservation.settlementSource).toBeUndefined();
 });
 
 test('immersive chrome respects drawers and keyboard focus but pointer-focused controls still age out in fullscreen', async ({ page }) => {
