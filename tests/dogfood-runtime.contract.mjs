@@ -35,7 +35,7 @@ test('reliability stage ownership requires the active executing job and exact tr
   }
 });
 
-test('runtime and reliability v2 isolate new evidence without rewriting historical v1 identity', () => {
+test('runtime and reliability v3 isolate new evidence without rewriting historical v1/v2 identity', () => {
   const base = {
     modelId: 'z-ai/glm-5.3-flash',
     reasoningChoice: 'default',
@@ -50,16 +50,24 @@ test('runtime and reliability v2 isolate new evidence without rewriting historic
     reliabilityVersion: 'dream-reliability-v1',
     runtimeVersion: 'visualizer-runtime-v1',
   });
+  const historicalV2 = modelFitConfigurationKey({
+    ...base,
+    reliabilityVersion: 'dream-reliability-v2',
+    runtimeVersion: 'visualizer-runtime-v2',
+  });
   const current = modelFitConfigurationKey({
     ...base,
     reliabilityVersion: RELIABILITY_SCHEMA,
     runtimeVersion: VISUALIZER_RUNTIME_VERSION,
   });
-  assert.equal(RELIABILITY_SCHEMA, 'dream-reliability-v2');
-  assert.equal(VISUALIZER_RUNTIME_VERSION, 'visualizer-runtime-v2');
+  assert.equal(RELIABILITY_SCHEMA, 'dream-reliability-v3');
+  assert.equal(VISUALIZER_RUNTIME_VERSION, 'visualizer-runtime-v3');
   assert.notEqual(current, historical);
+  assert.notEqual(current, historicalV2);
   assert.match(historical, /dream-reliability-v1/);
   assert.match(historical, /visualizer-runtime-v1/);
+  assert.match(historicalV2, /dream-reliability-v2/);
+  assert.match(historicalV2, /visualizer-runtime-v2/);
 });
 
 test('model search ignores human punctuation and spacing while retaining exact identifiers', () => {

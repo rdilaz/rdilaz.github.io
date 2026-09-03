@@ -617,11 +617,22 @@ expect(
   'Long-lived visualizers must confirm inferred heartbeat stalls while retaining deterministic automatic recovery.',
 );
 expect(
-  runtimeVersion.includes("VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v2'")
-    && reliability.includes("RELIABILITY_SCHEMA = 'dream-reliability-v2'")
+  runtimeVersion.includes("VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v3'")
+    && reliability.includes("RELIABILITY_SCHEMA = 'dream-reliability-v3'")
     && costGuard.includes("from './runtime-version.js'")
     && modelGuide.includes("from './runtime-version.js'"),
-  'Runtime and reliability v2 must isolate materially changed model-fit evidence through one shared runtime identity.',
+  'Runtime and reliability v3 must isolate materially changed model-fit evidence through one shared runtime identity.',
+);
+expect(
+  sandbox.includes("post('frame-delivered'")
+    && sandbox.includes('coalescedFrames')
+    && sandbox.includes('pendingFrames: delivery?.pending ? 1 : 0')
+    && sandbox.includes('latestFrame:')
+    && sandbox.includes('waitForFrameDelivery')
+    && sandbox.includes("message.type === 'host-frame-stats'")
+    && reliability.includes('sandbox.renderQuality?.maxFps')
+    && reliability.includes("name: 'viewport-stimulation'"),
+  'Real-time VIZ delivery must keep newest-frame work bounded and qualification must honor render-quality cadence.',
 );
 expect(
   sandbox.includes('data-visualizer-host-viewport-canvas')
@@ -698,6 +709,7 @@ expect(diagnostics.includes('sanitizeTraceValue') && dreamTrace.includes('author
 expect(app.includes("params.get('dev') === '1'") && app.includes("event.key.toLowerCase() === 'd'"), 'Developer mode must be available through ?dev=1 and Ctrl+Shift+D.');
 expect(app.includes("Object.defineProperty(window, 'VIZ_DEV'") && index.includes('Dream diagnostics.'), 'VIZ_DEV API and diagnostic drawer must be available without public UI clutter.');
 expect(app.includes('copyCurrentHtml') && app.includes('retestCurrentVisualizer') && app.includes('exportAll'), 'Dev mode must support HTML copy, deterministic retest and JSON export.');
+expect(app.includes('frameDelivery: activeSlot.sandbox.frameDeliverySnapshot()'), 'Runtime debug state must expose the active sandbox frame-delivery authority.');
 expect(!app.includes('waveform: sample.waveform') || dreamTrace.includes("REDACTED = '[redacted]'"), 'Diagnostic export must never preserve captured waveform/spectrum values.');
 
 // Dream Transparency v1: independent identity, exact request boundary and inert local traces.

@@ -296,15 +296,15 @@ test('slow background job collapses, survives pause and switching, persists Read
     return { fit, generation };
   });
   expect(reopenedEvidence.fit.identity).toMatchObject({
-    reliabilityVersion: 'dream-reliability-v2',
-    runtimeVersion: 'visualizer-runtime-v2',
+    reliabilityVersion: 'dream-reliability-v3',
+    runtimeVersion: 'visualizer-runtime-v3',
   });
   expect(reopenedEvidence.generation.modelFitConfiguration).toMatchObject({
     reliabilityVersion: 'dream-reliability-v1',
     runtimeVersion: 'visualizer-runtime-v1',
   });
   expect(reopenedEvidence.generation.preflightEvidence).toMatchObject({
-    schema: 'dream-reliability-v2',
+    schema: 'dream-reliability-v3',
     passed: true,
     source: 'full-revalidation',
   });
