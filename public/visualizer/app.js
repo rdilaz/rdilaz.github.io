@@ -2422,6 +2422,7 @@ function runtimeSummary() {
     job: dreamJobController.snapshot(),
     activeSessionId: activeSlot.sandbox.sessionId,
     sandboxRenderQuality: activeSlot.sandbox.appliedRenderQuality,
+    frameDelivery: activeSlot.sandbox.frameDeliverySnapshot(),
     activeEvents: activeSlot.sandbox.events.slice(-10),
   };
 }

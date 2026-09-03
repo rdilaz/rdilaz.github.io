@@ -370,6 +370,53 @@
       return result;
     };
 
+    window.runFrameTimingFixture = async html => {
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+      const viewport = { width: 2048, height: 1100, dpr: 1 };
+      const deliveries = [];
+      const originalOnEvent = sandbox.onEvent;
+      sandbox.onEvent = message => {
+        if (message.type === 'frame-delivered' && message.delivered) deliveries.push(message);
+      };
+      const boot = await sandbox.load(html, { viewport });
+      const timedFrame = (time, deltaTime) => ({
+        ...createSyntheticFrame(0, time * 1000, viewport, 60),
+        time,
+        deltaTime,
+      });
+
+      sandbox.sendFrame(timedFrame(1, 0.02));
+      await sandbox.waitForFrameDelivery({ timeoutMs: 2800, label: 'timing initial frame' });
+      sandbox.sendFrame(timedFrame(1.1, 0.1));
+      await sandbox.waitForFrameDelivery({ timeoutMs: 2800, label: 'timing normal frame' });
+      const noCoalescing = deliveries.slice();
+
+      for (let step = 1; step <= 11; step += 1) sandbox.sendFrame(timedFrame(Number((1.1 + step / 10).toFixed(1)), 0.1));
+      const firstQueued = sandbox.frameDeliverySnapshot();
+      await sandbox.waitForFrameDelivery({ timeoutMs: 2800, label: 'timing first coalescing cycle' });
+      const firstCycle = deliveries.slice(noCoalescing.length);
+
+      for (let step = 1; step <= 11; step += 1) sandbox.sendFrame(timedFrame(Number((2.2 + step / 10).toFixed(1)), 0.1));
+      const secondQueued = sandbox.frameDeliverySnapshot();
+      await sandbox.waitForFrameDelivery({ timeoutMs: 2800, label: 'timing second coalescing cycle' });
+      const secondCycle = deliveries.slice(noCoalescing.length + firstCycle.length);
+
+      const result = {
+        boot,
+        noCoalescing,
+        firstQueued,
+        firstCycle,
+        secondQueued,
+        secondCycle,
+        deliveries,
+        report: await sandbox.probe('timing-proof', { timeoutMs: 2200 }),
+      };
+      sandbox.onEvent = originalOnEvent;
+      sandbox.clear();
+      return result;
+    };
+
     window.runFrozenQualificationFixture = async html => {
       sandbox.clear();
       sandbox.setRenderQuality({ mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 });

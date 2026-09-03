@@ -138,6 +138,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     pointer: { x: 0.5, y: 0.5, active: false, down: false },
     viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
   };
+  let lastDeliveredFrameTime = null;
   let viewport = currentFrame.viewport;
   let nextGeneratedFrameAt = 0;
   let allowedGeneratedFrameAt = -1;
@@ -322,6 +323,21 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     state.droppedFrames = Math.max(state.droppedFrames, Number(delivery.droppedFrames) || 0);
   }
 
+  function frameForDelivery(frame) {
+    const source = frame && typeof frame === 'object' ? frame : {};
+    const frameTime = Number(source.time);
+    const suppliedDeltaTime = Number(source.deltaTime);
+    let deliveredDeltaTime = Number.isFinite(suppliedDeltaTime) && suppliedDeltaTime >= 0
+      ? suppliedDeltaTime
+      : 0;
+    // Coalesced callbacks advance by represented music-state time, not MessagePort scheduling delay.
+    if (lastDeliveredFrameTime !== null && Number.isFinite(frameTime) && frameTime >= lastDeliveredFrameTime) {
+      deliveredDeltaTime = frameTime - lastDeliveredFrameTime;
+    }
+    lastDeliveredFrameTime = Number.isFinite(frameTime) ? frameTime : null;
+    return { ...source, deltaTime: deliveredDeltaTime };
+  }
+
   function scheduleAnimationFrame(id, record) {
     if (state.paused || record.cancelled || record.nativeId) return;
     record.nativeId = originalRAF(timestamp => {
@@ -449,6 +465,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   function pauseGeneratedPlayback() {
     if (state.paused) return;
     state.paused = true;
+    lastDeliveredFrameTime = null;
     state.pausedAt = performance.now();
     for (const record of pendingAnimationFrames.values()) {
       if (!record.nativeId) continue;
@@ -470,6 +487,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     state.totalPausedMs += Math.max(0, performance.now() - state.pausedAt);
     state.pausedAt = 0;
     state.paused = false;
+    lastDeliveredFrameTime = null;
     nextGeneratedFrameAt = 0;
     allowedGeneratedFrameAt = -1;
     for (const animation of hostPausedAnimations) {
@@ -1194,7 +1212,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       state.deliveredFrames += 1;
       state.lastFrameSequence = sequence;
       state.lastHostFrameAt = performance.now();
-      currentFrame = message.frame;
+      currentFrame = frameForDelivery(message.frame);
       viewport = message.frame?.viewport || viewport;
       listeners.forEach(listener => {
         try {
@@ -1206,7 +1224,12 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
           recordEvent('fatal', 'VIZ_CALLBACK_ERROR', text);
         }
       });
-      post('frame-delivered', { sequence, delivered: true });
+      post('frame-delivered', {
+        sequence,
+        delivered: true,
+        time: Number(currentFrame.time) || 0,
+        deltaTime: Number(currentFrame.deltaTime) || 0,
+      });
       return;
     }
 

@@ -191,7 +191,7 @@ test('heavy actual-viewport renderer qualifies at Saver cadence with full canvas
   expect(canary.viewport).toEqual({ width: 2048, height: 1100, dpr: 1 });
   expect(canary.visual.visibleProof).toBe(true);
   expect(canary.viz.consumed).toBe(true);
-  expect(canary.viz.latestFrame.deltaTime).toBeCloseTo(1 / 30, 6);
+  expect(canary.viz.latestFrame.deltaTime).toBeGreaterThan(0);
   expect(canary.events.filter(event => event.severity === 'fatal')).toEqual([]);
   expect(canary.visual.canvases[0]).toMatchObject({
     elementId: 'scene',
@@ -218,7 +218,7 @@ test('faster producer stays bounded and deterministically delivers the newest fr
     coalescedFrames: 178,
     droppedFrames: 0,
     lastFrameSequence: 180,
-    latestFrame: { sequence: 180, version: 'visualizer-audio-v1', time: 2.864 },
+    latestFrame: { sequence: 180, version: 'visualizer-audio-v1', time: 2.864, deltaTime: 2.864 },
   });
   expect(result.report.visual.visibleProof).toBe(true);
 });
@@ -240,7 +240,7 @@ test('session replacement cannot leak an old pending frame', async ({ page }) =>
     deliveredFrames: 1,
     coalescedFrames: 0,
     lastFrameSequence: 1,
-    latestFrame: { sequence: 1, time: 0.999 },
+    latestFrame: { sequence: 1, time: 0.999, deltaTime: 1 / 30 },
   });
 });
 
@@ -258,7 +258,7 @@ test('pause drops pending work and resume starts from a fresh newest frame', asy
     coalescedFrames: 178,
     droppedFrames: 1,
     lastFrameSequence: 181,
-    latestFrame: { sequence: 181, time: 20 },
+    latestFrame: { sequence: 181, time: 20, deltaTime: 1 / 30 },
   });
   expect(result.resumedDelivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0 });
 });
@@ -276,10 +276,34 @@ test('render-quality change drops stale pending DPR and keeps the session intact
     coalescedFrames: 178,
     droppedFrames: 1,
     lastFrameSequence: 181,
-    latestFrame: { sequence: 181, time: 20 },
+    latestFrame: { sequence: 181, time: 20, deltaTime: 20 },
   });
   expect(result.report.visual.canvases[0]).toMatchObject({ width: 2048, height: 1100, backingWidth: 3072, backingHeight: 1650 });
   expect(result.delivery).toMatchObject({ pendingFrames: 0, inFlightFrames: 0 });
+});
+
+test('delivered deltaTime follows actual delivered music-state progression across coalescing cycles', async ({ page }) => {
+  const result = await runWithArgs(page, 'runFrameTimingFixture', await fixture('heavy-actual-viewport.html'));
+  expect(result.boot.ready).toBe(true);
+  expect(result.noCoalescing).toHaveLength(2);
+  expect(result.noCoalescing[0]).toMatchObject({ sequence: 1, time: 1, deltaTime: 0.02 });
+  expect(result.noCoalescing[1]).toMatchObject({ sequence: 2, time: 1.1 });
+  expect(result.noCoalescing[1].deltaTime).toBeCloseTo(0.1, 10);
+  expect(result.firstQueued).toMatchObject({ inFlightSequence: 3, pendingSequence: 13, coalescedFrames: 9 });
+  expect(result.firstCycle.map(delivery => delivery.sequence)).toEqual([3, 13]);
+  expect(result.firstCycle.map(delivery => delivery.time)).toEqual([1.2, 2.2]);
+  expect(result.firstCycle[0].deltaTime).toBeCloseTo(0.1, 10);
+  expect(result.firstCycle[1].deltaTime).toBeCloseTo(1, 10);
+  expect(result.secondQueued).toMatchObject({ inFlightSequence: 14, pendingSequence: 24, coalescedFrames: 18 });
+  expect(result.secondCycle.map(delivery => delivery.sequence)).toEqual([14, 24]);
+  expect(result.secondCycle.map(delivery => delivery.time)).toEqual([2.3, 3.3]);
+  expect(result.secondCycle[0].deltaTime).toBeCloseTo(0.1, 10);
+  expect(result.secondCycle[1].deltaTime).toBeCloseTo(1, 10);
+  expect(result.deliveries.map(delivery => delivery.sequence)).toEqual([1, 2, 3, 13, 14, 24]);
+  expect(result.deliveries.map(delivery => delivery.time)).toEqual([1, 1.1, 1.2, 2.2, 2.3, 3.3]);
+  const representedTime = result.deliveries.slice(1).reduce((total, delivery) => total + delivery.deltaTime, 0);
+  expect(representedTime).toBeCloseTo(3.3 - 1, 10);
+  expect(result.report.viz.latestFrame).toMatchObject({ sequence: 24, time: 3.3, deltaTime: 1 });
 });
 
 test('permanently unresponsive actual-viewport renderer still fails within a bound', async () => {

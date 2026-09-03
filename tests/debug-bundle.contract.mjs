@@ -73,3 +73,28 @@ test('copy text is visibly delimited and paste-ready', () => {
   assert.match(text, /visualizer-debug-bundle-v1/);
   assert.match(text, /=== END AI VISUALIZER DEBUG BUNDLE ===$/);
 });
+
+test('runtime backpressure evidence remains compact and non-sensitive', () => {
+  const frameDelivery = {
+    receivedFrames: 42,
+    deliveredFrames: 30,
+    coalescedFrames: 11,
+    droppedFrames: 1,
+    inFlightFrames: 1,
+    pendingFrames: 1,
+    inFlightSequence: 41,
+    pendingSequence: 42,
+    lastSettledSequence: 40,
+    blockedByFatal: false,
+  };
+  const bundle = createDebugBundle({
+    runtime: {
+      renderQuality: { vizFrameDeliveries: 42, deliveryGate: { maxFps: 30 } },
+      frameDelivery,
+    },
+    diagnosticExport: exportWith([]),
+    capturedAt: 2000,
+  });
+  assert.deepEqual(bundle.runtime.frameDelivery, frameDelivery);
+  assert.deepEqual(bundle.runtime.renderQuality, { vizFrameDeliveries: 42, deliveryGate: { maxFps: 30 } });
+});
