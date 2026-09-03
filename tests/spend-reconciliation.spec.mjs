@@ -12,6 +12,7 @@ async function seedReservation(page, {
   includeSessionReservation = true,
   dailySpent = reservedCost,
   dayOffset = 0,
+  includeKey = true,
 } = {}) {
   await page.addInitScript(options => {
     const date = new Date();
@@ -19,7 +20,7 @@ async function seedReservation(page, {
     const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const today = new Date();
     const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    sessionStorage.setItem('ai-visualizer.openrouter.key', options.key);
+    if (options.includeKey) sessionStorage.setItem('ai-visualizer.openrouter.key', options.key);
     sessionStorage.setItem('ai-visualizer.spend.session-id.v1', options.currentSessionId);
     sessionStorage.setItem('ai-visualizer.spend.session.v1', String(options.includeSessionReservation ? options.reservedCost : 0));
     sessionStorage.setItem('ai-visualizer.spend.ledger.v1', JSON.stringify(options.includeSessionReservation ? [{
@@ -63,6 +64,7 @@ async function seedReservation(page, {
     includeSessionReservation,
     dailySpent,
     dayOffset,
+    includeKey,
     key: SENTINEL_KEY,
   });
 }
@@ -240,4 +242,81 @@ test('failed metadata remains visibly pending with bounded developer diagnostics
   expect(value.diagnostics.entries[0]).toMatchObject({ providerGenerationId: 'gen-fixture', lastResult: 'metadata-http-503' });
   expect(value.diagnostics.retryDelaysMs).toEqual([0, 1500, 5000, 15000, 30000, 60000]);
   expect(router.completionRequests).toEqual([]);
+});
+
+test('missing metadata credential remains pending and records truthful diagnostics', async ({ page }) => {
+  await seedReservation(page, { includeKey: false });
+  const router = await routeReadOnlyMetadata(page, async route => {
+    await route.abort('blockedbyclient');
+  });
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect.poll(() => accounting(page).then(value => value.diagnostics.entries[0]?.lastResult)).toBe('missing-key');
+  const value = await accounting(page);
+  expect(value.sessionSpent).toBeCloseTo(0.428, 10);
+  expect(value.daily.spent).toBeCloseTo(0.428, 10);
+  expect(value.ledger[0].uncertain).toBe(true);
+  expect(router.generationLookups).toBe(0);
+  expect(router.completionRequests).toEqual([]);
+});
+
+test('copied tabs each correct their local session ledger while daily settlement remains once', async ({ page, context }) => {
+  let releaseMetadata;
+  const metadataGate = new Promise(resolve => { releaseMetadata = resolve; });
+  let generationLookups = 0;
+  const completionRequests = [];
+  await context.route('https://openrouter.ai/**', async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === '/api/v1/generation') {
+      generationLookups += 1;
+      await metadataGate;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(metadata(url.searchParams.get('id'), 0)) });
+      return;
+    }
+    if (url.pathname === '/api/v1/key') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { limit_remaining: 20 } }) });
+      return;
+    }
+    if (url.pathname === '/api/v1/models') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) });
+      return;
+    }
+    if (url.pathname === '/api/v1/chat/completions') completionRequests.push(request.method());
+    await route.abort('blockedbyclient');
+  });
+  await page.goto('/visualizer/index.html?dev=1');
+  await page.evaluate(({ key, reconciliationKey }) => {
+    const now = new Date();
+    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    sessionStorage.setItem('ai-visualizer.openrouter.key', key);
+    sessionStorage.setItem('ai-visualizer.spend.session-id.v1', 'copied-session');
+    sessionStorage.setItem('ai-visualizer.spend.session.v1', '0.428');
+    sessionStorage.setItem('ai-visualizer.spend.ledger.v1', JSON.stringify([{ id: 'copied-reservation', cost: 0.428, uncertain: true, estimated: true, providerGenerationId: 'gen-copied' }]));
+    localStorage.setItem('ai-visualizer.spend.daily.v1', JSON.stringify({ date, spent: 0.428 }));
+    localStorage.setItem(reconciliationKey, JSON.stringify({
+      schema: 'visualizer-spend-reconciliation-v1',
+      entries: [{
+        reservationId: 'copied-reservation', state: 'pending', reservedAt: Date.now(), reservationDate: date,
+        reservedCost: 0.428, sessionId: 'copied-session', sessionAdjustmentApplied: false,
+        dailyAdjustmentApplied: false, providerGenerationId: 'gen-copied', attemptCount: 0,
+        lastResult: 'generation-id-linked', settlementSource: '', settledCost: null, settledAt: null,
+      }],
+    }));
+  }, { key: SENTINEL_KEY, reconciliationKey: RECONCILIATION_KEY });
+  const popupPromise = context.waitForEvent('page');
+  await page.evaluate(() => window.open('/visualizer/index.html?dev=1'));
+  const copiedPage = await popupPromise;
+  await copiedPage.waitForLoadState('domcontentloaded');
+  await page.reload();
+  await expect.poll(() => generationLookups).toBeGreaterThanOrEqual(2);
+  releaseMetadata();
+  await expect.poll(() => accounting(page).then(value => value.ledger[0]?.uncertain)).toBe(false);
+  await expect.poll(() => accounting(copiedPage).then(value => value.ledger[0]?.uncertain)).toBe(false);
+  const original = await accounting(page);
+  const copied = await accounting(copiedPage);
+  expect(original.sessionSpent).toBe(0);
+  expect(copied.sessionSpent).toBe(0);
+  expect(original.daily.spent).toBe(0);
+  expect(copied.daily.spent).toBe(0);
+  expect(completionRequests).toEqual([]);
 });

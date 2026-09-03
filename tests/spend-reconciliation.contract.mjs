@@ -70,6 +70,7 @@ test('metadata 429, 5xx, and network failures exhaust only the finite schedule a
 test('only the documented terminal no-generation 429 evidence qualifies for policy zero', () => {
   const qualifying = {
     status: 429,
+    responseParsed: true,
     providerGenerationId: '',
     usagePresent: false,
     contentBytes: 0,
@@ -84,6 +85,7 @@ test('only the documented terminal no-generation 429 evidence qualifies for poli
 
   const disqualifying = {
     status: 503,
+    responseParsed: false,
     providerGenerationId: 'gen-known',
     usagePresent: true,
     contentBytes: 1,

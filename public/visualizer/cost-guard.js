@@ -86,6 +86,7 @@ const writeJson = (storage, key, value) => storage.setItem(key, JSON.stringify(v
 function memoryStorage() {
   const values = new Map();
   return {
+    persistent: false,
     getItem: key => values.get(String(key)) ?? null,
     setItem: (key, value) => { values.set(String(key), String(value)); },
     removeItem: key => { values.delete(String(key)); },
@@ -97,6 +98,7 @@ function browserStorage(name) {
     const storage = globalThis[name];
     if (!storage?.getItem || !storage?.setItem) return memoryStorage();
     return {
+      persistent: true,
       getItem(key) { try { return storage.getItem(key); } catch { return null; } },
       setItem(key, value) { try { storage.setItem(key, value); } catch { /* Fall back to current in-memory state. */ } },
       removeItem(key) { try { storage.removeItem(key); } catch { /* Missing persistence is non-fatal. */ } },
@@ -437,11 +439,31 @@ function notice(message, duration = 5200) {
   notice.timer = setTimeout(() => { els.toast.hidden = true; }, duration);
 }
 
-function saveSpend() {
-  sessionStore.setItem(SESSION_SPEND_STORAGE, String(sessionSpent));
-  writeJson(sessionStore, SESSION_LEDGER_STORAGE, ledger.slice(0, MAX_LEDGER));
-  writeJson(localStore, DAILY_SPEND_STORAGE, daily);
-  writeJson(localStore, RECONCILIATION_STORAGE, reconciliationJournal);
+function persistedValue(storage, key, value) {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  storage.setItem(key, serialized);
+  return storage.getItem(key) === serialized;
+}
+
+function saveSpend({ dailyChanged = false } = {}) {
+  if (!dailyChanged) refreshDailySpend();
+  const journalSaved = persistedValue(localStore, RECONCILIATION_STORAGE, reconciliationJournal);
+  const dailySaved = persistedValue(localStore, DAILY_SPEND_STORAGE, daily);
+  const sessionSaved = persistedValue(sessionStore, SESSION_SPEND_STORAGE, String(sessionSpent));
+  const ledgerSaved = persistedValue(sessionStore, SESSION_LEDGER_STORAGE, ledger.slice(0, MAX_LEDGER));
+  return journalSaved && dailySaved && sessionSaved && ledgerSaved;
+}
+
+function spendStateSnapshot() {
+  return structuredClone({ sessionSpent, ledger, daily, reconciliationJournal });
+}
+
+function restoreSpendState(snapshot) {
+  sessionSpent = snapshot.sessionSpent;
+  ledger = snapshot.ledger;
+  daily = snapshot.daily;
+  reconciliationJournal = snapshot.reconciliationJournal;
+  saveSpend({ dailyChanged: true });
 }
 
 function refreshReconciliationJournal() {
@@ -470,6 +492,9 @@ function adjustDailySpend(amount) {
 function reserveCost({ modelId, ceiling, repair, traceId = '', attemptId = '' }) {
   const amount = Number(ceiling);
   if (!Number.isFinite(amount) || amount <= 0) return '';
+  if (!localStore.persistent || !sessionStore.persistent) {
+    throw spendGuardError('SPEND_RECONCILIATION_UNAVAILABLE', 'Spend protection cannot persist an authoritative reconciliation record. No request was sent.');
+  }
   refreshReconciliationJournal();
   if (reconciliationJournal.entries.filter(entry => entry?.state === 'pending').length >= MAX_PENDING_RECONCILIATIONS) {
     throw spendGuardError('SPEND_RECONCILIATION_FULL', 'Spend protection has too many unresolved reservations to safely send another request. No request was sent.');
@@ -478,6 +503,8 @@ function reserveCost({ modelId, ceiling, repair, traceId = '', attemptId = '' })
   const at = Date.now();
   const reservationDate = todayKey(new Date(at));
   sessionSpent = clampNumber(sessionStore.getItem(SESSION_SPEND_STORAGE), sessionSpent, 0, 100000);
+  refreshDailySpend();
+  const before = spendStateSnapshot();
   adjustSessionSpend(amount);
   adjustDailySpend(amount);
   ledger.unshift({
@@ -514,7 +541,10 @@ function reserveCost({ modelId, ceiling, repair, traceId = '', attemptId = '' })
     settledCost: null,
     settledAt: null,
   }, ...reconciliationJournal.entries.filter(entry => entry?.reservationId !== id)]);
-  saveSpend();
+  if (!saveSpend({ dailyChanged: true })) {
+    restoreSpendState(before);
+    throw spendGuardError('SPEND_RECONCILIATION_UNAVAILABLE', 'Spend protection could not persist the reservation safely. No request was sent.');
+  }
   render();
   scheduleKeyRefresh();
   return id;
@@ -541,12 +571,14 @@ function applyJournalSettlement(entry, { cost, usage, estimated = false, source 
   if (!entry || entry.state !== 'pending' || !Number.isFinite(amount) || amount < 0 || !Number.isFinite(reservedCost) || reservedCost < 0) return false;
   const adjustment = amount - reservedCost;
   sessionSpent = clampNumber(sessionStore.getItem(SESSION_SPEND_STORAGE), sessionSpent, 0, 100000);
-  if (entry.sessionId === spendSessionId && entry.sessionAdjustmentApplied !== true) {
+  refreshDailySpend();
+  const before = spendStateSnapshot();
+  const ledgerEntry = ledger.find(candidate => candidate?.id === entry.reservationId);
+  if (entry.sessionId === spendSessionId && (ledgerEntry?.uncertain === true || (!ledgerEntry && entry.sessionAdjustmentApplied !== true))) {
     adjustSessionSpend(adjustment);
     entry.sessionAdjustmentApplied = true;
     entry.sessionAdjustmentResult = 'applied';
   }
-  refreshDailySpend();
   if (entry.dailyAdjustmentApplied !== true) {
     if (entry.reservationDate === todayKey() && daily.date === todayKey()) {
       adjustDailySpend(adjustment);
@@ -571,7 +603,11 @@ function applyJournalSettlement(entry, { cost, usage, estimated = false, source 
     providerGenerationId: entry.providerGenerationId,
   });
   reconciliationJournal = compactReconciliationJournal(reconciliationJournal.entries);
-  saveSpend();
+  if (!saveSpend({ dailyChanged: true })) {
+    restoreSpendState(before);
+    render();
+    return false;
+  }
   render();
   scheduleKeyRefresh();
   return true;
@@ -588,11 +624,18 @@ function reconcileReservedCost(reservationId, detail) {
   // settle from exact response usage without fabricating persistent identity.
   const legacyEntry = ledger.find(candidate => candidate.id === reservationId);
   if (!legacyEntry || !legacyEntry.uncertain) return false;
+  sessionSpent = clampNumber(sessionStore.getItem(SESSION_SPEND_STORAGE), sessionSpent, 0, 100000);
+  refreshDailySpend();
+  const before = spendStateSnapshot();
   const adjustment = amount - Number(legacyEntry.cost || 0);
   adjustSessionSpend(adjustment);
   adjustDailySpend(adjustment);
   updateLedgerSettlement(reservationId, { ...detail, cost: amount });
-  saveSpend();
+  if (!saveSpend({ dailyChanged: true })) {
+    restoreSpendState(before);
+    render();
+    return false;
+  }
   render();
   scheduleKeyRefresh();
   return true;
@@ -614,7 +657,7 @@ function attachProviderGenerationId(reservationId, providerGenerationId) {
     if (ledgerEntry && !ledgerEntry.providerGenerationId) {
       ledgerEntry.providerGenerationId = id;
       ledgerEntry.reconciliationState = 'pending';
-      saveSpend();
+      if (!saveSpend()) return false;
       render();
       return true;
     }
@@ -635,7 +678,7 @@ function attachProviderGenerationId(reservationId, providerGenerationId) {
     ledgerEntry.reconciliationState = 'pending';
     ledgerEntry.lastReconciliationResult = journalEntry.lastResult;
   }
-  saveSpend();
+  if (!saveSpend()) return false;
   render();
   return true;
 }
@@ -657,7 +700,7 @@ function recordReconciliationResult(reservationId, result, { attempted = false }
     ledgerEntry.lastReconciliationAt = entry.lastAttemptAt;
     ledgerEntry.lastReconciliationResult = entry.lastResult;
   }
-  saveSpend();
+  if (!saveSpend()) return false;
   render();
   return true;
 }
@@ -699,6 +742,7 @@ export function authoritativeGenerationMetadata(payload, expectedGenerationId) {
 
 export function qualifiesForDocumentedTerminal429(evidence = {}) {
   return Number(evidence.status) === 429
+    && evidence.responseParsed === true
     && !String(evidence.providerGenerationId || '').trim()
     && evidence.usagePresent === false
     && Number(evidence.contentBytes) === 0
@@ -731,11 +775,14 @@ export async function runBoundedGenerationReconciliation({
 async function generationMetadataAttempt(reservationId, providerGenerationId) {
   const id = String(providerGenerationId || '').trim();
   if (!reservationId || !id || !nativeFetch) return { settled: false, reason: 'missing-generation-id' };
-  const key = sessionStore.getItem(OPENROUTER_KEY_STORAGE) || '';
-  if (!key) return { settled: false, reason: 'missing-key', terminal: true };
   const pending = refreshReconciliationJournal().entries.find(entry => entry?.reservationId === reservationId);
   if (!pending || pending.state !== 'pending') return { settled: false, reason: 'already-settled', terminal: true };
   if (String(pending.providerGenerationId || '') !== id) return { settled: false, reason: 'generation-id-changed', terminal: true };
+  const key = sessionStore.getItem(OPENROUTER_KEY_STORAGE) || '';
+  if (!key) {
+    await withSpendLock(() => recordReconciliationResult(reservationId, 'missing-key'));
+    return { settled: false, reason: 'missing-key', terminal: true };
+  }
   await withSpendLock(() => recordReconciliationResult(reservationId, 'metadata-requesting', { attempted: true }));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4000);
@@ -814,6 +861,7 @@ function applyOutstandingSettledCorrections() {
   refreshReconciliationJournal();
   sessionSpent = clampNumber(sessionStore.getItem(SESSION_SPEND_STORAGE), sessionSpent, 0, 100000);
   refreshDailySpend();
+  const before = spendStateSnapshot();
   let changed = false;
   for (const entry of reconciliationJournal.entries) {
     if (entry?.state !== 'settled') continue;
@@ -821,7 +869,8 @@ function applyOutstandingSettledCorrections() {
     const reservedCost = Number(entry.reservedCost);
     if (!Number.isFinite(settledCost) || settledCost < 0 || !Number.isFinite(reservedCost) || reservedCost < 0) continue;
     const adjustment = settledCost - reservedCost;
-    if (entry.sessionId === spendSessionId && entry.sessionAdjustmentApplied !== true) {
+    const ledgerEntry = ledger.find(candidate => candidate?.id === entry.reservationId);
+    if (entry.sessionId === spendSessionId && (ledgerEntry?.uncertain === true || (!ledgerEntry && entry.sessionAdjustmentApplied !== true))) {
       adjustSessionSpend(adjustment);
       entry.sessionAdjustmentApplied = true;
       entry.sessionAdjustmentResult = 'applied-after-reload';
@@ -837,15 +886,19 @@ function applyOutstandingSettledCorrections() {
       entry.dailyAdjustmentApplied = true;
       changed = true;
     }
-    updateLedgerSettlement(entry.reservationId, {
+    const ledgerChanged = updateLedgerSettlement(entry.reservationId, {
       cost: settledCost,
       usage: null,
       estimated: entry.estimated === true,
       source: entry.settlementSource || 'generation-metadata',
       providerGenerationId: entry.providerGenerationId || '',
     });
+    changed ||= ledgerChanged;
   }
-  if (changed) saveSpend();
+  if (changed && !saveSpend({ dailyChanged: true })) {
+    restoreSpendState(before);
+    return false;
+  }
   return changed;
 }
 

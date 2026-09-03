@@ -676,17 +676,41 @@ function settleUsageWithoutBlocking(traceContext, usage, providerGenerationId, e
     .catch(() => scheduleMetadataReconciliation(traceContext, providerGenerationId, evidence));
 }
 
-function terminalHttpErrorEvidence(status, payload) {
+function outputEvidenceBytes(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + outputEvidenceBytes(item), 0);
+  if (typeof value === 'object' && Object.keys(value).length === 0) return 0;
+  return new TextEncoder().encode(typeof value === 'string' ? value : JSON.stringify(value)).byteLength;
+}
+
+function terminalHttpErrorEvidence(status, payload, { parseError = null } = {}) {
   const choices = Array.isArray(payload?.choices) ? payload.choices : [];
-  const content = choices.map(choice => choice?.message?.content ?? choice?.delta?.content ?? choice?.text ?? '').join('');
-  const reasoning = choices.map(choice => choice?.message?.reasoning ?? choice?.message?.reasoning_content ?? choice?.delta?.reasoning ?? '').join('');
-  const bytes = value => new TextEncoder().encode(String(value || '')).byteLength;
+  const contentBytes = choices.reduce((sum, choice) => sum
+    + outputEvidenceBytes(choice?.message?.content)
+    + outputEvidenceBytes(choice?.delta?.content)
+    + outputEvidenceBytes(choice?.text)
+    + outputEvidenceBytes(choice?.message?.refusal)
+    + outputEvidenceBytes(choice?.delta?.refusal), 0)
+    + outputEvidenceBytes(payload?.output)
+    + outputEvidenceBytes(payload?.output_text)
+    + outputEvidenceBytes(payload?.images)
+    + outputEvidenceBytes(payload?.audio);
+  const reasoningBytes = choices.reduce((sum, choice) => sum
+    + outputEvidenceBytes(choice?.message?.reasoning)
+    + outputEvidenceBytes(choice?.message?.reasoning_content)
+    + outputEvidenceBytes(choice?.message?.reasoning_details)
+    + outputEvidenceBytes(choice?.delta?.reasoning)
+    + outputEvidenceBytes(choice?.delta?.reasoning_content)
+    + outputEvidenceBytes(choice?.delta?.reasoning_details), 0)
+    + outputEvidenceBytes(payload?.reasoning)
+    + outputEvidenceBytes(payload?.reasoning_details);
   return {
     status,
+    responseParsed: !parseError && payload !== null && typeof payload === 'object',
     usagePresent: payload?.usage !== null && payload?.usage !== undefined,
-    contentBytes: bytes(content),
-    reasoningBytes: bytes(reasoning),
-    partialArtifact: content.trim().length > 0,
+    contentBytes,
+    reasoningBytes,
+    partialArtifact: contentBytes > 0,
     terminal: true,
     cancelled: false,
     timedOut: false,
@@ -811,7 +835,7 @@ async function requestOpenRouterCompletion({
       traceContext,
       payload?.usage || null,
       providerGenerationId,
-      terminalHttpErrorEvidence(response.status, payload),
+      terminalHttpErrorEvidence(response.status, payload, { parseError }),
     );
     captureProviderResponse(traceContext, {
       response,
