@@ -226,6 +226,72 @@ test('provider failure closes its exact attempt without changing LIVE', async ({
   expect(trace.finalLiveIdentity.candidate).toBe(null);
 });
 
+test('two zero-output 429 responses retain uncertain reservations and shrink protected session headroom without reported usage', async ({ page }) => {
+  const diagnosticCatalog = structuredClone(catalog);
+  diagnosticCatalog.data[0].pricing = { prompt: '0', completion: '0.00004', request: '0' };
+  diagnosticCatalog.data[0].supported_parameters = ['temperature', 'max_tokens'];
+  let completionRequests = 0;
+  await page.addInitScript(({ modelId, key }) => {
+    localStorage.setItem('ai-visualizer.selected-model', modelId);
+    localStorage.setItem('ai-visualizer.spend.settings.v1', JSON.stringify({
+      perDream: 0.75,
+      session: 0.876,
+      daily: 10,
+      confirmAbove: 0.15,
+      confirmExpensive: false,
+    }));
+    sessionStorage.setItem('ai-visualizer.openrouter.key', key);
+  }, { modelId: MODEL_ID, key: SENTINEL_KEY });
+  await page.route('https://openrouter.ai/**', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/v1/models') {
+      await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(diagnosticCatalog) });
+      return;
+    }
+    if (url.pathname === '/api/v1/key') {
+      await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify({ data: { limit_remaining: 20 } }) });
+      return;
+    }
+    if (url.pathname === '/api/v1/chat/completions') {
+      completionRequests += 1;
+      await route.fulfill({
+        status: 429,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: { code: 429, message: 'Fixture rate limit with no usage or generation id.' } }),
+      });
+      return;
+    }
+    await route.abort('blockedbyclient');
+  });
+
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await page.locator('#dreamButton').click();
+    await expect.poll(() => completionRequests).toBe(attempt);
+    await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+  }
+
+  const accounting = await page.evaluate(() => ({
+    sessionSpent: Number(sessionStorage.getItem('ai-visualizer.spend.session.v1')),
+    daily: JSON.parse(localStorage.getItem('ai-visualizer.spend.daily.v1')),
+    ledger: JSON.parse(sessionStorage.getItem('ai-visualizer.spend.ledger.v1')),
+  }));
+  expect(accounting.sessionSpent).toBeGreaterThan(0.855);
+  expect(accounting.sessionSpent).toBeLessThan(0.857);
+  expect(accounting.daily.spent).toBeCloseTo(accounting.sessionSpent, 8);
+  expect(0.876 - accounting.sessionSpent).toBeGreaterThan(0.019);
+  expect(0.876 - accounting.sessionSpent).toBeLessThan(0.021);
+  expect(accounting.ledger).toHaveLength(2);
+  expect(accounting.ledger.every(entry => entry.uncertain === true && entry.estimated === true)).toBe(true);
+  expect(accounting.ledger.every(entry => entry.settlementSource === undefined)).toBe(true);
+
+  await page.locator('#dreamButton').click();
+  await expect(page.locator('#dreamButton')).toBeEnabled({ timeout: 15000 });
+  expect(completionRequests).toBe(2);
+  await expect(page.locator('#dreamJobDetail')).toContainText(/no request was sent/i);
+});
+
 test('availability failure creates no fake completion dispatch', async ({ page }) => {
   let available = true;
   let completionRequests = 0;
