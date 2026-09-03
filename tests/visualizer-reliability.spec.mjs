@@ -9,6 +9,12 @@ async function run(page, html, method = 'runReliabilityFixture') {
   return page.evaluate(async ({ html, method }) => window[method](html), { html, method });
 }
 
+async function runWithArgs(page, method, ...args) {
+  await page.goto('/visualizer/reliability-test.html');
+  await page.waitForFunction(() => window.__reliabilityHarnessReady === true);
+  return page.evaluate(({ method, args }) => window[method](...args), { method, args });
+}
+
 test('Canvas2D art renders, consumes VIZ, and passes without aesthetic assumptions', async ({ page }) => {
   const result = await run(page, await fixture('valid-canvas2d.html'));
   expect(result.passed).toBe(true);
@@ -104,6 +110,89 @@ test('clearing a paused standby slot cannot leak pause intent into its next pref
   expect(result.staleAfterClear).toBe(false);
   expect(result.nextPreflight.passed).toBe(true);
   expect(result.nextPreflight.summary.visible).toBe(true);
+});
+
+test('fixed inset auto canvas keeps CSS geometry through every render-quality transition', async ({ page }) => {
+  const result = await run(page, await fixture('fixed-inset-auto-canvas.html'), 'runQualityGeometryFixture');
+  expect(result.boot.ready).toBe(true);
+  const expected = [
+    { mode: 'saver', dpr: 1, fps: 30, backingWidth: 800, backingHeight: 450 },
+    { mode: 'balanced', dpr: 1.5, fps: 45, backingWidth: 1200, backingHeight: 675 },
+    { mode: 'full', dpr: 2, fps: 60, backingWidth: 1600, backingHeight: 900 },
+    { mode: 'balanced', dpr: 1.5, fps: 45, backingWidth: 1200, backingHeight: 675 },
+    { mode: 'saver', dpr: 1, fps: 30, backingWidth: 800, backingHeight: 450 },
+  ];
+  for (const [index, transition] of result.transitions.entries()) {
+    const report = transition.report;
+    const scene = report.visual.canvases.find(canvas => canvas.elementId === 'scene');
+    const half = report.visual.canvases.find(canvas => canvas.elementId === 'half');
+    const small = report.visual.canvases.find(canvas => canvas.elementId === 'small');
+    expect(transition.mode).toBe(expected[index].mode);
+    expect(transition.sessionId).toBe(result.sessionId);
+    expect(transition.srcdocUnchanged).toBe(true);
+    expect(report.viewport).toEqual({ width: 800, height: 450, dpr: expected[index].dpr });
+    expect(report.runtime.renderQuality.maxFps).toBe(expected[index].fps);
+    expect(scene).toMatchObject({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 450,
+      width: 800,
+      height: 450,
+      centerX: 400,
+      centerY: 225,
+      backingWidth: expected[index].backingWidth,
+      backingHeight: expected[index].backingHeight,
+      hostViewportStabilized: true,
+    });
+    expect(scene.width / scene.height).toBeCloseTo(800 / 450, 4);
+    expect(scene.coverage).toBe(1);
+    expect(half).toMatchObject({ width: 400, height: 225, hostViewportStabilized: false });
+    expect(small).toMatchObject({ width: 96, height: 64, backingWidth: 96, backingHeight: 64, hostViewportStabilized: false });
+  }
+  expect(result.authoredInset.visual.canvases.find(canvas => canvas.elementId === 'scene').hostViewportStabilized).toBe(false);
+  expect(result.restoredViewport.visual.canvases.find(canvas => canvas.elementId === 'scene')).toMatchObject({
+    width: 800,
+    height: 450,
+    hostViewportStabilized: true,
+  });
+  for (const transition of result.requalification) {
+    expect(transition.report.visual.canvases.find(canvas => canvas.elementId === 'scene').hostViewportStabilized, transition.label).toBe(transition.expected);
+  }
+  expect(result.markerForgery.visual.canvases.find(canvas => canvas.elementId === 'small')).toMatchObject({
+    width: 96,
+    height: 64,
+    hostViewportStabilized: false,
+  });
+  expect(result.markerForgery.runtime.stabilizedViewportCanvasCount).toBe(1);
+  expect(result.detachedCanvas.runtime.observedViewportCanvasCount).toBe(3);
+});
+
+test('stale heartbeat with a responsive authenticated probe is a transient stall', async ({ page }) => {
+  const transient = await runWithArgs(page, 'runHeartbeatWatchdogFixture', await fixture('valid-canvas2d.html'), 'transient');
+  expect(transient.preflight.passed).toBe(true);
+  expect(transient.watchdog.passed).toBe(true);
+  expect(transient.watchdog.stages[0].liveness.initialStale).toBe(true);
+  expect(transient.watchdog.stages[0].liveness.probe.responded).toBe(true);
+});
+
+test('permanent heartbeat and probe stall remains a bounded RUNTIME_STALLED failure', async ({ page }) => {
+  const permanent = await runWithArgs(page, 'runHeartbeatWatchdogFixture', await fixture('valid-canvas2d.html'), 'permanent');
+  expect(permanent.preflight.passed).toBe(true);
+  expect(permanent.watchdog.passed).toBe(false);
+  expect(permanent.watchdog.failure.code).toBe('RUNTIME_STALLED');
+  expect(permanent.watchdog.failure.detail.heartbeat.advanced).toBe(false);
+  expect(permanent.watchdog.failure.detail.probe.attempts).toBe(1);
+  expect(permanent.elapsedMs).toBeLessThan(1200);
+});
+
+test('fatal runtime event still fails before heartbeat confirmation grace', async ({ page }) => {
+  const fatal = await runWithArgs(page, 'runHeartbeatWatchdogFixture', await fixture('valid-canvas2d.html'), 'fatal');
+  expect(fatal.preflight.passed).toBe(true);
+  expect(fatal.watchdog.passed).toBe(false);
+  expect(fatal.watchdog.failure.code).toBe('RUNTIME_ERROR');
+  expect(fatal.watchdog.stages[0].liveness).toBeUndefined();
+  expect(fatal.elapsedMs).toBeLessThan(1000);
 });
 
 test('shipped Calibration Bloom Featured art passes without provider authentication', async ({ page }) => {

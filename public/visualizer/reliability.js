@@ -1,4 +1,7 @@
-export const RELIABILITY_SCHEMA = 'dream-reliability-v1';
+export const RELIABILITY_SCHEMA = 'dream-reliability-v2';
+export const HEARTBEAT_STALE_MS = 4200;
+export const STALL_CONFIRM_TIMEOUT_MS = 2600;
+export const STALL_RETRY_TIMEOUT_MS = 900;
 
 export const FAILURE_CODES = Object.freeze({
   INVALID_HTML: 'INVALID_HTML',
@@ -43,6 +46,127 @@ function wait(ms, signal) {
       reject(abortError());
     }, { once: true });
   });
+}
+
+function heartbeatSnapshot(sandbox) {
+  if (typeof sandbox?.heartbeatSnapshot === 'function') return sandbox.heartbeatSnapshot();
+  return {
+    sessionId: String(sandbox?.sessionId || ''),
+    receivedAt: null,
+    sandboxAtMs: null,
+    ageMs: Math.max(0, Number(sandbox?.heartbeatAgeMs?.()) || 0),
+  };
+}
+
+function heartbeatAdvanced(start, end) {
+  return (Number.isFinite(start?.receivedAt) && Number.isFinite(end?.receivedAt) && end.receivedAt > start.receivedAt)
+    || (Number.isFinite(start?.sandboxAtMs) && Number.isFinite(end?.sandboxAtMs) && end.sandboxAtMs > start.sandboxAtMs);
+}
+
+export function activeStallConfirmationDecision({
+  heartbeat,
+  previousConfirmation = null,
+  now = performance.now(),
+  staleAfterMs = 8000,
+} = {}) {
+  const stale = Number(heartbeat?.ageMs) > staleAfterMs;
+  const sameSession = Boolean(previousConfirmation?.sessionId)
+    && previousConfirmation.sessionId === heartbeat?.sessionId;
+  const distinctHeartbeatEpoch = sameSession
+    && heartbeatAdvanced(previousConfirmation.heartbeat, heartbeat);
+  const coolingDown = sameSession
+    && !distinctHeartbeatEpoch
+    && Number(now) < Number(previousConfirmation.recheckAt || 0);
+  return Object.freeze({
+    stale,
+    due: stale && !coolingDown,
+    distinctHeartbeatEpoch,
+    coolingDown,
+  });
+}
+
+function boundedProbeError(error) {
+  return {
+    name: String(error?.name || 'Error').slice(0, 80),
+    message: String(error?.message || 'Visualizer probe failed.').slice(0, 500),
+  };
+}
+
+export async function confirmSandboxLiveness(sandbox, {
+  label = 'runtime-stall-confirmation',
+  staleAfterMs = HEARTBEAT_STALE_MS,
+  timeoutMs = STALL_CONFIRM_TIMEOUT_MS,
+  retryTimeoutMs = STALL_RETRY_TIMEOUT_MS,
+  signal,
+  fatalSince = 0,
+} = {}) {
+  if (signal?.aborted) throw abortError();
+  const startedAt = performance.now();
+  const start = heartbeatSnapshot(sandbox);
+  const initialStale = start.ageMs > staleAfterMs;
+  const initialFatal = sandbox.fatalEvents?.(fatalSince)?.[0] || null;
+  const probeEvidence = { attempted: !initialFatal, responded: false, attempts: initialFatal ? 0 : 1, durationMs: 0, error: null };
+  if (initialFatal) {
+    return {
+      status: 'fatal',
+      fatal: initialFatal,
+      report: null,
+      evidence: {
+        initialStale,
+        heartbeat: { start, end: start, advanced: false },
+        probe: probeEvidence,
+        outcome: 'fatal',
+      },
+    };
+  }
+  let report = null;
+  try {
+    report = await sandbox.probe(label, { signal, timeoutMs });
+    probeEvidence.responded = true;
+  } catch (error) {
+    if (signal?.aborted || error?.name === 'AbortError') throw error;
+    probeEvidence.error = boundedProbeError(error);
+  }
+  let fatal = sandbox.fatalEvents?.(fatalSince)?.[0] || null;
+  let end = heartbeatSnapshot(sandbox);
+  let advanced = heartbeatAdvanced(start, end);
+
+  if (!probeEvidence.responded && !fatal && advanced && end.ageMs <= staleAfterMs) {
+    probeEvidence.attempts = 2;
+    try {
+      report = await sandbox.probe(`${label}-retry`, { signal, timeoutMs: retryTimeoutMs });
+      probeEvidence.responded = true;
+      probeEvidence.error = null;
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      probeEvidence.error = boundedProbeError(error);
+    }
+    fatal = sandbox.fatalEvents?.(fatalSince)?.[0] || null;
+    end = heartbeatSnapshot(sandbox);
+    advanced = heartbeatAdvanced(start, end);
+  }
+
+  probeEvidence.durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+  const evidence = {
+    initialStale,
+    heartbeat: { start, end, advanced },
+    probe: probeEvidence,
+    recoverySignal: probeEvidence.responded ? (advanced ? 'heartbeat-and-probe' : 'probe') : null,
+  };
+  if (fatal) {
+    evidence.outcome = 'fatal';
+    return { status: 'fatal', fatal, report, evidence };
+  }
+  if (probeEvidence.responded) {
+    evidence.outcome = initialStale ? 'recovered' : 'responsive';
+    return { status: evidence.outcome, report, evidence };
+  }
+  if (!advanced && end.ageMs > staleAfterMs) {
+    evidence.outcome = 'stalled';
+    return { status: 'stalled', report: null, evidence };
+  }
+  evidence.outcome = 'probe-failed';
+  return { status: 'probe-failed', report: null, evidence };
 }
 
 function clamp(value, min = 0, max = 1) {
@@ -582,20 +706,32 @@ export class DreamReliabilityHarness {
       return failedReport({ startedAt, stages: [{ name: 'watchdog', before, event: newFatal }], failure, report: before });
     }
 
-    if (this.sandbox.heartbeatAgeMs() > 4200) {
-      const failure = makeFailure(FAILURE_CODES.RUNTIME_STALLED, 'The promoted visualizer stopped responding to the runtime heartbeat.', {
-        heartbeatAgeMs: Math.round(this.sandbox.heartbeatAgeMs()),
-      });
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before }], failure, report: before });
+    const liveness = await confirmSandboxLiveness(this.sandbox, {
+      label: 'post-launch-end',
+      staleAfterMs: HEARTBEAT_STALE_MS,
+      timeoutMs: STALL_CONFIRM_TIMEOUT_MS,
+      signal,
+      fatalSince: eventStart,
+    });
+    if (liveness.evidence.initialStale) this.stage('heartbeat-stale', liveness.evidence);
+    if (liveness.status === 'recovered') {
+      this.stage(liveness.evidence.heartbeat.advanced ? 'heartbeat-recovered' : 'transient-stall-recovered', liveness.evidence);
     }
-
-    let after;
-    try {
-      after = await this.sandbox.probe('post-launch-end', { signal, timeoutMs: 2600 });
-    } catch (error) {
-      const failure = makeFailure(FAILURE_CODES.RUNTIME_STALLED, error.message || 'The promoted visualizer stopped responding to probes.');
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before }], failure, report: before });
+    if (liveness.status === 'fatal') {
+      const fatal = liveness.fatal;
+      const failure = makeFailure(FAILURE_CODES[fatal.code] || fatal.code || FAILURE_CODES.RUNTIME_ERROR, fatal.message, fatal);
+      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence, event: fatal }], failure, report: before });
     }
+    if (liveness.status === 'stalled') {
+      this.stage('runtime-stall-confirmed', liveness.evidence);
+      const failure = makeFailure(FAILURE_CODES.RUNTIME_STALLED, 'The promoted visualizer stopped responding to its heartbeat and bounded confirmation probe.', liveness.evidence);
+      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence }], failure, report: before });
+    }
+    if (liveness.status === 'probe-failed') {
+      const failure = makeFailure(FAILURE_CODES.PROBE_FAILED, liveness.evidence.probe.error?.message || 'The promoted visualizer did not complete its bounded confirmation probe.', liveness.evidence);
+      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence }], failure, report: before });
+    }
+    let after = liveness.report;
 
     if (currentVisualSignal(before) && !currentVisualSignal(after)) {
       await wait(420, signal);
@@ -627,7 +763,7 @@ export class DreamReliabilityHarness {
       startedAt,
       finishedAt: nowIso(),
       durationMs: Date.now() - Date.parse(startedAt),
-      stages: [{ name: 'watchdog', before, after, evaluation }],
+      stages: [{ name: 'watchdog', before, after, evaluation, liveness: liveness.evidence }],
       warnings: evaluation.warnings,
       failure: null,
       summary: {

@@ -9,6 +9,7 @@ import {
   traceContextFromInit,
 } from './trace-bridge.js';
 import { registerCompletionAccounting } from './completion-accounting.js';
+import { VISUALIZER_RUNTIME_VERSION } from './runtime-version.js';
 import {
   DEFAULT_GENERATION_ENVELOPE_SAFETY_FACTOR,
   GENERATION_ENVELOPE_VERSION,
@@ -34,7 +35,7 @@ import { RELIABILITY_SCHEMA } from './reliability.js';
 import { filterLiveDreamModels } from './model-eligibility.js';
 
 export const COST_GUARD_VERSION = 'visualizer-cost-guard-v2';
-export const VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v1';
+export { VISUALIZER_RUNTIME_VERSION } from './runtime-version.js';
 
 const windowRef = typeof window !== 'undefined' ? window : null;
 const documentRef = typeof document !== 'undefined' ? document : null;

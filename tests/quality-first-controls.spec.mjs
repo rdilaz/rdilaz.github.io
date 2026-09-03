@@ -1013,3 +1013,81 @@ test('denied Web Storage keeps the built-in Visualizer available without a reque
   await expect(page.locator('#dreamButton')).toBeVisible();
   expect(completionRequests).toBe(0);
 });
+
+test('model search matches human punctuation and spacing without changing exact model identity', async ({ page }) => {
+  const searchModels = [
+    {
+      ...primaryModel,
+      id: 'qwen/qwen3.8-flash',
+      name: 'Qwen3.8 Flash',
+    },
+    {
+      ...primaryModel,
+      id: 'google/gemini-3.8-flash',
+      name: 'Google: Gemini 3.8 Flash',
+    },
+    {
+      ...primaryModel,
+      id: 'z-ai/glm-5.3-flash',
+      name: 'Z.ai: GLM 5.3 Flash',
+    },
+    {
+      ...primaryModel,
+      id: 'qwen/qwen3-8b',
+      name: 'Qwen3-8B',
+    },
+    {
+      ...primaryModel,
+      id: 'google/gemini-3-pro-8k',
+      name: 'Google: Gemini 3 Pro Context 8K',
+    },
+  ];
+  await seedConnectedSession(page);
+  await mockOpenRouter(page, { catalog: catalogFor(primaryModel, searchModels) });
+  await gotoVisualizer(page, '/visualizer/index.html?dev=1');
+  await page.evaluate(async modelId => {
+    const { createModelFitEvidenceStore, MODEL_FIT_RESULT_CATEGORIES } = await import('/visualizer/model-fit-evidence.js');
+    const store = createModelFitEvidenceStore({ storage: localStorage });
+    store.recordObservation({
+      observationId: 'historical-v1-picker-proof',
+      configuration: {
+        modelId,
+        reasoningChoice: 'default',
+        promptProfileId: 'neutral-v1',
+        promptVersion: 'visualizer-prompt-v2',
+        promptHash: 'historical-v1-hash',
+        generationEnvelopeMajorVersion: 1,
+        audioApiVersion: 'visualizer-audio-v1',
+        reliabilityVersion: 'dream-reliability-v1',
+        runtimeVersion: 'visualizer-runtime-v1',
+      },
+      attemptedAt: 1,
+      resultCategory: MODEL_FIT_RESULT_CATEGORIES.READY,
+      readySuccess: true,
+      providerAttemptCount: 1,
+    });
+  }, MODEL_ID);
+  await page.mouse.move(240, 220);
+  await page.locator('#modelButton').click();
+  await page.locator('#browseAllModels').click();
+  await expect(page.locator('#modelList .model-option').filter({ hasText: MODEL_NAME })).toHaveAttribute('data-model-fit-state', 'UNTESTED');
+
+  for (const [query, expectedName] of [
+    ['Qwen 3.8 Flash', 'Qwen3.8 Flash'],
+    ['qwen3.8', 'Qwen3.8 Flash'],
+    ['Gemini 3.8', 'Google: Gemini 3.8 Flash'],
+    ['Z ai GLM 5.3', 'Z.ai: GLM 5.3 Flash'],
+    ['z-ai/glm-5.3-flash', 'Z.ai: GLM 5.3 Flash'],
+  ]) {
+    await page.locator('#modelSearch').fill(query);
+    await expect(page.locator('#modelList .model-option')).toHaveCount(1);
+    await expect(page.locator('#modelList .model-option__name')).toHaveText(expectedName);
+  }
+
+  await page.locator('#modelSearch').fill('');
+  await expect(page.locator('#modelList .model-option')).toHaveCount(6);
+  await page.locator('#modelSearch').fill('Z ai GLM 5.3');
+  await page.locator('#modelList .model-option').click();
+  await expect(page.locator('#selectedModelName')).toHaveText('Z.ai: GLM 5.3 Flash');
+  expect(await page.evaluate(() => localStorage.getItem('ai-visualizer.selected-model'))).toBe('z-ai/glm-5.3-flash');
+});

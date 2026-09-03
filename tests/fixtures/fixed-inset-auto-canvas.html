@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #071014; }
+    #scene { position: fixed; inset: 0; display: block; }
+    .inset-root #scene, #scene[data-inset] { inset: 20px; }
+    #half { position: absolute; right: 0; bottom: 0; width: 50%; height: 50%; }
+    #small { position: absolute; left: 18px; top: 18px; width: 96px; height: 64px; }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <canvas id="half"></canvas>
+  <canvas id="small" width="96" height="64"></canvas>
+  <script>
+    const scene = document.getElementById('scene');
+    const half = document.getElementById('half');
+    const small = document.getElementById('small');
+    const sceneContext = scene.getContext('2d');
+    const halfContext = half.getContext('2d');
+    const smallContext = small.getContext('2d');
+    const runtimeRules = document.createElement('style');
+    document.head.appendChild(runtimeRules);
+    let addedStyle = null;
+    let insertedRule = -1;
+    let declarationRule = -1;
+    let directDeclarationRule = -1;
+    let disabledRule = -1;
+    const adoptedSheet = typeof CSSStyleSheet === 'function' ? new CSSStyleSheet() : null;
+    adoptedSheet?.replaceSync('#scene { inset: 20px !important; }');
+
+    function resize() {
+      const { width, height, dpr } = VIZ.viewport;
+      scene.width = Math.round(width * dpr);
+      scene.height = Math.round(height * dpr);
+      half.width = Math.round(half.clientWidth * dpr);
+      half.height = Math.round(half.clientHeight * dpr);
+      sceneContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sceneContext.fillStyle = '#071014';
+      sceneContext.fillRect(0, 0, width, height);
+      sceneContext.fillStyle = '#6ce7d7';
+      sceneContext.beginPath();
+      sceneContext.arc(width / 2, height / 2, Math.min(width, height) * 0.18, 0, Math.PI * 2);
+      sceneContext.fill();
+      halfContext.fillStyle = '#27445c';
+      halfContext.fillRect(0, 0, half.width, half.height);
+      smallContext.fillStyle = '#edb95c';
+      smallContext.fillRect(0, 0, small.width, small.height);
+    }
+
+    addEventListener('resize', resize);
+    VIZ.onFrame(frame => {
+      if (frame.pointer?.x === 0.25) scene.style.inset = '20px';
+      if (frame.pointer?.x === 0.75) scene.style.removeProperty('inset');
+      if (frame.pointer?.x === 0.1) document.body.classList.add('inset-root');
+      if (frame.pointer?.x === 0.2) document.body.classList.remove('inset-root');
+      if (frame.pointer?.x === 0.3) scene.setAttribute('data-inset', '');
+      if (frame.pointer?.x === 0.4) scene.removeAttribute('data-inset');
+      if (frame.pointer?.x === 0.5 && !addedStyle) {
+        addedStyle = document.createElement('style');
+        addedStyle.textContent = '#scene { inset: 20px !important; }';
+        document.head.appendChild(addedStyle);
+      }
+      if (frame.pointer?.x === 0.6 && addedStyle) {
+        addedStyle.remove();
+        addedStyle = null;
+      }
+      if (frame.pointer?.x === 0.7 && insertedRule < 0) insertedRule = runtimeRules.sheet.insertRule('#scene { inset: 20px !important; }');
+      if (frame.pointer?.x === 0.8 && insertedRule >= 0) {
+        runtimeRules.sheet.deleteRule(insertedRule);
+        insertedRule = -1;
+      }
+      if (frame.pointer?.x === 0.9 && declarationRule < 0) {
+        declarationRule = runtimeRules.sheet.insertRule('#scene {}');
+        runtimeRules.sheet.cssRules[declarationRule].style.setProperty('inset', '20px', 'important');
+      }
+      if (frame.pointer?.x === 0.95 && declarationRule >= 0) {
+        runtimeRules.sheet.cssRules[declarationRule].style.removeProperty('inset');
+      }
+      if (frame.pointer?.x === 0.11 && disabledRule < 0) disabledRule = runtimeRules.sheet.insertRule('#scene { inset: 20px !important; }');
+      if (frame.pointer?.x === 0.12) runtimeRules.sheet.disabled = true;
+      if (frame.pointer?.x === 0.13) runtimeRules.sheet.disabled = false;
+      if (frame.pointer?.x === 0.14 && disabledRule >= 0) {
+        runtimeRules.sheet.deleteRule(disabledRule);
+        disabledRule = -1;
+      }
+      if (frame.pointer?.x === 0.15 && adoptedSheet) document.adoptedStyleSheets = [...document.adoptedStyleSheets, adoptedSheet];
+      if (frame.pointer?.x === 0.16 && adoptedSheet) document.adoptedStyleSheets = document.adoptedStyleSheets.filter(sheet => sheet !== adoptedSheet);
+      if (frame.pointer?.x === 0.17) small.setAttribute('data-visualizer-host-viewport-canvas', '');
+      if (frame.pointer?.x === 0.18 && directDeclarationRule < 0) {
+        directDeclarationRule = runtimeRules.sheet.insertRule('#scene {}');
+        runtimeRules.sheet.cssRules[directDeclarationRule].style.inset = '20px';
+      }
+      if (frame.pointer?.x === 0.19 && directDeclarationRule >= 0) runtimeRules.sheet.cssRules[directDeclarationRule].style.inset = '';
+      if (frame.pointer?.x === 0.21) {
+        const removed = document.createElement('canvas');
+        document.body.appendChild(removed);
+        removed.getContext('2d');
+        removed.remove();
+      }
+    });
+    resize();
+  </script>
+</body>
+</html>

@@ -122,6 +122,148 @@
       return { staleAfterClear, nextPreflight };
     };
 
+    window.runQualityGeometryFixture = async html => {
+      const viewport = { width: 800, height: 450, dpr: 1 };
+      const profiles = [
+        { mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 },
+        { mode: 'balanced', maxFps: 45, effectiveDpr: 1.5, nativeDpr: 2 },
+        { mode: 'full', maxFps: 60, effectiveDpr: 2, nativeDpr: 2 },
+        { mode: 'balanced', maxFps: 45, effectiveDpr: 1.5, nativeDpr: 2 },
+        { mode: 'saver', maxFps: 30, effectiveDpr: 1, nativeDpr: 2 },
+      ];
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+      sandbox.setRenderQuality(profiles[0]);
+      const boot = await sandbox.load(html, { viewport });
+      const sessionId = sandbox.sessionId;
+      const srcdoc = iframe.srcdoc;
+
+      async function settledProbe(profile, index) {
+        sandbox.setRenderQuality(profile);
+        const expectedWidth = Math.round(viewport.width * profile.effectiveDpr);
+        const deadline = performance.now() + 1800;
+        let report = null;
+        while (performance.now() < deadline) {
+          report = await sandbox.probe(`quality-geometry-${index}`, { timeoutMs: 600 });
+          const scene = report.visual.canvases.find(canvas => canvas.elementId === 'scene');
+          if (sandbox.appliedRenderQuality?.mode === profile.mode && scene?.backingWidth === expectedWidth) break;
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return {
+          mode: profile.mode,
+          sessionId: sandbox.sessionId,
+          srcdocUnchanged: iframe.srcdoc === srcdoc,
+          report,
+        };
+      }
+
+      const transitions = [];
+      for (let index = 0; index < profiles.length; index += 1) {
+        transitions.push(await settledProbe(profiles[index], index));
+      }
+      sandbox.enterPassiveMode();
+      async function probeMarker(expected, label) {
+        const deadline = performance.now() + 1200;
+        let report;
+        while (performance.now() < deadline) {
+          report = await sandbox.probe(label, { timeoutMs: 600 });
+          const scene = report.visual.canvases.find(canvas => canvas.elementId === 'scene');
+          if (scene?.hostViewportStabilized === expected) return report;
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        return report;
+      }
+      sandbox.sendFrame({ pointer: { x: 0.25, y: 0.5, active: true, down: false } });
+      const authoredInset = await probeMarker(false, 'quality-geometry-authored-inset');
+      sandbox.sendFrame({ pointer: { x: 0.75, y: 0.5, active: true, down: false } });
+      const restoredViewport = await probeMarker(true, 'quality-geometry-restored-viewport');
+      const requalification = [];
+      for (const [pointerX, expected, label] of [
+        [0.1, false, 'ancestor-class-ineligible'],
+        [0.2, true, 'ancestor-class-restored'],
+        [0.3, false, 'canvas-attribute-ineligible'],
+        [0.4, true, 'canvas-attribute-restored'],
+        [0.5, false, 'added-stylesheet-ineligible'],
+        [0.6, true, 'removed-stylesheet-restored'],
+        [0.7, false, 'cssom-rule-ineligible'],
+        [0.8, true, 'cssom-rule-restored'],
+        [0.9, false, 'css-declaration-ineligible'],
+        [0.95, true, 'css-declaration-restored'],
+        [0.11, false, 'stylesheet-enabled-ineligible'],
+        [0.12, true, 'stylesheet-disabled-restored'],
+        [0.13, false, 'stylesheet-reenabled-ineligible'],
+        [0.14, true, 'stylesheet-rule-removed'],
+        [0.15, false, 'adopted-stylesheet-ineligible'],
+        [0.16, true, 'adopted-stylesheet-removed'],
+        [0.18, false, 'direct-css-declaration-ineligible'],
+        [0.19, true, 'direct-css-declaration-restored'],
+      ]) {
+        sandbox.sendFrame({ pointer: { x: pointerX, y: 0.5, active: true, down: false } });
+        const report = await probeMarker(expected, `quality-geometry-${label}`);
+        requalification.push({ label, expected, report });
+      }
+      sandbox.sendFrame({ pointer: { x: 0.17, y: 0.5, active: true, down: false } });
+      let markerForgery;
+      const markerDeadline = performance.now() + 1200;
+      while (performance.now() < markerDeadline) {
+        markerForgery = await sandbox.probe('quality-geometry-marker-forgery', { timeoutMs: 600 });
+        const small = markerForgery.visual.canvases.find(canvas => canvas.elementId === 'small');
+        if (small && !small.hostViewportStabilized && small.width === 96) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      sandbox.sendFrame({ pointer: { x: 0.21, y: 0.5, active: true, down: false } });
+      let detachedCanvas;
+      const detachedDeadline = performance.now() + 1200;
+      while (performance.now() < detachedDeadline) {
+        detachedCanvas = await sandbox.probe('quality-geometry-detached-canvas', { timeoutMs: 600 });
+        if (detachedCanvas.runtime.observedViewportCanvasCount === 3) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      const result = {
+        boot,
+        sessionId,
+        transitions,
+        authoredInset,
+        restoredViewport,
+        requalification,
+        markerForgery,
+        detachedCanvas,
+      };
+      sandbox.clear();
+      return result;
+    };
+
+    window.runHeartbeatWatchdogFixture = async (html, mode) => {
+      sandbox.clear();
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const viewport = { width: 800, height: 450, dpr: 1 };
+      const preflight = await harness.preflight(html, { viewport, fastViewport: viewport });
+      if (!preflight.passed) return { preflight, watchdog: null };
+      sandbox.setPresentation('promoting');
+      const originalSnapshot = sandbox.heartbeatSnapshot.bind(sandbox);
+      const originalProbe = sandbox.probe.bind(sandbox);
+      const stale = { sessionId: sandbox.sessionId, receivedAt: 1, sandboxAtMs: 1, ageMs: 4700 };
+      let fatalTimer = 0;
+      if (mode === 'transient') {
+        sandbox.heartbeatSnapshot = () => stale;
+      } else if (mode === 'permanent') {
+        sandbox.heartbeatSnapshot = () => stale;
+        sandbox.probe = async () => { throw new Error('Fixture confirmation probe timed out.'); };
+      } else if (mode === 'fatal') {
+        fatalTimer = setTimeout(() => {
+          sandbox.events.push({ severity: 'fatal', code: 'RUNTIME_ERROR', message: 'Fixture fatal runtime event.' });
+        }, 0);
+      }
+      const started = performance.now();
+      const watchdog = await harness.watchdog({ durationMs: mode === 'fatal' ? 40 : 0 });
+      const elapsedMs = performance.now() - started;
+      clearTimeout(fatalTimer);
+      sandbox.heartbeatSnapshot = originalSnapshot;
+      sandbox.probe = originalProbe;
+      sandbox.clear();
+      return { preflight, watchdog, elapsedMs };
+    };
+
     window.__reliabilityHarnessReady = true;
   </script>
 </body>

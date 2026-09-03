@@ -97,6 +97,10 @@ const [
   renderQualityContract,
   immersiveUiContract,
   streamingImmersiveQualityBrowser,
+  runtimeVersion,
+  modelSearch,
+  dogfoodRuntimeContract,
+  fixedInsetCanvasFixture,
   playwrightConfig,
 ] = await Promise.all([
   read('public/visualizer/reasoning-settings.js'),
@@ -122,6 +126,10 @@ const [
   read('tests/render-quality.contract.mjs'),
   read('tests/immersive-ui.contract.mjs'),
   read('tests/streaming-immersive-quality.spec.mjs'),
+  read('public/visualizer/runtime-version.js'),
+  read('public/visualizer/model-search.js'),
+  read('tests/dogfood-runtime.contract.mjs'),
+  read('tests/fixtures/fixed-inset-auto-canvas.html'),
   read('playwright.config.mjs'),
 ]);
 
@@ -449,7 +457,7 @@ expect(
   'Normal catalog exploration must be progressively disclosed while developer mode opens truthful experimental signals.',
 );
 expect(
-  app.includes('const evidenceByModel = devMode')
+  app.includes('const evidenceSnapshot = devMode ? modelFitEvidenceStore.snapshot() : null;')
     && app.includes("const modelMeta = [priceLabel(model), devMode ? fitState : ''].filter(Boolean).join(")
     && app.includes('if (devMode) button.dataset.modelFitState = fitState;'),
   'Technical model-fit statuses must stay out of normal model rows and appear only in developer mode.',
@@ -598,7 +606,41 @@ expect(app.includes('promotion:rolled-back') && app.includes('harness.watchdog')
 expect(app.includes('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1)'), 'A Dream must permit at most one same-model repair.');
 expect(app.includes('if (attemptNumber === 2 || diagnostic.repairUsed)'), 'A second repair must be impossible.');
 expect(app.includes('audioAnalysisGate = createCadenceGate(60)'), 'Host audio analysis must retain an independent 60 Hz target.');
-expect(app.includes('heartbeatAgeMs() > 8000') && app.includes('recoverFromRuntimeFailure'), 'Long-lived visualizers must retain heartbeat-based automatic recovery.');
+expect(
+  app.includes('heartbeat: activeSlot.sandbox.heartbeatSnapshot()')
+    && app.includes('confirmActiveRuntimeLiveness')
+    && app.includes('activeStallConfirmationDecision')
+    && app.includes('recheckAt: performance.now() + 30000')
+    && reliability.includes('confirmSandboxLiveness')
+    && reliability.includes("this.stage('runtime-stall-confirmed'")
+    && reliability.includes("'heartbeat-recovered' : 'transient-stall-recovered'"),
+  'Long-lived visualizers must confirm inferred heartbeat stalls while retaining deterministic automatic recovery.',
+);
+expect(
+  runtimeVersion.includes("VISUALIZER_RUNTIME_VERSION = 'visualizer-runtime-v2'")
+    && reliability.includes("RELIABILITY_SCHEMA = 'dream-reliability-v2'")
+    && costGuard.includes("from './runtime-version.js'")
+    && modelGuide.includes("from './runtime-version.js'"),
+  'Runtime and reliability v2 must isolate materially changed model-fit evidence through one shared runtime identity.',
+);
+expect(
+  sandbox.includes('data-visualizer-host-viewport-canvas')
+    && sandbox.includes('computedStyleMap')
+    && sandbox.includes("canvas.removeAttribute('data-visualizer-host-viewport-canvas')")
+    && sandbox.includes("style.position !== 'fixed'")
+    && fixedInsetCanvasFixture.includes('#scene { position: fixed; inset: 0; display: block; }'),
+  'Only verified fixed/all-edge auto-sized canvases may receive host viewport geometry stabilization.',
+);
+expect(
+  app.includes('dreamJobOwnsReliabilityStage')
+    && app.includes('jobOwner: reliabilityOwner')
+    && app.includes('configurationEvidence.get(configuration ? modelFitConfigurationKey(configuration)')
+    && app.includes('reliabilityVersion: RELIABILITY_SCHEMA')
+    && modelSearch.includes('normalizeModelSearch')
+    && app.includes('modelSearchMatches(model, query)')
+    && modelGuide.includes('modelSearchMatches(candidate, query'),
+  'Reliability stages must be job/trace-owned and both model-picker paths must share normalized search.',
+);
 
 // Product Shell/Core UX v1: trusted pause, background jobs, explicit Open and fast switching.
 expect(index.includes('id="playbackButton"') && index.includes('aria-pressed="false"') && index.includes('id="pauseOverlay"'), 'Normal product chrome must expose an accessible visual Play/Pause control.');
@@ -829,6 +871,16 @@ expect(
     && streamingImmersiveQualityBrowser.includes('late fullscreen wake-lock grant is released')
     && streamingImmersiveQualityBrowser.includes('cancel during fresh catalog verification'),
   'Playwright must cover streamed promotion safety, immersive wake, quality switching, and the mobile disclosure layout.',
+);
+expect(
+  dogfoodRuntimeContract.includes('reliability stage ownership requires the active executing job and exact trace')
+    && dogfoodRuntimeContract.includes('model search ignores human punctuation and spacing')
+    && dogfoodRuntimeContract.includes('permanent heartbeat and probe stall')
+    && browserTests.includes('fixed inset auto canvas keeps CSS geometry')
+    && browserTests.includes('fatal runtime event still fails before heartbeat confirmation grace')
+    && productShellBrowser.includes("toHaveText('Model working')")
+    && qualityFirstBrowser.includes('model search matches human punctuation and spacing'),
+  'Dogfood hardening must retain deterministic contracts and browser regressions for all four observed issues.',
 );
 
 if (failures.length) {

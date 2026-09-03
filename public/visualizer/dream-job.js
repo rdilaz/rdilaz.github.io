@@ -83,6 +83,23 @@ export function isExecutingDreamJob(snapshot) {
   return EXECUTING_PHASES.has(snapshot?.phase);
 }
 
+export function dreamJobOwnsReliabilityStage({
+  generating = false,
+  owner = null,
+  diagnosticTraceId = '',
+  activeTraceId = '',
+  job = null,
+} = {}) {
+  const ownerJobId = String(owner?.jobId || '');
+  const ownerTraceId = String(owner?.traceId || '');
+  return generating === true
+    && Boolean(ownerJobId && ownerTraceId && diagnosticTraceId && activeTraceId)
+    && ownerJobId === String(job?.id || '')
+    && ownerTraceId === String(diagnosticTraceId)
+    && ownerTraceId === String(activeTraceId)
+    && isExecutingDreamJob(job);
+}
+
 export function createDreamJobController({
   idFactory = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
   clock = () => Date.now(),

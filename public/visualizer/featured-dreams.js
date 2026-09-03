@@ -1,5 +1,8 @@
 import { DEFAULT_VISUALIZER_HTML } from './default-visualizer.js';
 import { FEATURED_DREAM_MANIFEST, FEATURED_MANIFEST_SCHEMA } from './featured/manifest.js';
+import { RELIABILITY_SCHEMA } from './reliability.js';
+
+const SUPPORTED_RELIABILITY_CONTRACTS = new Set(['dream-reliability-v1', RELIABILITY_SCHEMA]);
 
 export { FEATURED_DREAM_MANIFEST, FEATURED_MANIFEST_SCHEMA };
 
@@ -13,7 +16,7 @@ export function validateFeaturedEntry(entry) {
   if (!Number.isInteger(entry.order) || entry.order < 1) throw new TypeError(`Featured Dream ${entry.id} requires a positive integer order.`);
   if (!/^\.\/featured\/[a-z0-9-]+\.html$/i.test(entry.htmlPath)) throw new TypeError(`Featured Dream ${entry.id} must use a repository-local HTML path.`);
   if (!/^[a-f0-9]{64}$/i.test(entry.contentDigest)) throw new TypeError(`Featured Dream ${entry.id} requires a SHA-256 content digest.`);
-  if (entry.reliability?.status !== 'verified-in-ci' || entry.reliability?.contract !== 'dream-reliability-v1') {
+  if (entry.reliability?.status !== 'verified-in-ci' || !SUPPORTED_RELIABILITY_CONTRACTS.has(entry.reliability?.contract)) {
     throw new TypeError(`Featured Dream ${entry.id} requires verified reliability evidence.`);
   }
   if (!entry.provenance?.operatorApprovalRecord || !['existing-shipped-built-in', 'operator-approved'].includes(entry.provenance?.curationStatus)) {
@@ -116,7 +119,7 @@ export async function createFeaturedExportPackage(generation, { title = '' } = {
       providerGenerationId: generation.providerGenerationId || '',
       reliability: {
         status: 'pending-ci-verification',
-        contract: 'dream-reliability-v1',
+        contract: RELIABILITY_SCHEMA,
       },
       provenance: {
         kind: 'model-generated-local-export',
