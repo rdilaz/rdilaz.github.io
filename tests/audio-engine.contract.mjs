@@ -333,6 +333,103 @@ test('missing or unresumable AudioContext releases capture and fails cleanly', a
   assert.equal(unresumableEngine.diagnostics().connectionReason, 'audio-context-resume-failed');
 });
 
+test('microphone source-node failure cleans local resources and permits a later connection', async () => {
+  let sourceAttempts = 0;
+  class SourceFailureOnceContext extends FakeAudioContext {
+    createMediaStreamSource() {
+      sourceAttempts += 1;
+      if (sourceAttempts === 1) throw new Error('private source construction detail');
+      return super.createMediaStreamSource();
+    }
+  }
+  const failed = mediaFixture();
+  const recovered = mediaFixture();
+  const streams = [failed.stream, recovered.stream];
+  installBrowser({
+    mediaDevices: {
+      getSupportedConstraints: supportedConstraints,
+      getUserMedia: async () => streams.shift(),
+    },
+    AudioContextClass: SourceFailureOnceContext,
+  });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(state));
+
+  await assert.rejects(engine.connectMicrophone(), /could not start/i);
+  const failedContext = FakeAudioContext.instances[0];
+  assert.equal(failed.audioTrack.stopCount, 1);
+  assert.equal(failed.videoTrack.stopCount, 1);
+  assert.equal(failedContext.closeCount, 1);
+  assert.equal(engine.connected, false);
+  assert.deepEqual(states, []);
+  assert.deepEqual(engine.diagnostics(), {
+    sourceKind: 'microphone',
+    effectiveChannelCount: null,
+    effectiveSampleRate: null,
+    requestedProcessing: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: { ideal: 2 },
+    },
+    effectiveProcessing: {},
+    connectionReason: 'audio-graph-failed',
+    connected: false,
+  });
+  assert.doesNotMatch(JSON.stringify(engine.diagnostics()), /private|deviceId|groupId|waveform|spectrum/i);
+
+  await engine.connectMicrophone();
+  assert.equal(engine.connected, true);
+  assert.equal(states.length, 1);
+  assert.equal(states[0].connected, true);
+  assert.equal(engine.diagnostics().connectionReason, 'connected');
+  await engine.stop();
+  assert.equal(recovered.audioTrack.stopCount, 1);
+  assert.equal(FakeAudioContext.instances[1].closeCount, 1);
+});
+
+test('display splitter failure disconnects partial graph and permits a later connection', async () => {
+  let splitterAttempts = 0;
+  class SplitterFailureOnceContext extends FakeAudioContext {
+    createChannelSplitter() {
+      splitterAttempts += 1;
+      if (splitterAttempts === 1) throw new Error('private splitter construction detail');
+      return super.createChannelSplitter();
+    }
+  }
+  const failed = mediaFixture({ channels: 2 });
+  const recovered = mediaFixture({ channels: 2 });
+  const streams = [failed.stream, recovered.stream];
+  installBrowser({
+    mediaDevices: { getDisplayMedia: async () => streams.shift() },
+    AudioContextClass: SplitterFailureOnceContext,
+  });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(state));
+
+  await assert.rejects(engine.connectDisplayAudio(), /could not start/i);
+  const failedContext = FakeAudioContext.instances[0];
+  assert.equal(failed.audioTrack.stopCount, 1);
+  assert.equal(failed.videoTrack.stopCount, 1);
+  assert.equal(failedContext.closeCount, 1);
+  assert.equal(failedContext.source.disconnectCount, 1);
+  assert.ok(failedContext.analysers.every(analyser => analyser.disconnectCount === 1));
+  assert.equal(engine.connected, false);
+  assert.deepEqual(states, []);
+  assert.equal(engine.diagnostics().sourceKind, 'display');
+  assert.equal(engine.diagnostics().connectionReason, 'audio-graph-failed');
+  assert.doesNotMatch(JSON.stringify(engine.diagnostics()), /private|deviceId|groupId|waveform|spectrum/i);
+
+  await engine.connectDisplayAudio();
+  assert.equal(engine.connected, true);
+  assert.equal(states.length, 1);
+  assert.equal(states[0].sourceKind, 'display');
+  await engine.stop();
+  assert.equal(recovered.audioTrack.stopCount, 1);
+  assert.equal(recovered.videoTrack.stopCount, 1);
+  assert.equal(FakeAudioContext.instances[1].closeCount, 1);
+});
+
 test('track ended transitions to disconnected truth and performs complete cleanup', async () => {
   const fixture = mediaFixture();
   const states = [];

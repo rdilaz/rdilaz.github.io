@@ -39,6 +39,20 @@ function stopStream(stream) {
   stream?.getTracks?.().forEach(track => track.stop());
 }
 
+async function cleanupLocalAudio(stream, context, nodes) {
+  let tracks = [];
+  try { tracks = stream?.getTracks?.() || []; } catch { /* Continue releasing the local graph. */ }
+  for (const track of tracks) {
+    try { track.stop(); } catch { /* Continue stopping the remaining returned tracks. */ }
+  }
+  for (const node of nodes) {
+    try { node?.disconnect(); } catch { /* Continue releasing the remaining local graph. */ }
+  }
+  try {
+    if (context?.state !== 'closed') await context.close();
+  } catch { /* Local references are discarded by the caller. */ }
+}
+
 function safeTrackInfo(track, context) {
   let settings = {};
   let capabilities = {};
@@ -293,34 +307,69 @@ export class AudioEngine {
       }
     }
 
-    const source = context.createMediaStreamSource(stream);
-    const analyser = context.createAnalyser();
-    const detailAnalyser = context.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = .08;
-    analyser.minDecibels = -96;
-    analyser.maxDecibels = -18;
-    detailAnalyser.fftSize = 2048;
-    detailAnalyser.smoothingTimeConstant = .12;
-    detailAnalyser.minDecibels = -96;
-    detailAnalyser.maxDecibels = -18;
-    source.connect(analyser);
-    source.connect(detailAnalyser);
-
-    const trackInfo = safeTrackInfo(audioTrack, context);
-    const trueStereo = Number(trackInfo.effectiveChannelCount) > 1;
+    const localNodes = [];
+    let trackInfo;
+    let trueStereo;
+    let source;
+    let analyser;
+    let detailAnalyser;
     let splitter = null;
     let leftAnalyser = null;
     let rightAnalyser = null;
-    if (trueStereo) {
-      splitter = context.createChannelSplitter(2);
-      leftAnalyser = context.createAnalyser();
-      rightAnalyser = context.createAnalyser();
-      leftAnalyser.fftSize = rightAnalyser.fftSize = 256;
-      leftAnalyser.smoothingTimeConstant = rightAnalyser.smoothingTimeConstant = 0;
-      source.connect(splitter);
-      splitter.connect(leftAnalyser, 0);
-      splitter.connect(rightAnalyser, 1);
+    let frequency;
+    let detailFrequency;
+    let waveform;
+    let leftWave;
+    let rightWave;
+    try {
+      trackInfo = safeTrackInfo(audioTrack, context);
+      trueStereo = Number(trackInfo.effectiveChannelCount) > 1;
+      source = context.createMediaStreamSource(stream);
+      localNodes.push(source);
+      analyser = context.createAnalyser();
+      localNodes.push(analyser);
+      detailAnalyser = context.createAnalyser();
+      localNodes.push(detailAnalyser);
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = .08;
+      analyser.minDecibels = -96;
+      analyser.maxDecibels = -18;
+      detailAnalyser.fftSize = 2048;
+      detailAnalyser.smoothingTimeConstant = .12;
+      detailAnalyser.minDecibels = -96;
+      detailAnalyser.maxDecibels = -18;
+      source.connect(analyser);
+      source.connect(detailAnalyser);
+
+      if (trueStereo) {
+        splitter = context.createChannelSplitter(2);
+        localNodes.push(splitter);
+        leftAnalyser = context.createAnalyser();
+        localNodes.push(leftAnalyser);
+        rightAnalyser = context.createAnalyser();
+        localNodes.push(rightAnalyser);
+        leftAnalyser.fftSize = rightAnalyser.fftSize = 256;
+        leftAnalyser.smoothingTimeConstant = rightAnalyser.smoothingTimeConstant = 0;
+        source.connect(splitter);
+        splitter.connect(leftAnalyser, 0);
+        splitter.connect(rightAnalyser, 1);
+      }
+
+      frequency = new Uint8Array(analyser.frequencyBinCount);
+      detailFrequency = new Uint8Array(detailAnalyser.frequencyBinCount);
+      waveform = new Float32Array(analyser.fftSize);
+      leftWave = leftAnalyser ? new Float32Array(leftAnalyser.fftSize) : null;
+      rightWave = rightAnalyser ? new Float32Array(rightAnalyser.fftSize) : null;
+    } catch {
+      await cleanupLocalAudio(stream, context, localNodes);
+      this.connected = false;
+      this.audioDiagnostics = {
+        ...emptyDiagnostics(),
+        sourceKind,
+        requestedProcessing: { ...requestedProcessing },
+        connectionReason: 'audio-graph-failed',
+      };
+      throw new Error('Audio analysis could not start. Try reconnecting.');
     }
 
     this.stream = stream;
@@ -331,11 +380,11 @@ export class AudioEngine {
     this.splitter = splitter;
     this.leftAnalyser = leftAnalyser;
     this.rightAnalyser = rightAnalyser;
-    this.frequency = new Uint8Array(analyser.frequencyBinCount);
-    this.detailFrequency = new Uint8Array(detailAnalyser.frequencyBinCount);
-    this.waveform = new Float32Array(analyser.fftSize);
-    this.leftWave = leftAnalyser ? new Float32Array(leftAnalyser.fftSize) : null;
-    this.rightWave = rightAnalyser ? new Float32Array(rightAnalyser.fftSize) : null;
+    this.frequency = frequency;
+    this.detailFrequency = detailFrequency;
+    this.waveform = waveform;
+    this.leftWave = leftWave;
+    this.rightWave = rightWave;
     this.track = audioTrack;
     this.trueStereo = trueStereo;
     const connectionRevision = ++this.connectionRevision;
@@ -345,9 +394,14 @@ export class AudioEngine {
       requestedProcessing: { ...requestedProcessing },
       connectionReason: 'connected',
     };
-    this.trackEndedHandler = () => { void this.stop('track-ended'); };
-    audioTrack.addEventListener('ended', this.trackEndedHandler, { once: true });
-    this.resetAdaptiveState();
+    try {
+      this.trackEndedHandler = () => { void this.stop('track-ended'); };
+      audioTrack.addEventListener('ended', this.trackEndedHandler, { once: true });
+      this.resetAdaptiveState();
+    } catch {
+      await this.stop('audio-graph-failed');
+      throw new Error('Audio analysis could not start. Try reconnecting.');
+    }
 
     try {
       await context.resume();
