@@ -161,7 +161,7 @@ test('delete removes only a library entry and built-in presets remain outside mu
   assert.deepEqual(loadPromptProfile(storage), active);
   assert.deepEqual(storage.json('fixture.dream-evidence'), { kept: true });
 
-  assert.deepEqual(library.builtIns().map(preset => preset.id), ['neutral-v1', 'baseline-v1']);
+  assert.deepEqual(library.builtIns().map(preset => preset.id), ['neutral-v1', 'neutral-clean-v1', 'baseline-v1']);
   assert.throws(() => library.rename('neutral-v1', 'Changed'), /not found/);
   assert.throws(() => library.delete('baseline-v1'), /not found/);
 });

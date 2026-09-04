@@ -11,7 +11,7 @@
   <iframe id="fixture" class="preflight-frame" sandbox="allow-scripts" aria-hidden="true"></iframe>
   <script type="module">
     import { VisualizerSandbox } from './sandbox.js';
-    import { DreamReliabilityHarness, createSyntheticFrame } from './reliability.js';
+    import { DreamReliabilityHarness, createSyntheticFrame, latestCurrentVisualReport } from './reliability.js';
 
     const iframe = document.getElementById('fixture');
     const sandbox = new VisualizerSandbox(iframe);
@@ -42,10 +42,70 @@
       const timer = setInterval(() => {
         sandbox.sendFrame(createSyntheticFrame(frameIndex++, performance.now() - started, { width: 800, height: 450, dpr: 1 }));
       }, 16);
-      const watchdog = await harness.watchdog({ durationMs: 3800 });
+      const previousReport = latestCurrentVisualReport(preflight);
+      const watchdog = await harness.watchdog({ durationMs: 3800, previousReport });
       clearInterval(timer);
       sandbox.clear();
       return { preflight, watchdog };
+    };
+
+    window.runReopenWatchdogFixture = async html => {
+      const harness = new DreamReliabilityHarness({ sandbox });
+      const viewport = { width: 800, height: 450, dpr: 1 };
+      const reopen = await harness.reopen(html, { viewport });
+      if (!reopen.passed) {
+        sandbox.clear();
+        return { reopen, watchdog: null };
+      }
+      sandbox.setPresentation('promoting');
+      const started = performance.now();
+      let frameIndex = 0;
+      const timer = setInterval(() => {
+        sandbox.sendFrame(createSyntheticFrame(frameIndex++, performance.now() - started, viewport));
+      }, 16);
+      const previousReport = latestCurrentVisualReport(reopen);
+      const watchdog = await harness.watchdog({ durationMs: 3800, previousReport });
+      clearInterval(timer);
+      sandbox.clear();
+      return { reopen, watchdog };
+    };
+
+    window.runPriorVisualLossWatchdogFixture = async () => {
+      const canvas = (informative, renderInformative = false) => ({
+        id: 'canvas-1',
+        elementId: 'scene',
+        coverage: 1,
+        pixel: { sampled: true, informative },
+        activity: { type: 'webgl2', drawCalls: 10, programsLinked: 1, lastActivityAt: 10, preserveDrawingBuffer: false },
+        renderPixel: renderInformative ? { sampled: true, informative: true } : null,
+        renderCaptureRequest: renderInformative ? 1 : 0,
+        renderPixelDrawCalls: renderInformative ? 10 : 0,
+        successfulActivity: true,
+      });
+      const report = (informative, label, renderInformative = false) => ({
+        schema: 'visualizer-probe-v1',
+        label,
+        visual: { visibleProof: true, renderCaptureRequest: 1, canvases: [canvas(informative, renderInformative)], dom: { visible: false } },
+        renderer: { types: ['webgl2'], contextLosses: [], contextFailures: [], shaderFailures: [], programFailures: [] },
+        viz: { consumed: true },
+        runtime: { monitor: {} },
+        logs: { consoleErrors: [] },
+        events: [],
+      });
+      const previousReport = report(false, 'qualification-visible', true);
+      let probes = 0;
+      const stoppedSandbox = {
+        events: [],
+        fatalEvents: () => [],
+        heartbeatAgeMs: () => 0,
+        heartbeatSnapshot: () => ({ sessionId: 'stopped-session', receivedAt: probes, sandboxAtMs: probes, ageMs: 0 }),
+        probe: async label => {
+          probes += 1;
+          return report(false, label);
+        },
+      };
+      const harness = new DreamReliabilityHarness({ sandbox: stoppedSandbox });
+      return harness.watchdog({ durationMs: 0, previousReport });
     };
 
     window.runPauseFixture = async html => {

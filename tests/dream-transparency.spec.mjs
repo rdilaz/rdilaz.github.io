@@ -7,7 +7,11 @@ const MODEL_NAME = 'MoonshotAI: Kimi K3';
 const SENTINEL_KEY = 'sk-or-v1-SENTINEL_BROWSER_SECRET_123456789';
 const validHtml = await readFile(new URL('./fixtures/valid-canvas2d.html', import.meta.url), 'utf8');
 const openWatchdogCrashHtml = await readFile(new URL('./fixtures/open-watchdog-crash.html', import.meta.url), 'utf8');
+const geminiNeutralCrisp1Html = await readFile(new URL('./fixtures/gemini-neutral-crisp-1.html', import.meta.url), 'utf8');
+const geminiNeutralCrisp2Html = await readFile(new URL('./fixtures/gemini-neutral-crisp-2.html', import.meta.url), 'utf8');
 const lateRuntimeCrashHtml = validHtml.replace('</script>', "setTimeout(() => { throw new Error('fixture late runtime crash'); }, 7000);</script>");
+const CRISP_MODEL_ID = 'google/gemini-3.8-flash';
+const CRISP_MODEL_NAME = 'Google: Gemini 3.8 Flash';
 const corsHeaders = {
   'access-control-allow-origin': '*',
   'access-control-expose-headers': 'x-request-id, x-generation-id',
@@ -26,12 +30,20 @@ const catalog = {
     created: 1788200000,
   }],
 };
+const crispCatalog = {
+  data: [{
+    ...catalog.data[0],
+    id: CRISP_MODEL_ID,
+    name: CRISP_MODEL_NAME,
+    pricing: { prompt: '0', completion: '0', request: '0' },
+  }],
+};
 
-async function routeOpenRouter(page, completion) {
+async function routeOpenRouter(page, completion, catalogFixture = catalog) {
   await page.route('https://openrouter.ai/**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/v1/models') {
-      await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(catalog) });
+      await route.fulfill({ status: 200, headers: corsHeaders, body: JSON.stringify(catalogFixture) });
       return;
     }
     if (url.pathname === '/api/v1/key') {
@@ -46,7 +58,7 @@ async function routeOpenRouter(page, completion) {
   });
 }
 
-async function seedConnectedModel(page) {
+async function seedConnectedModel(page, modelId = MODEL_ID) {
   await page.addInitScript(({ modelId, key }) => {
     localStorage.setItem('ai-visualizer.selected-model', modelId);
     localStorage.setItem('ai-visualizer.spend.settings.v1', JSON.stringify({
@@ -57,15 +69,15 @@ async function seedConnectedModel(page) {
       confirmExpensive: false,
     }));
     sessionStorage.setItem('ai-visualizer.openrouter.key', key);
-  }, { modelId: MODEL_ID, key: SENTINEL_KEY });
+  }, { modelId, key: SENTINEL_KEY });
 }
 
-function providerPayload({ id, html, reasoning, reasoningTokens = 0, cost = 0.123 }) {
+function providerPayload({ id, html, reasoning, reasoningTokens = 0, cost = 0.123, model = MODEL_ID }) {
   const message = { role: 'assistant', content: html };
   if (reasoning !== undefined) message.reasoning = reasoning;
   return {
     id,
-    model: MODEL_ID,
+    model,
     choices: [{ index: 0, message, finish_reason: 'stop' }],
     usage: {
       prompt_tokens: 1337,
@@ -76,6 +88,51 @@ function providerPayload({ id, html, reasoning, reasoningTokens = 0, cost = 0.12
       cost_details: { upstream_inference_cost: cost },
     },
   };
+}
+
+async function activeScreenshotSignal(page) {
+  const viewport = page.viewportSize();
+  const image = await page.screenshot({
+    clip: {
+      x: Math.round(viewport.width * 0.25),
+      y: Math.round(viewport.height * 0.2),
+      width: Math.round(viewport.width * 0.5),
+      height: Math.round(viewport.height * 0.5),
+    },
+  });
+  return page.evaluate(async base64 => {
+    const response = await fetch(`data:image/png;base64,${base64}`);
+    const bitmap = await createImageBitmap(await response.blob());
+    const canvas = document.createElement('canvas');
+    canvas.width = 32;
+    canvas.height = 18;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const buckets = new Set();
+    let nonBlack = 0;
+    let sum = 0;
+    let sumSq = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const luminance = 0.2126 * pixels[index] + 0.7152 * pixels[index + 1] + 0.0722 * pixels[index + 2];
+      if (luminance > 2 && pixels[index + 3] > 8) nonBlack += 1;
+      sum += luminance;
+      sumSq += luminance * luminance;
+      buckets.add(`${pixels[index] >> 5}:${pixels[index + 1] >> 5}:${pixels[index + 2] >> 5}`);
+    }
+    const count = pixels.length / 4;
+    const mean = sum / count;
+    return {
+      uniqueBuckets: buckets.size,
+      nonBlackRatio: nonBlack / count,
+      luminanceVariance: Math.max(0, sumSq / count - mean * mean),
+    };
+  }, image.toString('base64'));
+}
+
+async function wakeHostUi(page, x = 280, y = 260) {
+  await page.mouse.move(x, y);
+  await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
 }
 
 test('normal mode keeps compact, explicit LIVE and NEXT truth', async ({ page }) => {
@@ -481,6 +538,69 @@ test('mocked generation captures the final spend-guard request and waits for exp
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
 });
+
+for (const [fixtureId, html] of [
+  ['9e0fba78', geminiNeutralCrisp1Html],
+  ['a58ad4aa', geminiNeutralCrisp2Html],
+]) {
+  test(`saved Gemini Neutral Crisp ${fixtureId} survives Ready, Open, LIVE, reload, and reopen`, async ({ page }) => {
+    test.setTimeout(90000);
+    let completionRequests = 0;
+    await seedConnectedModel(page, CRISP_MODEL_ID);
+    await routeOpenRouter(page, async route => {
+      completionRequests += 1;
+      const payload = providerPayload({
+        id: `gen-crisp-${fixtureId}`,
+        html,
+        cost: 0,
+        model: CRISP_MODEL_ID,
+      });
+      await route.fulfill({
+        status: 200,
+        headers: { ...corsHeaders, ...openRouterSseHeaders(payload, `req-crisp-${fixtureId}`) },
+        body: openRouterSseBody(payload),
+      });
+    }, crispCatalog);
+
+    await page.goto('/visualizer/index.html?dev=1');
+    await expect(page.locator('#selectedModelName')).toHaveText(CRISP_MODEL_NAME);
+    await page.locator('#dreamButton').click();
+    await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
+    await wakeHostUi(page);
+    const openButton = page.locator('#dreamJobOpen');
+    await expect(openButton).toBeVisible();
+    await expect(openButton).toBeEnabled();
+    await openButton.click();
+    await expect(page.locator('#liveIdentityName')).toContainText(/Gemini 3\.8 Flash.*#[a-f0-9]{8}/i, { timeout: 35000 });
+    const firstLiveLabel = await page.locator('#liveIdentityName').textContent();
+    const firstActiveSignal = await activeScreenshotSignal(page);
+    expect(firstActiveSignal.uniqueBuckets).toBeGreaterThan(4);
+    expect(firstActiveSignal.nonBlackRatio).toBeGreaterThan(0.01);
+    expect(firstActiveSignal.luminanceVariance).toBeGreaterThan(1);
+    expect(completionRequests).toBe(1);
+
+    await page.reload();
+    await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
+    await wakeHostUi(page, 320, 240);
+    const switcherButton = page.locator('#switcherButton');
+    await expect(switcherButton).toBeVisible();
+    await expect(switcherButton).toBeEnabled();
+    await switcherButton.click();
+    await wakeHostUi(page, 300, 220);
+    const libraryButton = page.locator('#libraryButton');
+    await expect(libraryButton).toBeVisible();
+    await expect(libraryButton).toBeEnabled();
+    await libraryButton.click();
+    const savedCard = page.locator('.library-item').filter({ hasText: CRISP_MODEL_NAME }).first();
+    await savedCard.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(page.locator('#liveIdentityName')).toHaveText(firstLiveLabel || '', { timeout: 35000 });
+    const reopenedActiveSignal = await activeScreenshotSignal(page);
+    expect(reopenedActiveSignal.uniqueBuckets).toBeGreaterThan(4);
+    expect(reopenedActiveSignal.nonBlackRatio).toBeGreaterThan(0.01);
+    expect(reopenedActiveSignal.luminanceVariance).toBeGreaterThan(1);
+    expect(completionRequests).toBe(1);
+  });
+}
 
 test('mocked repair preserves both attempts and never sends attempt three', async ({ page }) => {
   test.setTimeout(60000);

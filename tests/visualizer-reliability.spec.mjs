@@ -1,7 +1,17 @@
 import { chromium, test, expect } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { currentVisualSignal, latestCurrentVisualReport } from '../public/visualizer/reliability.js';
 
 const fixture = name => readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+const crispPromotionTraces = JSON.parse(await fixture('gemini-neutral-crisp-promotion-traces.json'));
+const crispHtmlBlobHashes = new Set(await Promise.all([
+  'gemini-neutral-crisp-1.html',
+  'gemini-neutral-crisp-2.html',
+].map(async name => {
+  const content = await readFile(new URL(`./fixtures/${name}`, import.meta.url));
+  return createHash('sha1').update(`blob ${content.byteLength}\0`).update(content).digest('hex');
+})));
 
 async function run(page, html, method = 'runReliabilityFixture') {
   await page.goto('/visualizer/reliability-test.html');
@@ -73,6 +83,84 @@ test('a delayed post-launch crash is caught by the rollback watchdog', async ({ 
   expect(result.watchdog.passed).toBe(false);
   expect(['RUNTIME_ERROR', 'UNHANDLED_REJECTION']).toContain(result.watchdog.failure.code);
 });
+
+test('fresh pre-compositing proof does not hide continuously invalid WebGL draws', async ({ page }) => {
+  const result = await run(page, await fixture('invalid-draw-after-visible-webgl.html'), 'runWatchdogFixture');
+  expect(result.preflight.passed).toBe(true);
+  expect(result.watchdog.passed).toBe(false);
+  expect(result.watchdog.failure.code).toBe('NO_VISIBLE_OUTPUT');
+  const confirmation = result.watchdog.stages[0].confirmation;
+  const canvas = confirmation.visual.canvases[0];
+  expect(canvas.activity.drawCalls).toBeGreaterThan(0);
+  expect(canvas.renderPixel.informative).toBe(false);
+});
+
+test('visible qualification still catches output lost before the watchdog initial probe', async ({ page }) => {
+  const result = await run(page, '', 'runPriorVisualLossWatchdogFixture');
+  expect(result.passed).toBe(false);
+  expect(result.failure.code).toBe('NO_VISIBLE_OUTPUT');
+  expect(result.failure.detail.qualification.canvases[0].pixel.informative).toBe(false);
+  expect(result.failure.detail.qualification.canvases[0].renderPixel.informative).toBe(true);
+  expect(result.failure.detail.before.canvases[0].pixel.informative).toBe(false);
+});
+
+test('reduced saved Crisp traces treat post-compositing readback as inconclusive, not failed', () => {
+  const canvas = (drawCalls, lastActivityAt, informative, {
+    preserveDrawingBuffer = false,
+    renderInformative = true,
+    renderCaptureRequest = 2,
+  } = {}) => ({
+    id: 'canvas-1',
+    elementId: 'gl-canvas',
+    coverage: 1,
+    pixel: { sampled: true, informative },
+    activity: { type: 'webgl2', drawCalls, programsLinked: 2, lastActivityAt, preserveDrawingBuffer },
+    renderPixel: { sampled: true, informative: renderInformative },
+    renderCaptureRequest,
+    renderPixelDrawCalls: drawCalls,
+    successfulActivity: true,
+  });
+  const report = dominant => ({
+    renderer: { contextLosses: [], shaderFailures: [], programFailures: [] },
+    visual: { renderCaptureRequest: dominant.renderCaptureRequest, canvases: [dominant], dom: { visible: false } },
+  });
+  for (const evidence of crispPromotionTraces.cases) {
+    expect(crispHtmlBlobHashes.has(evidence.htmlGitBlob), evidence.generationId).toBe(true);
+    const before = report(canvas(evidence.before.drawCalls, evidence.before.lastActivityAt, evidence.before.pixelInformative, { renderCaptureRequest: 1 }));
+    const composited = report(canvas(evidence.after.drawCalls, evidence.after.lastActivityAt, evidence.after.pixelInformative));
+    expect(currentVisualSignal(before), evidence.generationId).toBe(true);
+    expect(currentVisualSignal(composited, before), evidence.generationId).toBe(true);
+    expect(currentVisualSignal(report(canvas(evidence.before.drawCalls, evidence.before.lastActivityAt, false)), before), evidence.generationId).toBe(false);
+    expect(currentVisualSignal(report(canvas(evidence.after.drawCalls, evidence.after.lastActivityAt, false, { preserveDrawingBuffer: true })), before), evidence.generationId).toBe(false);
+    expect(currentVisualSignal(report(canvas(evidence.after.drawCalls, evidence.after.lastActivityAt, false, { renderInformative: false })), before), evidence.generationId).toBe(false);
+    expect(currentVisualSignal({ ...composited, renderer: { ...composited.renderer, contextLosses: [{ restored: false }] } }, before), evidence.generationId).toBe(false);
+    expect(latestCurrentVisualReport({ stages: [{ report: before }, { report: report(canvas(evidence.after.drawCalls, evidence.after.lastActivityAt, false, { renderInformative: false })) }] })).toBe(before);
+  }
+});
+
+for (const fixtureName of ['gemini-neutral-crisp-1.html', 'gemini-neutral-crisp-2.html']) {
+  test(`saved ${fixtureName} remains viable through promotion watchdog`, async ({ page }) => {
+    const result = await run(page, await fixture(fixtureName), 'runWatchdogFixture');
+    expect(result.preflight.passed).toBe(true);
+    const stage = result.watchdog.stages[0];
+    const before = stage.before.visual.canvases.find(canvas => canvas.activity.type === 'webgl2');
+    const after = stage.after.visual.canvases.find(canvas => canvas.id === before.id);
+    expect(after.activity.drawCalls).toBeGreaterThan(before.activity.drawCalls);
+    expect(after.activity.programsLinked).toBeGreaterThan(0);
+    expect(after.activity.preserveDrawingBuffer).toBe(false);
+    expect(after.renderPixel.informative).toBe(true);
+    expect(after.renderCaptureRequest).toBe(stage.after.visual.renderCaptureRequest);
+    expect(stage.after.renderer.contextLosses).toEqual([]);
+    expect(result.watchdog.passed).toBe(true);
+  });
+
+  test(`saved ${fixtureName} reopens and remains viable through promotion watchdog`, async ({ page }) => {
+    const result = await run(page, await fixture(fixtureName), 'runReopenWatchdogFixture');
+    expect(result.reopen.passed).toBe(true);
+    expect(result.reopen.summary.quickReopen).toBe(true);
+    expect(result.watchdog.passed).toBe(true);
+  });
+}
 
 test('trusted pause suspends generated RAF and host frames without reloading', async ({ page }) => {
   const result = await run(page, await fixture('pause-observable.html'), 'runPauseFixture');

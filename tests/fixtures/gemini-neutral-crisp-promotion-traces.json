@@ -1,0 +1,19 @@
+{
+  "schema": "visualizer-operator-regression-fixture-v1",
+  "cases": [
+    {
+      "generationId": "9e0fba78-6551-418c-a9fc-25e0284b2a9d",
+      "htmlGitBlob": "2d2a1dc91a9545c9f8a1e83118e8861034c97e43",
+      "before": { "drawCalls": 1120, "lastActivityAt": 803, "pixelInformative": true },
+      "after": { "drawCalls": 8750, "lastActivityAt": 4438, "pixelInformative": false },
+      "confirmation": { "drawCalls": 9730, "lastActivityAt": 4902, "pixelInformative": false }
+    },
+    {
+      "generationId": "a58ad4aa-49fe-4adc-8448-109d8a95992c",
+      "htmlGitBlob": "49f15245ba8ab6355431aa78db42ca921b45f977",
+      "before": { "drawCalls": 2652, "lastActivityAt": 937, "pixelInformative": true },
+      "after": { "drawCalls": 14118, "lastActivityAt": 4601, "pixelInformative": false },
+      "confirmation": { "drawCalls": 15210, "lastActivityAt": 5067, "pixelInformative": false }
+    }
+  ]
+}
