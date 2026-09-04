@@ -33,6 +33,14 @@ import {
 import { loadFeaturedDreams, createFeaturedExportPackage } from './featured-dreams.js';
 import { buildDreamSwitcherGroups, localDreamKey, mountDreamSwitcher } from './dream-switcher.js';
 import {
+  dreamDisplayTitle,
+  dreamPromptLabel,
+  editableDreamDisplayTitle,
+  htmlDocumentTitle,
+} from './dream-metadata.js';
+import { createDiagnosticDetailsState } from './diagnostic-details-state.js';
+import { readPromptLibraryEntries } from './prompt-library.js';
+import {
   appendDreamAttempt,
   closeDreamAttempt,
   createDreamTraceFixtures,
@@ -242,6 +250,7 @@ const sensitivityController = createAudioSensitivityController({ storage: localS
 const renderQualityController = createRenderQualityController({ storage: localSettingsStorage });
 const modelFitEvidenceStore = createModelFitEvidenceStore({ storage: localSettingsStorage });
 const fixtureDiagnostics = new Map();
+const rawDiagnosticDetailsState = createDiagnosticDetailsState();
 let dreamSwitcher = null;
 let featuredDreams = [];
 const featuredLoadFailures = [];
@@ -303,6 +312,10 @@ function restoreBuiltInIdentity() {
   return renderIdentity(identityController.restoreBuiltIn());
 }
 
+function updateLiveDisplayName(sourceId, displayName) {
+  return renderIdentity(identityController.setLiveDisplayName(sourceId, displayName));
+}
+
 function liveIdentityForGeneration(generation, { kind = 'generated', diagnosticId = '' } = {}) {
   return {
     identity: identityController.snapshot(),
@@ -314,7 +327,7 @@ function liveIdentityForGeneration(generation, { kind = 'generated', diagnosticI
     resolvedModel: generation.resolvedModel || '',
     generationId: generation.id,
     artifactId: generation.artifactId || '',
-    title: generation.title || '',
+    title: dreamDisplayTitle(generation),
     traceId: generation.traceId || generation.diagnosticId || diagnosticId,
     diagnosticId: diagnosticId || generation.diagnosticId || '',
   };
@@ -545,7 +558,7 @@ function beginOpeningStatus(generation) {
   }
   openingStatusTimer = setTimeout(() => {
     if (revision !== openingStatusRevision || !reopening || !els.favoriteOpeningStatus) return;
-    const name = generation?.title || generation?.modelName || generation?.modelId || 'Dream';
+    const name = dreamDisplayTitle(generation);
     els.favoriteOpeningStatus.textContent = `Opening · ${name}`;
     els.favoriteOpeningStatus.hidden = false;
   }, 150);
@@ -1015,6 +1028,14 @@ async function findTraceRecord(id) {
   return (await listDiagnosticRecords()).find(record => record.trace?.id === id) || null;
 }
 
+function selectDiagnosticRecord(id) {
+  const recordId = String(id || '');
+  rawDiagnosticDetailsState.select(recordId);
+  els.diagnosticsList?.querySelectorAll('details[open]').forEach(details => {
+    if (details.closest('[data-diagnostic-id]')?.dataset.diagnosticId !== recordId) details.open = false;
+  });
+}
+
 function attemptFor(trace, attemptNumber) {
   const attempts = trace?.attempts || [];
   if (!attempts.length) return null;
@@ -1025,6 +1046,7 @@ function attemptFor(trace, attemptNumber) {
 async function openTraceById(id) {
   const record = await findTraceRecord(id);
   if (!record) throw new Error('That local Dream Trace is no longer available.');
+  selectDiagnosticRecord(record.id);
   const trace = traceForDiagnostic(record);
   dreamTraceViewer.open(trace, { diagnostic: record });
   return trace;
@@ -1361,6 +1383,15 @@ function modelFitVersions(promptProfile = loadPromptProfile()) {
   };
 }
 
+function promptLibraryEntryIdFor(promptProfile) {
+  const matches = readPromptLibraryEntries(localSettingsStorage).filter(entry => (
+    entry.profileId === promptProfile?.id
+    && entry.briefHash === promptProfile?.briefHash
+    && entry.name === promptProfile?.name
+  ));
+  return matches.length === 1 ? matches[0].entryId : '';
+}
+
 function publishModelFitEvidence(modelId) {
   window.dispatchEvent(new CustomEvent('visualizer:model-fit-evidence-changed', {
     detail: { modelId },
@@ -1596,6 +1627,7 @@ async function dream() {
           promptProfileId: promptProfile.id,
           promptProfileName: promptProfile.name,
           promptProfile: sanitizeTraceValue(promptProfile),
+          promptLibraryEntryId: promptLibraryEntryIdFor(promptProfile),
           reasoningSelection: sanitizeTraceValue(result.reasoningSelection || reasoningSelection),
           generationEnvelopeVersion: GENERATION_ENVELOPE_VERSION,
           modelFitConfiguration: sanitizeTraceValue(generationConfiguration),
@@ -1609,6 +1641,7 @@ async function dream() {
           attempt: result.attempt,
           usage: result.usage,
           html: result.html,
+          artifactTitle: htmlDocumentTitle(result.html),
           diagnosticId: diagnostic.id,
           traceId: diagnostic.trace.id,
           healthStatus: 'ready',
@@ -1638,7 +1671,12 @@ async function dream() {
         await persistDiagnostic(diagnostic);
         recordDiagnosticModelFit(diagnostic, generationConfiguration, { readySuccess: true });
         dreamJobController.transition(job.id, DREAM_JOB_PHASES.READY, {
-          artifact: { generationId: generation.id, favorite: false },
+          artifact: {
+            generationId: generation.id,
+            favorite: false,
+            displayTitle: dreamDisplayTitle(generation),
+            promptLabel: dreamPromptLabel(generation),
+          },
           detail: 'Ready whenever you are. Open it now or find it later in Recent.',
           cancellable: false,
         });
@@ -1846,8 +1884,15 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     renderFavoriteControl();
     els.topStatus.textContent = 'Playing';
     if (jobId) {
+      const job = dreamJobController.snapshot();
       dreamJobController.transition(jobId, DREAM_JOB_PHASES.LIVE, {
-        artifact: { generationId: generation.id, favorite: Boolean(currentGeneration?.favorite) },
+        artifact: {
+          ...job.artifact,
+          generationId: generation.id,
+          favorite: Boolean(currentGeneration?.favorite),
+          displayTitle: dreamDisplayTitle(currentGeneration || generation),
+          promptLabel: dreamPromptLabel(currentGeneration || generation),
+        },
         detail: 'This Dream is now LIVE.',
         cancellable: false,
       });
@@ -1954,7 +1999,7 @@ async function toggleSwitcherFavorite(item) {
   const job = dreamJobController.snapshot();
   if (job.artifact?.generationId === item.id) {
     dreamJobController.transition(job.id, job.phase, {
-      artifact: { generationId: item.id, favorite: Boolean(updated.favorite) },
+      artifact: { ...job.artifact, generationId: item.id, favorite: Boolean(updated.favorite) },
     });
   }
   await renderLibrary();
@@ -1967,19 +2012,24 @@ async function refreshDreamSwitcher(generations = null) {
     featured: featuredDreams,
     generations: localDreams,
     activeKey: currentDreamKey,
+    savedPrompts: readPromptLibraryEntries(localSettingsStorage),
   }));
 }
 
 async function renderLibrary() {
   const all = await store.list();
   const list = favoritesOnly ? all.filter(generation => generation.favorite) : all;
+  const savedPrompts = readPromptLibraryEntries(localSettingsStorage);
   const battleEligible = all.filter(generation => generation.healthStatus !== 'failed-on-device');
   els.battleButton.disabled = battleEligible.length < 2;
   const fragment = document.createDocumentFragment();
 
   list.forEach(generation => {
     const article = document.createElement('article');
+    article.dataset.generationId = generation.id;
     const usage = generation.usage || {};
+    const displayTitle = dreamDisplayTitle(generation);
+    const promptLabel = dreamPromptLabel(generation, { savedPrompts });
     const healthLabel = generation.healthStatus === 'verified'
       ? 'opened safely'
       : generation.healthStatus === 'failed-on-device'
@@ -1992,7 +2042,7 @@ async function renderLibrary() {
     article.className = 'library-item';
     const promptVersion = generation.promptVersion || 'Not captured by this app version.';
     const audioApiVersion = generation.audioApiVersion || 'Not captured by this app version.';
-    article.innerHTML = `<div class="library-item__top"><div style="min-width:0"><div class="library-item__name">${escapeHtml(generation.modelName || generation.modelId)}</div><div class="library-item__time">${humanTime(generation.createdAt)} · ${generation.favorite ? '♥ favorite' : 'saved dream'} · ${escapeHtml(healthLabel)}</div></div><span class="eyebrow">${generation.battleWins || 0}W</span></div><div class="library-item__actions"><button data-action="open">Open</button><button data-action="favorite">${generation.favorite ? '♥' : '♡'}</button><button data-action="delete">Delete</button>${devMode && (generation.traceId || generation.diagnosticId || generation.lastDiagnosticId) ? '<button data-action="diagnostics">Trace</button>' : ''}</div><details><summary>Details</summary><p><code>${escapeHtml(generation.modelId)}</code><br>${escapeHtml(generation.resolvedModel || '')}<br>${escapeHtml(promptVersion)} · ${escapeHtml(audioApiVersion)}<br>${Math.round((generation.html?.length || 0) / 1024)} KB · ${generation.battleWins || 0} wins / ${generation.battleLosses || 0} losses<br>${usage.prompt_tokens || usage.promptTokens || '—'} input tokens · ${usage.completion_tokens || usage.completionTokens || '—'} output tokens${generation.healthSummary?.rendererTypes?.length ? `<br>Renderer: ${escapeHtml(generation.healthSummary.rendererTypes.join(', '))} · ~${generation.healthSummary.approximateFps || '—'} FPS monitor` : ''}${generation.diagnosticId ? `<br>Diagnostic: <code>${escapeHtml(shortDiagnosticId(generation.diagnosticId))}</code>` : ''}</p></details>`;
+    article.innerHTML = `<div class="library-item__top"><div style="min-width:0"><div class="library-item__name">${escapeHtml(displayTitle)}</div><div class="library-item__time">${escapeHtml(generation.modelName || generation.modelId)} · ${humanTime(generation.createdAt)} · ${generation.favorite ? '♥ favorite' : 'saved dream'} · ${escapeHtml(healthLabel)}</div></div><span class="eyebrow">${generation.battleWins || 0}W</span></div><div class="library-item__actions"><button data-action="open">Open</button><button data-action="favorite">${generation.favorite ? '♥' : '♡'}</button><button data-action="rename">Rename</button><button data-action="delete">Delete</button>${devMode && (generation.traceId || generation.diagnosticId || generation.lastDiagnosticId) ? '<button data-action="diagnostics">Trace</button>' : ''}</div><details><summary>Details</summary><p><code>${escapeHtml(generation.modelId)}</code><br>${escapeHtml(generation.resolvedModel || '')}<br>Prompt: ${escapeHtml(promptLabel)} · ${escapeHtml(generation.promptProfileId || 'not captured')}<br>${escapeHtml(promptVersion)} · ${escapeHtml(audioApiVersion)}<br>${Math.round((generation.html?.length || 0) / 1024)} KB · ${generation.battleWins || 0} wins / ${generation.battleLosses || 0} losses<br>${usage.prompt_tokens || usage.promptTokens || '—'} input tokens · ${usage.completion_tokens || usage.completionTokens || '—'} output tokens${generation.healthSummary?.rendererTypes?.length ? `<br>Renderer: ${escapeHtml(generation.healthSummary.rendererTypes.join(', '))} · ~${generation.healthSummary.approximateFps || '—'} FPS monitor` : ''}${generation.diagnosticId ? `<br>Diagnostic: <code>${escapeHtml(shortDiagnosticId(generation.diagnosticId))}</code>` : ''}</p></details>`;
 
     article.querySelector('[data-action="open"]').addEventListener('click', () => openGeneration(generation));
     article.querySelector('[data-action="favorite"]').addEventListener('click', async () => {
@@ -2002,6 +2052,35 @@ async function renderLibrary() {
         renderFavoriteControl();
       }
       await renderLibrary();
+    });
+    article.querySelector('[data-action="rename"]').addEventListener('click', async () => {
+      const requested = window.prompt('Dream title. Leave blank to use its original title.', generation.displayTitle || displayTitle);
+      if (requested === null) return;
+      try {
+        const nextDisplayTitle = editableDreamDisplayTitle(requested);
+        const updated = await store.setDisplayTitle(generation.id, nextDisplayTitle);
+        if (!updated) return;
+        const resolvedTitle = dreamDisplayTitle(updated);
+        if (currentGeneration?.id === generation.id) {
+          currentGeneration = updated;
+          updateLiveDisplayName(updated.id, resolvedTitle);
+        }
+        if (fallbackGeneration?.id === generation.id) fallbackGeneration = updated;
+        const job = dreamJobController.snapshot();
+        if (job.artifact?.generationId === generation.id) {
+          dreamJobController.transition(job.id, job.phase, {
+            artifact: {
+              ...job.artifact,
+              displayTitle: resolvedTitle,
+              promptLabel: dreamPromptLabel(updated),
+            },
+          });
+        }
+        showToast(nextDisplayTitle ? `Renamed to ${resolvedTitle}.` : `Using original title: ${resolvedTitle}.`);
+        await renderLibrary();
+      } catch (error) {
+        showToast(error?.message || 'That Dream could not be renamed.');
+      }
     });
     article.querySelector('[data-action="delete"]').addEventListener('click', async () => {
       if (generating || recovering || reopening || deletingGeneration || promotion) {
@@ -2164,7 +2243,7 @@ async function toggleReadyJobFavorite(jobSnapshot) {
   const next = await store.toggleFavorite(generationId);
   if (!next) return;
   dreamJobController.transition(jobSnapshot.id, jobSnapshot.phase, {
-    artifact: { generationId, favorite: Boolean(next.favorite) },
+    artifact: { ...jobSnapshot.artifact, generationId, favorite: Boolean(next.favorite) },
   });
   showToast(next.favorite ? 'Saved to favorites.' : 'Removed from favorites.');
   await renderLibrary();
@@ -2343,7 +2422,7 @@ async function voteBattle(side) {
   const winner = battle[side];
   const loser = battle[side === 'a' ? 'b' : 'a'];
   await store.recordBattle(winner.id, loser.id);
-  showToast(`${winner.modelName || winner.modelId} wins this round.`);
+  showToast(`${dreamDisplayTitle(winner)} wins this round.`);
   await renderLibrary();
   await startBattle();
 }
@@ -2488,6 +2567,8 @@ function runtimeSummary() {
 async function renderDiagnostics(focusId = '') {
   if (!devMode || !els.diagnosticsList) return;
   const records = await listDiagnosticRecords(40);
+  if (focusId) rawDiagnosticDetailsState.select(focusId);
+  rawDiagnosticDetailsState.reconcile(records.map(record => record.id));
   const failed = records.filter(record => record.status === 'failed' || record.status === 'rolled-back').length;
   els.diagnosticsSummary.textContent = `${records.length} local records · ${failed} failed/rolled back · active heartbeat ${Math.round(activeSlot.sandbox.heartbeatAgeMs())}ms ago`;
   els.diagnosticsLive.textContent = liveDiagnosticEvents.length
@@ -2498,6 +2579,7 @@ async function renderDiagnostics(focusId = '') {
   records.forEach(record => {
     const article = document.createElement('article');
     article.className = 'diagnostic-item';
+    article.dataset.diagnosticId = record.id;
     if (record.id === focusId) article.classList.add('is-focused');
     const latestAttempt = record.attempts?.at(-1);
     const reliability = latestAttempt?.reliability || record.reliability;
@@ -2506,6 +2588,7 @@ async function renderDiagnostics(focusId = '') {
       || 'unknown';
     article.innerHTML = `<div class="diagnostic-item__top"><div><strong>${escapeHtml(record.modelName || record.modelId)}</strong><small>${escapeHtml(diagnosticStatusLabel(record))} · ${humanTime(record.createdAt)} · <code>${escapeHtml(shortDiagnosticId(record.id))}</code></small></div><span class="diagnostic-item__code">${escapeHtml(record.failureCode || 'OK')}</span></div><p>${escapeHtml(record.failureMessage || `Renderer ${renderer} · ${record.outputBytes ? `${Math.round(record.outputBytes / 1024)} KB` : 'no output yet'}`)}</p><div class="diagnostic-item__actions"><button data-action="open-trace">Open Trace</button><button data-action="copy-json">Copy JSON</button><button data-action="copy-html" ${record.html ? '' : 'disabled'}>Copy HTML</button><button data-action="retest-html" ${record.html ? '' : 'disabled'}>Retest</button><button data-action="delete">Delete</button></div><details><summary>Raw diagnostic JSON</summary></details>`;
     article.querySelector('[data-action="open-trace"]').addEventListener('click', () => {
+      selectDiagnosticRecord(record.id);
       dreamTraceViewer.open(traceForDiagnostic(record), { diagnostic: record });
     });
     article.querySelector('[data-action="copy-json"]').addEventListener('click', async () => {
@@ -2523,16 +2606,32 @@ async function renderDiagnostics(focusId = '') {
     article.querySelector('[data-action="delete"]').addEventListener('click', async () => {
       fixtureDiagnostics.delete(record.id);
       volatileDiagnostics.delete(record.id);
+      rawDiagnosticDetailsState.close(record.id);
       await diagnosticStore.remove(record.id);
       await renderDiagnostics();
     });
     const rawDetails = article.querySelector('details');
-    rawDetails.addEventListener('toggle', () => {
-      if (!rawDetails.open || rawDetails.querySelector('pre')) return;
+    const populateRawDetails = () => {
+      if (rawDetails.querySelector('pre')) return;
       const pre = document.createElement('pre');
       pre.textContent = JSON.stringify(diagnosticForExport(record, { includeHtml: false }), null, 2);
       rawDetails.appendChild(pre);
+    };
+    rawDetails.addEventListener('toggle', () => {
+      if (!rawDetails.open) {
+        rawDiagnosticDetailsState.close(record.id);
+        return;
+      }
+      rawDiagnosticDetailsState.open(record.id);
+      els.diagnosticsList.querySelectorAll('details[open]').forEach(details => {
+        if (details !== rawDetails) details.open = false;
+      });
+      populateRawDetails();
     });
+    if (rawDiagnosticDetailsState.isOpen(record.id)) {
+      rawDetails.open = true;
+      populateRawDetails();
+    }
     fragment.appendChild(article);
   });
   els.diagnosticsList.replaceChildren(fragment);
@@ -3150,6 +3249,7 @@ function wireEvents() {
   els.clearDiagnostics?.addEventListener('click', async () => {
     if (!confirm('Clear all local Visualizer diagnostics? Saved Dreams are not deleted.')) return;
     dreamTraceViewer.close();
+    rawDiagnosticDetailsState.close();
     fixtureDiagnostics.clear();
     volatileDiagnostics.clear();
     await diagnosticStore.clear();

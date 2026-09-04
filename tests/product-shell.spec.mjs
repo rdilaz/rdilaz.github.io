@@ -76,8 +76,23 @@ function streamedCompletion(html, requestId = '') {
   };
 }
 
-async function seedReadyDream(page, html, { id = 'saved-while-working', modelName = 'Saved While Working', createdAt = Date.now() - 1000 } = {}) {
-  await page.evaluate(async ({ visualizerHtml, generationId, generationModelName, generationCreatedAt }) => {
+async function seedReadyDream(page, html, {
+  id = 'saved-while-working',
+  modelName = 'Saved While Working',
+  createdAt = Date.now() - 1000,
+  artifactTitle = '',
+  promptProfileId = 'neutral-v1',
+  promptProfileName = 'Neutral blank canvas',
+} = {}) {
+  await page.evaluate(async ({
+    visualizerHtml,
+    generationId,
+    generationModelName,
+    generationCreatedAt,
+    generationArtifactTitle,
+    generationPromptProfileId,
+    generationPromptProfileName,
+  }) => {
     const request = indexedDB.open('ai-visualizer-v0', 2);
     const db = await new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
@@ -94,11 +109,20 @@ async function seedReadyDream(page, html, { id = 'saved-while-working', modelNam
       providerId: 'openrouter',
       resolvedModel: 'fixture/saved',
       promptVersion: 'visualizer-prompt-v2',
+      promptProfileId: generationPromptProfileId,
+      promptProfileName: generationPromptProfileName,
+      promptProfile: {
+        id: generationPromptProfileId,
+        name: generationPromptProfileName,
+        briefHash: generationPromptProfileId.replace(/^custom-/, '') || 'fixture-prompt-hash',
+      },
       audioApiVersion: 'visualizer-audio-v1',
       createdAt: generationCreatedAt,
       readyAt: generationCreatedAt,
       favorite: false,
       html: visualizerHtml,
+      artifactTitle: generationArtifactTitle,
+      traceId: `trace-${generationId}`,
       healthStatus: 'ready',
       openStatus: 'ready-to-open',
       preflightEvidence: { passed: true, schema: 'dream-reliability-v1' },
@@ -120,7 +144,31 @@ async function seedReadyDream(page, html, { id = 'saved-while-working', modelNam
       transaction.onabort = () => reject(transaction.error);
     });
     db.close();
-  }, { visualizerHtml: html, generationId: id, generationModelName: modelName, generationCreatedAt: createdAt });
+  }, {
+    visualizerHtml: html,
+    generationId: id,
+    generationModelName: modelName,
+    generationCreatedAt: createdAt,
+    generationArtifactTitle: artifactTitle,
+    generationPromptProfileId: promptProfileId,
+    generationPromptProfileName: promptProfileName,
+  });
+}
+
+async function storedGeneration(page, id) {
+  return page.evaluate(generationId => new Promise((resolve, reject) => {
+    const request = indexedDB.open('ai-visualizer-v0', 2);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const get = db.transaction('generations', 'readonly').objectStore('generations').get(generationId);
+      get.onerror = () => reject(get.error);
+      get.onsuccess = () => {
+        db.close();
+        resolve(get.result);
+      };
+    };
+  }), id);
 }
 
 test('first visit is useful and trusted visual pause preserves LIVE and iframe state', async ({ page }) => {
@@ -160,6 +208,8 @@ test('first visit is useful and trusted visual pause preserves LIVE and iframe s
   await expect(page.locator('[data-switcher-group="recent"] h3')).toHaveText('Recent');
   await expect(page.getByRole('button', { name: /Current Dream: Calibration Bloom/ })).toHaveAttribute('aria-current', 'true');
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Klangfiguren');
+  await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Nexus Beam');
+  await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Prompt: Neutral Crisp V1');
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Calibration Bloom');
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Host-authored');
   await page.locator('#dreamSwitcherClose').click();
@@ -216,6 +266,7 @@ test('390x844 keeps the canvas, product controls, switcher and Prompt usable wit
   expect(switcherBounds.x).toBeGreaterThanOrEqual(0);
   expect(switcherBounds.x + switcherBounds.width).toBeLessThanOrEqual(390);
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Klangfiguren');
+  await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Nexus Beam');
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Calibration Bloom');
   await page.locator('#dreamSwitcherPanel').press('Escape');
   await expect(page.locator('#dreamSwitcherPanel')).toBeHidden();
@@ -226,6 +277,55 @@ test('390x844 keeps the canvas, product controls, switcher and Prompt usable wit
   await expect(page.locator('#promptLabEditor')).toBeVisible();
   await page.locator('.prompt-lab__close').click();
   await expect(page.locator('#promptLabDialog')).toBeHidden();
+});
+
+test('saved Dream rename persists display metadata without changing artifact or prompt identity', async ({ page }) => {
+  test.setTimeout(70000);
+  await routeOpenRouter(page);
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV)).toBe('object');
+  const id = 'rename-metadata-fixture';
+  await seedReadyDream(page, validHtml, {
+    id,
+    modelName: 'Fixture Model',
+    artifactTitle: 'Original Artifact Title',
+    promptProfileId: 'custom-a1b2c3d4',
+    promptProfileName: 'Saved Prompt Alpha',
+  });
+  const before = await storedGeneration(page, id);
+
+  await page.locator('#switcherButton').click();
+  await page.locator('#libraryButton').click();
+  const item = page.locator(`[data-generation-id="${id}"]`);
+  await expect(item.locator('.library-item__name')).toHaveText('Original Artifact Title');
+  await item.locator('summary', { hasText: 'Details' }).click();
+  await expect(item).toContainText('Prompt: Saved Prompt Alpha');
+  page.once('dialog', dialog => dialog.accept('User Renamed Dream'));
+  await item.locator('[data-action="rename"]').click();
+  await expect(page.locator(`[data-generation-id="${id}"] .library-item__name`)).toHaveText('User Renamed Dream');
+
+  await page.locator(`[data-generation-id="${id}"] [data-action="open"]`).click();
+  await expect(page.locator('#liveIdentityName')).toHaveText('User Renamed Dream', { timeout: 30000 });
+  await page.mouse.move(260, 220);
+  await page.locator('#switcherButton').click();
+  await page.locator('#libraryButton').click();
+  page.once('dialog', dialog => dialog.accept('Persistent Dream Name'));
+  await page.locator(`[data-generation-id="${id}"] [data-action="rename"]`).click();
+  await expect(page.locator('#liveIdentityName')).toHaveText('Persistent Dream Name');
+
+  const after = await storedGeneration(page, id);
+  expect(after.displayTitle).toBe('Persistent Dream Name');
+  expect(after.id).toBe(before.id);
+  expect(after.html).toBe(before.html);
+  expect(after.traceId).toBe(before.traceId);
+  expect(after.modelFitConfiguration).toEqual(before.modelFitConfiguration);
+  expect(after.promptProfile).toEqual(before.promptProfile);
+
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV)).toBe('object');
+  await page.locator('#switcherButton').click();
+  await expect(page.locator('[data-switcher-group="recent"]')).toContainText('Persistent Dream Name');
+  await expect(page.locator('[data-switcher-group="recent"]')).toContainText('Prompt: Saved Prompt Alpha');
 });
 
 test('slow background job collapses, survives pause and switching, persists Ready, then opens once', async ({ page }) => {

@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-test('developer mode exposes one-click paste-ready debug bundle', async ({ page }) => {
+async function isolateProvider(page) {
+  const evidence = { completions: 0 };
   await page.route('https://openrouter.ai/**', async route => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/api/v1/chat/completions') evidence.completions += 1;
     if (url.pathname === '/api/v1/models') {
       await route.fulfill({
         status: 200,
@@ -13,6 +15,11 @@ test('developer mode exposes one-click paste-ready debug bundle', async ({ page 
     }
     await route.abort('blockedbyclient');
   });
+  return evidence;
+}
+
+test('developer mode exposes one-click paste-ready debug bundle', async ({ page }) => {
+  await isolateProvider(page);
 
   await page.goto('/visualizer/index.html?dev=1');
   await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEBUG_BUNDLE?.collect)).toBe('function');
@@ -46,4 +53,30 @@ test('developer mode exposes one-click paste-ready debug bundle', async ({ page 
     blockedByFatal: expect.any(Boolean),
   });
   expect(JSON.stringify(bundle)).not.toMatch(/waveform|spectrum|authorization/i);
+});
+
+test('raw diagnostic JSON stays open across same-trace rerenders and resets on trace change', async ({ page }) => {
+  const provider = await isolateProvider(page);
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV?.runTransparencySelfTest)).toBe('function');
+  await page.evaluate(() => window.VIZ_DEV.runTransparencySelfTest());
+  await expect(page.locator('#diagnosticsList .diagnostic-item')).toHaveCount(2);
+  await page.locator('#closeTraceViewer').click();
+
+  const first = page.locator('#diagnosticsList .diagnostic-item').first();
+  const firstId = await first.getAttribute('data-diagnostic-id');
+  await first.locator('summary', { hasText: 'Raw diagnostic JSON' }).click();
+  await expect(first.locator('details')).toHaveAttribute('open', '');
+  await expect(first.locator('details pre')).toContainText('"schema"');
+
+  await page.evaluate(() => window.VIZ_DEV.open());
+  const rerendered = page.locator(`[data-diagnostic-id="${firstId}"]`);
+  await expect(rerendered.locator('details')).toHaveAttribute('open', '');
+  await expect(rerendered.locator('details pre')).toContainText('"schema"');
+
+  const other = page.locator('#diagnosticsList .diagnostic-item').nth(1);
+  const otherId = await other.getAttribute('data-diagnostic-id');
+  await page.evaluate(id => window.VIZ_DEV.openTrace(id), otherId);
+  await expect(rerendered.locator('details')).not.toHaveAttribute('open', '');
+  expect(provider.completions).toBe(0);
 });

@@ -137,6 +137,10 @@ export class GenerationStore extends BrowserStore {
     return this.update(id, { favorite: !existing.favorite });
   }
 
+  async setDisplayTitle(id, displayTitle) {
+    return this.update(id, { displayTitle: String(displayTitle || '') });
+  }
+
   async recordBattle(winnerId, loserId) {
     const [winner, loser] = await Promise.all([this.get(winnerId), this.get(loserId)]);
     if (!winner || !loser) return;

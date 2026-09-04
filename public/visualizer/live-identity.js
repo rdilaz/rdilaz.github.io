@@ -71,7 +71,7 @@ function normalizeLive(identity, at) {
     : identity.kind === 'featured'
       ? 'featured'
       : 'generated';
-  const featuredTitle = kind === 'featured' ? String(identity.title || '').trim() : '';
+  const presentedTitle = ['featured', 'saved'].includes(kind) ? String(identity.title || '').trim() : '';
 
   return {
     kind,
@@ -85,7 +85,7 @@ function normalizeLive(identity, at) {
     traceId,
     diagnosticId: String(identity.diagnosticId ?? ''),
     marker,
-    displayName: featuredTitle || `${modelName} · #${marker}`,
+    displayName: presentedTitle || `${modelName} · #${marker}`,
     committedAt: at,
   };
 }
@@ -202,6 +202,19 @@ export function createLiveIdentityController({
     return restore(BUILT_IN_LIVE_IDENTITY);
   }
 
+  function setLiveDisplayName(expectedSourceId, displayName) {
+    const sourceId = state.live.generationId || state.live.traceId || state.live.artifactId;
+    if (!sourceId || String(expectedSourceId || '') !== sourceId) {
+      throw new Error('Display-title target does not match the current LIVE artifact.');
+    }
+    return update({
+      live: {
+        ...state.live,
+        displayName: requiredText(displayName, 'LIVE display title'),
+      },
+    });
+  }
+
   function reset() {
     const revision = state.revision + 1;
     state = { ...createInitialState(), revision };
@@ -219,6 +232,7 @@ export function createLiveIdentityController({
     rollback,
     restore,
     restoreBuiltIn,
+    setLiveDisplayName,
     reset,
   });
 }

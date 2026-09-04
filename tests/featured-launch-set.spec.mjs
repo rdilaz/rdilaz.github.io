@@ -2,8 +2,10 @@ import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
 const KLANG_PATH = '**/visualizer/featured/klangfiguren.html';
+const NEXUS_PATH = '**/visualizer/featured/nexus-beam.html';
 const CALIBRATION_PATH = '**/visualizer/featured/calibration-bloom.html';
 const klangHtml = await readFile(new URL('../public/visualizer/featured/klangfiguren.html', import.meta.url), 'utf8');
+const nexusHtml = await readFile(new URL('../public/visualizer/featured/nexus-beam.html', import.meta.url), 'utf8');
 const calibrationHtml = await readFile(new URL('../public/visualizer/featured/calibration-bloom.html', import.meta.url), 'utf8');
 let wakeStep = 0;
 
@@ -154,13 +156,17 @@ test('fresh desktop visitor sees and switches the exact launch set without infer
   await wakeHost(page);
   await page.locator('#switcherButton').click();
   const featured = page.locator('[data-switcher-group="featured"]');
-  await expect(featured.locator('.dream-switcher__item')).toHaveCount(2);
+  await expect(featured.locator('.dream-switcher__item')).toHaveCount(3);
   await expect(featured).toContainText('Klangfiguren');
   await expect(featured).toContainText('Z.ai: GLM 5.3 Flash');
+  await expect(featured).toContainText('Nexus Beam');
+  await expect(featured).toContainText('Google: Gemini 3.8 Flash');
+  await expect(featured).toContainText('Prompt: Neutral Crisp V1');
   await expect(featured).toContainText('Calibration Bloom');
   await page.locator('#dreamSwitcherClose').click();
 
   await openFeatured(page, 'klangfiguren', 'Klangfiguren');
+  await openFeatured(page, 'nexus-beam', 'Nexus Beam');
   await openFeatured(page, 'calibration-bloom', 'Calibration Bloom');
 
   const sessionBeforePause = await page.evaluate(() => window.VIZ_DEV.state().activeSessionId);
@@ -257,7 +263,15 @@ test('Featured fetch and digest failures retain a visible Calibration fallback w
       fulfill: { status: 404, body: '' },
       expectedLive: 'Calibration Bloom',
       expectedFailure: { id: 'klangfiguren', code: 'FEATURED_UNAVAILABLE' },
-      expectedIds: ['calibration-bloom'],
+      expectedIds: ['nexus-beam', 'calibration-bloom'],
+    },
+    {
+      name: 'Nexus unavailable',
+      route: NEXUS_PATH,
+      fulfill: { status: 404, body: '' },
+      expectedLive: 'Calibration Bloom',
+      expectedFailure: { id: 'nexus-beam', code: 'FEATURED_UNAVAILABLE' },
+      expectedIds: ['klangfiguren', 'calibration-bloom'],
     },
     {
       name: 'startup unavailable',
@@ -265,7 +279,7 @@ test('Featured fetch and digest failures retain a visible Calibration fallback w
       fulfill: { status: 404, body: '' },
       expectedLive: 'Calibration Bloom',
       expectedFailure: { id: 'calibration-bloom', code: 'FEATURED_UNAVAILABLE' },
-      expectedIds: ['klangfiguren', 'calibration-bloom'],
+      expectedIds: ['klangfiguren', 'nexus-beam', 'calibration-bloom'],
     },
     {
       name: 'startup digest mismatch',
@@ -273,7 +287,7 @@ test('Featured fetch and digest failures retain a visible Calibration fallback w
       fulfill: { status: 200, contentType: 'text/html', body: `${calibrationHtml} ` },
       expectedLive: 'Calibration Bloom',
       expectedFailure: { id: 'calibration-bloom', code: 'FEATURED_DIGEST_MISMATCH' },
-      expectedIds: ['klangfiguren', 'calibration-bloom'],
+      expectedIds: ['klangfiguren', 'nexus-beam', 'calibration-bloom'],
     },
     {
       name: 'non-startup digest mismatch',
@@ -281,7 +295,15 @@ test('Featured fetch and digest failures retain a visible Calibration fallback w
       fulfill: { status: 200, contentType: 'text/html', body: `${klangHtml} ` },
       expectedLive: 'Calibration Bloom',
       expectedFailure: { id: 'klangfiguren', code: 'FEATURED_DIGEST_MISMATCH' },
-      expectedIds: ['calibration-bloom'],
+      expectedIds: ['nexus-beam', 'calibration-bloom'],
+    },
+    {
+      name: 'Nexus digest mismatch',
+      route: NEXUS_PATH,
+      fulfill: { status: 200, contentType: 'text/html', body: `${nexusHtml} ` },
+      expectedLive: 'Calibration Bloom',
+      expectedFailure: { id: 'nexus-beam', code: 'FEATURED_DIGEST_MISMATCH' },
+      expectedIds: ['klangfiguren', 'calibration-bloom'],
     },
   ];
   for (const fault of cases) {

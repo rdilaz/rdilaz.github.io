@@ -67,7 +67,7 @@ Requirements:
 - They remain distinct from the user's local Favorites/Recent library.
 - Featured content can be replaced editorially as better examples are discovered.
 
-The launch set is the model-generated Klangfiguren from GLM 5.3 Flash plus the host-created Calibration Bloom fallback. Klangfiguren retains exact Neutral v1, provider-generation, trace, digest, CI reliability, and operator-curation provenance in the manifest. Aural Cymatics was removed editorially after its unchanged output could not reliably complete the CI-class product Open path. Calibration remains startup after Klangfiguren startup materially destabilized the complete corpus, so the first-visit model-art startup requirement is explicitly deferred.
+The current set is model-generated Klangfiguren from GLM 5.3 Flash, model-generated Nexus Beam from Gemini 3.8 Flash, and the host-created Calibration Bloom fallback. Nexus Beam is an editorial display title over the immutable `Kinetic Harmonic Astrolabe` artifact. Both model artifacts retain exact prompt, provider-generation, trace, digest, CI reliability, and operator-curation provenance. Calibration remains the sole startup, so the first-visit model-art startup requirement remains explicitly deferred.
 
 ## 2. Fast Dream switcher
 
