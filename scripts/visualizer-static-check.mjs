@@ -26,10 +26,13 @@ const [
   playbackState,
   dreamJob,
   dreamSwitcher,
+  dreamMetadata,
+  diagnosticDetailsState,
   featuredDreams,
   featuredManifest,
   featuredHtml,
   featuredKlangHtml,
+  featuredNexusHtml,
   workflow,
   deploy,
   development,
@@ -64,10 +67,13 @@ const [
   read('public/visualizer/playback-state.js'),
   read('public/visualizer/dream-job.js'),
   read('public/visualizer/dream-switcher.js'),
+  read('public/visualizer/dream-metadata.js'),
+  read('public/visualizer/diagnostic-details-state.js'),
   read('public/visualizer/featured-dreams.js'),
   read('public/visualizer/featured/manifest.js'),
   read('public/visualizer/featured/calibration-bloom.html'),
   read('public/visualizer/featured/klangfiguren.html'),
+  read('public/visualizer/featured/nexus-beam.html'),
   read('.github/workflows/visualizer-check.yml'),
   read('.github/workflows/deploy.yml'),
   read('docs/visualizer/DEVELOPMENT.md'),
@@ -722,15 +728,20 @@ expect(app.includes('for (let attemptNumber = 1; attemptNumber <= 2; attemptNumb
 expect(index.includes('id="dreamSwitcherPanel"') && index.includes('id="switcherButton"') && index.includes('Full Library'), 'Fast Dream switcher must be first-class while the full Library stays secondary.');
 expect(dreamSwitcher.includes('featured:') && dreamSwitcher.includes('favorites:') && dreamSwitcher.includes('recent:'), 'Switcher must expose Featured, Favorites and Recent selectors.');
 expect(dreamSwitcher.includes('RECENT_DREAM_LIMIT = 8') && dreamSwitcher.includes('b.createdAt - a.createdAt'), 'Recent must remain bounded and deterministic newest-first.');
+expect(dreamSwitcher.includes('dreamDisplayTitle') && dreamSwitcher.includes('Prompt: ${item.promptLabel}'), 'Dream switcher must show resolved human titles and prompt labels.');
+expect(dreamMetadata.includes('dream.displayTitle') && dreamMetadata.includes('dream.curatedDisplayTitle') && dreamMetadata.includes('dream.artifactTitle'), 'Dream display-title precedence must keep editable, curated and artifact titles separate.');
+expect(app.includes("data-action=\"rename\"") && storage.includes('setDisplayTitle') && liveIdentity.includes('setLiveDisplayName'), 'Saved Dream display titles must persist separately and update truthful LIVE presentation.');
+expect(dreamMetadata.includes('promptLibraryEntryId') && app.includes('promptLibraryEntryIdFor') && promptLibrary.includes('readPromptLibraryEntries'), 'Prompt labels must resolve exact saved Prompt Library identities without changing prompt hashes.');
 expect(app.includes('withCandidateSlot') && app.includes('candidateSessionId') && reliability.includes('async reopen('), 'Stored Dream switching must keep a serialized sandbox lease and lighter safe-reopen path.');
 expect((app.match(/withCandidateSlot\(/g) || []).length >= 5, 'Every candidate-slot user, including developer retests, must serialize access.');
 expect(index.includes('sandbox="allow-scripts"') && !dreamSwitcher.includes('innerHTML'), 'Switcher must never execute stored HTML in the trusted parent.');
 
 expect(featuredManifest.includes("id: 'calibration-bloom'") && featuredManifest.includes("kind: 'host-created'") && featuredManifest.includes('generatedByModel: false'), 'Featured manifest must truthfully identify Calibration Bloom as host-created.');
 expect(featuredManifest.includes("id: 'klangfiguren'") && featuredManifest.includes("modelId: 'z-ai/glm-5.3-flash'") && featuredManifest.includes("localGenerationId: 'c4fa9760-0439-4c79-9f5e-af69bb12b18d'"), 'Featured manifest must retain exact Klangfiguren model and local generation provenance.');
+expect(featuredManifest.includes("id: 'nexus-beam'") && featuredManifest.includes("curatedDisplayTitle: 'Nexus Beam'") && featuredManifest.includes("artifactTitle: 'Kinetic Harmonic Astrolabe'") && featuredManifest.includes("localGenerationId: 'dbeb41d5-411e-4964-af34-70ea48c8ddc6'"), 'Featured manifest must layer Nexus Beam display metadata over exact immutable Gemini provenance.');
 expect((featuredManifest.match(/startup: true/g) || []).length === 1 && featuredManifest.lastIndexOf("id: 'calibration-bloom'") < featuredManifest.indexOf('startup: true'), 'Calibration Bloom must remain the sole startup after model-art startup qualification was withheld.');
 expect(!featuredManifest.includes('tests/fixtures') && !featuredManifest.includes('aetheria'), 'Regression fixtures must never enter the Featured manifest.');
-expect([featuredKlangHtml, featuredHtml].every(html => html.includes('<canvas') && /VIZ\.(?:frame|onFrame)/.test(html) && !/https?:\/\//.test(html)), 'Every Featured launch artifact must be self-contained, audio-reactive HTML without external assets.');
+expect([featuredKlangHtml, featuredNexusHtml, featuredHtml].every(html => html.includes('<canvas') && /VIZ\.(?:frame|onFrame)/.test(html) && !/https?:\/\//.test(html)), 'Every Featured launch artifact must be self-contained, audio-reactive HTML without external assets.');
 expect(featuredDreams.includes('validateFeaturedEntry') && featuredDreams.includes('contentDigest') && featuredDreams.includes("curationStatus !== 'operator-approved'"), 'Featured loading must enforce digest, reliability and operator approval provenance.');
 expect(featuredDreams.includes('pending-operator-review') && featuredDreams.includes('operatorApprovalRecord: null'), 'Featured export must remain pending operator review rather than fabricate approval.');
 expect(featuredDreams.includes('FEATURED_DIGEST_MISMATCH') && featuredDreams.includes('reportLoadFailure') && featuredDreams.includes("entry.id !== 'calibration-bloom'"), 'Featured loading must quarantine invalid optional entries while preserving Calibration fallback.');
@@ -749,6 +760,7 @@ expect(diagnostics.includes('sanitizeTraceValue') && dreamTrace.includes('author
 expect(app.includes("params.get('dev') === '1'") && app.includes("event.key.toLowerCase() === 'd'"), 'Developer mode must be available through ?dev=1 and Ctrl+Shift+D.');
 expect(app.includes("Object.defineProperty(window, 'VIZ_DEV'") && index.includes('Dream diagnostics.'), 'VIZ_DEV API and diagnostic drawer must be available without public UI clutter.');
 expect(app.includes('copyCurrentHtml') && app.includes('retestCurrentVisualizer') && app.includes('exportAll'), 'Dev mode must support HTML copy, deterministic retest and JSON export.');
+expect(app.includes('rawDiagnosticDetailsState.reconcile') && app.includes('rawDiagnosticDetailsState.isOpen') && diagnosticDetailsState.includes('select(id)'), 'Raw diagnostic JSON disclosure must survive same-trace rerenders and reset across trace changes.');
 expect(app.includes('frameDelivery: activeSlot.sandbox.frameDeliverySnapshot()'), 'Runtime debug state must expose the active sandbox frame-delivery authority.');
 expect(!app.includes('waveform: sample.waveform') || dreamTrace.includes("REDACTED = '[redacted]'"), 'Diagnostic export must never preserve captured waveform/spectrum values.');
 

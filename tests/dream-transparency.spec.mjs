@@ -540,9 +540,9 @@ test('mocked generation captures the final spend-guard request and waits for exp
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
 });
 
-for (const [fixtureId, html] of [
-  ['9e0fba78', geminiNeutralCrisp1Html],
-  ['a58ad4aa', geminiNeutralCrisp2Html],
+for (const [fixtureId, html, artifactTitle] of [
+  ['9e0fba78', geminiNeutralCrisp1Html, 'Acoustic Resonance Monolith'],
+  ['a58ad4aa', geminiNeutralCrisp2Html, 'Harmonic Resonance Architecture'],
 ]) {
   test(`saved Gemini Neutral Crisp ${fixtureId} survives Ready, Open, LIVE, reload, and reopen`, async ({ page }) => {
     test.setTimeout(90000);
@@ -572,7 +572,7 @@ for (const [fixtureId, html] of [
     await expect(openButton).toBeVisible();
     await expect(openButton).toBeEnabled();
     await openButton.click();
-    await expect(page.locator('#liveIdentityName')).toContainText(/Gemini 3\.8 Flash.*#[a-f0-9]{8}/i, { timeout: 35000 });
+    await expect(page.locator('#liveIdentityName')).toHaveText(artifactTitle, { timeout: 35000 });
     const firstLiveLabel = await page.locator('#liveIdentityName').textContent();
     const firstActiveSignal = await activeScreenshotSignal(page);
     expect(firstActiveSignal.uniqueBuckets).toBeGreaterThan(4);

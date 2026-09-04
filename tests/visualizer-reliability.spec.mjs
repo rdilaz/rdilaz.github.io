@@ -163,7 +163,7 @@ for (const fixtureName of ['gemini-neutral-crisp-1.html', 'gemini-neutral-crisp-
   });
 }
 
-for (const featuredName of ['klangfiguren.html']) {
+for (const featuredName of ['klangfiguren.html', 'nexus-beam.html']) {
   test(`Featured launch artifact ${featuredName} passes current qualification and watchdog`, async ({ page }) => {
     const result = await run(page, await featured(featuredName), 'runWatchdogFixture');
     expect(result.preflight.passed).toBe(true);

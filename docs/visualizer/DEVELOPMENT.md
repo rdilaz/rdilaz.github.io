@@ -73,6 +73,8 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/playback-state.js`: owns trusted visual playing/paused product state. Sandbox enforcement remains in `sandbox.js`.
 - `public/visualizer/dream-job.js`: owns the single background-job lifecycle and the collapsible job panel/pill presentation.
 - `public/visualizer/dream-switcher.js`: owns deterministic Featured/Favorites/Recent selection and keyboard navigation.
+- `public/visualizer/dream-metadata.js`: owns human display-title precedence, editable-title validation, immutable HTML-title capture for new Dreams, and truthful prompt labels. These fields are presentation metadata, not artifact identity.
+- `public/visualizer/diagnostic-details-state.js`: owns the single record-keyed Raw diagnostic JSON disclosure state retained across local list rerenders.
 - `public/visualizer/featured-dreams.js` and `public/visualizer/featured/manifest.js`: own static Featured metadata/HTML loading and pending-operator-review curation export.
 - `public/visualizer/prompt.js`: owns the canonical prompt version and generation/repair messages. Prompt changes require deliberate versioning.
 - `public/visualizer/provider-runtime.js` and `openrouter-sse.js`: own the provider adapter contract, OpenRouter authentication/catalog calls, single-reader SSE normalization, privately assembled returned text, and complete HTML extraction.
@@ -102,13 +104,22 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 
 ## Featured Launch Set v1 provenance
 
-The admitted model artifact is immutable HTML from a `visualizer-featured-export-v1` package approved by the site operator on 2026-09-04. Manifest digests use UTF-8 SHA-256 after CRLF-to-LF normalization.
+The admitted model artifacts are immutable HTML from `visualizer-featured-export-v1` packages approved by the site operator on 2026-09-04. Manifest digests use UTF-8 SHA-256 after CRLF-to-LF normalization.
 
-| Featured ID | Visible title | Model / resolved model | Local generation | Provider generation | Trace | Prompt | Digest |
+| Featured ID | Display / artifact title | Model / resolved model | Local generation | Provider generation | Trace | Prompt | Digest |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `klangfiguren` | Klangfiguren — sand on a sounding plate | `z-ai/glm-5.3-flash` | `c4fa9760-0439-4c79-9f5e-af69bb12b18d` | `gen-1788390975-8pCRpNg4jGDQAMxCjV60` | `e2c0c6ad-80cb-4da8-945f-8cccda6fdbed` | `neutral-v1` / `visualizer-prompt-v2` | `176bc18463d8f379ba5877dbe0f20333fb5c9bb0f579d340227d8048ee110700` |
+| `nexus-beam` | Nexus Beam / Kinetic Harmonic Astrolabe | `google/gemini-3.8-flash` | `dbeb41d5-411e-4964-af34-70ea48c8ddc6` | `gen-1788487061-Hz2FaGMJFxrfVhjEIWOF` | `f5240f15-ccf9-4f16-9f8a-84d35efea8cf` | `custom-784707e6` (Neutral Crisp V1) / `visualizer-prompt-v2` | `dd6ffcfe40fc2db07773144c55523db99d30521906bf08949b01663caf09d140` |
 
-The export package intentionally stores only the eight-character local artifact marker in its generated manifest ID. The full local generation ID above is the operator-supplied source identity associated with that exact marker, provider-generation, trace, and digest tuple. Historical traces are not rewritten. Calibration Bloom remains separately identified as host-created and is the last-known-safe no-network fallback.
+The export package intentionally stores only the eight-character local artifact marker in its generated manifest ID. Full local generation IDs above are operator-supplied source identities associated with exact marker, provider-generation, trace, and digest tuples. Historical traces are not rewritten. Calibration Bloom remains separately identified as host-created and is the last-known-safe no-network fallback.
+
+## Dream display metadata
+
+`displayTitle` is the only user-editable saved-Dream naming field and is persisted separately through `GenerationStore`. `curatedDisplayTitle` belongs to Featured editorial metadata. `artifactTitle`, existing legacy `title`, and deterministic model/generation fallback remain lower-precedence sources. Renaming never mutates `id`, HTML, digest, trace/diagnostic identity, prompt metadata/hash, model-fit configuration, provider identity, or Featured provenance. The LIVE identity may update only its `displayName` when its exact generation ID matches the renamed saved Dream.
+
+Prompt labels resolve independently from prompt identity. A uniquely matched saved prompt records additive `promptLibraryEntryId`; that exact entry wins when it still matches the profile/hash, while ambiguous aliases fall back to the captured historical name. Known preset IDs use `PROMPT_PRESETS`, captured `promptProfileName` remains the historical saved-prompt label, and unknown custom IDs use a bounded deterministic marker. Switcher and Library details expose this label without changing profile ID, version, brief hash, or request messages.
+
+The Raw diagnostic JSON disclosure keeps one record ID outside the replace-on-render list DOM. A periodic rerender reconciles that ID and recreates the open panel for the same record; selecting another trace or deleting/clearing the record resets it. Raw diagnostic data remains local and uses the existing redacted export projection.
 
 ### Removed Aural candidate evidence
 
