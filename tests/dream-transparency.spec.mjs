@@ -514,6 +514,7 @@ test('mocked generation captures the final spend-guard request and waits for exp
   expect(trace.finalLiveIdentity.live.displayName).toBe('Calibration Bloom');
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
 
+  await wakeHostUi(page);
   await page.locator('#dreamJobOpen').click();
   await expect(page.locator('#liveIdentityName')).toContainText(/Kimi K3.*#[a-f0-9]{8}/i, { timeout: 35000 });
 
@@ -658,6 +659,7 @@ test('failed explicit Open preserves prior LIVE and the ready artifact evidence'
   await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
   const readyTrace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
+  await wakeHostUi(page);
   await page.locator('#dreamJobOpen').click();
   await expect(page.locator('#dreamJobPhase')).toHaveText('Could not open safely', { timeout: 35000 });
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
@@ -685,6 +687,7 @@ test('late runtime rollback persists aftercare and correlates recovered LIVE', a
   await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
   await page.locator('#dreamButton').click();
   await expect(page.locator('#dreamJobPhase')).toHaveText('Dream ready', { timeout: 35000 });
+  await wakeHostUi(page);
   await page.locator('#dreamJobOpen').click();
   await expect(page.locator('#liveIdentityName')).toContainText(/Kimi K3.*#[a-f0-9]{8}/i, { timeout: 35000 });
   const original = await page.evaluate(() => window.VIZ_DEV.latestTrace());

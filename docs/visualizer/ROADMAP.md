@@ -17,7 +17,7 @@ The AI remains creatively unconstrained. The host defines only the technical/run
 These remain true through every milestone:
 
 - The browser is the product.
-- The user can play arbitrary audio through the existing system/tab-audio capture path.
+- The user can analyze arbitrary physical music through explicit microphone capture or use system/tab audio where browser support permits.
 - Audio stays local unless a future source integration explicitly requires otherwise.
 - Generated visualizers remain isolated in the network-denied sandbox.
 - Models receive the same music-state API and no song/genre/reference artwork.
@@ -47,11 +47,13 @@ Everything else is progressive disclosure.
 
 # Stage 1 — Product Shell / Core UX v1
 
-The accepted shell is on `main`. Streaming transport, immersive playback, and local render quality are the current refinement milestone; deployment and product acceptance are not claimed by this branch.
+The accepted shell is on `main`. Featured Dreams, streaming transport, immersive playback, microphone fallback, and local render quality have completed their Stage 1 implementation milestones; live acceptance remains milestone-specific.
 
 Goal: make the working system feel like a product rather than a lab.
 
 ## 1. Featured Dreams
+
+**Status: complete for Featured Launch Set v1, subject to live acceptance.**
 
 Ship 2–3 curated, deterministic example Dreams with the site.
 
@@ -64,6 +66,8 @@ Requirements:
 - They can be switched instantly.
 - They remain distinct from the user's local Favorites/Recent library.
 - Featured content can be replaced editorially as better examples are discovered.
+
+The launch set is the model-generated Klangfiguren from GLM 5.3 Flash plus the host-created Calibration Bloom fallback. Klangfiguren retains exact Neutral v1, provider-generation, trace, digest, CI reliability, and operator-curation provenance in the manifest. Aural Cymatics was removed editorially after its unchanged output could not reliably complete the CI-class product Open path. Calibration remains startup after Klangfiguren startup materially destabilized the complete corpus, so the first-visit model-art startup requirement is explicitly deferred.
 
 ## 2. Fast Dream switcher
 
@@ -170,6 +174,8 @@ Spend protection remains active even when its UI is secondary.
 - Passive viewing hides host chrome and cursor; trusted pointer, touch, wheel, focus, or keyboard activity wakes it without stealing iframe interaction.
 - Full, Balanced, and Saver change local DPR and generated cadence only. They never alter prompts, model requests, audio analysis, generated HTML, or saved artifacts.
 
+After live acceptance of the Featured launch set, the next likely product milestone is **Built-in Local Player v1**. This does not mark the later Prompt Productization stage complete.
+
 ---
 
 # Stage 2 — Prompt Productization
@@ -230,7 +236,7 @@ The UI may use a familiar compact music-player mental model, but should not copy
 
 ## External capture mode
 
-Keep the existing `Play anything` system/tab-capture path as a first-class mode.
+Keep the existing `Play anything` system/tab-capture path and explicit microphone fallback as first-class modes.
 
 In this mode:
 

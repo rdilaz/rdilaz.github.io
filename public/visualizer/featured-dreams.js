@@ -6,6 +6,14 @@ const SUPPORTED_RELIABILITY_CONTRACTS = new Set(['dream-reliability-v1', 'dream-
 
 export { FEATURED_DREAM_MANIFEST, FEATURED_MANIFEST_SCHEMA };
 
+export const FEATURED_LOAD_FAILURES = Object.freeze({
+  MANIFEST_INVALID: 'FEATURED_MANIFEST_INVALID',
+  DUPLICATE_ID: 'FEATURED_DUPLICATE_ID',
+  UNAVAILABLE: 'FEATURED_UNAVAILABLE',
+  MALFORMED: 'FEATURED_MALFORMED',
+  DIGEST_MISMATCH: 'FEATURED_DIGEST_MISMATCH',
+});
+
 const clone = value => structuredClone(value);
 
 export function validateFeaturedEntry(entry) {
@@ -41,13 +49,34 @@ async function htmlDigest(html) {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export async function loadFeaturedDreams({ fetchImpl = globalThis.fetch } = {}) {
+function completeHtml(html) {
+  return /<!doctype\s+html/i.test(html) && /<html[\s>]/i.test(html) && /<\/html\s*>/i.test(html);
+}
+
+function reportLoadFailure(onFailure, entry, code) {
+  const failure = Object.freeze({
+    id: String(entry?.id || 'unknown-featured-dream'),
+    code,
+  });
+  try { onFailure?.(failure); } catch { /* Reporting cannot make valid Featured entries unavailable. */ }
+  return failure;
+}
+
+export async function loadFeaturedDreams({ fetchImpl = globalThis.fetch, onFailure = null } = {}) {
   const entries = FEATURED_DREAM_MANIFEST.map(clone).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const seen = new Set();
   const loaded = [];
   for (const entry of entries) {
-    validateFeaturedEntry(entry);
-    if (seen.has(entry.id)) throw new TypeError(`Duplicate Featured Dream id: ${entry.id}`);
+    try {
+      validateFeaturedEntry(entry);
+    } catch {
+      reportLoadFailure(onFailure, entry, FEATURED_LOAD_FAILURES.MANIFEST_INVALID);
+      continue;
+    }
+    if (seen.has(entry.id)) {
+      reportLoadFailure(onFailure, entry, FEATURED_LOAD_FAILURES.DUPLICATE_ID);
+      continue;
+    }
     seen.add(entry.id);
     let html = '';
     let loadedFromManifestPath = false;
@@ -58,16 +87,24 @@ export async function loadFeaturedDreams({ fetchImpl = globalThis.fetch } = {}) 
           html = await response.text();
           loadedFromManifestPath = true;
         }
-      } catch {
-        // The shipped built-in remains a no-network fallback for first paint.
-      }
+      } catch { /* The shipped built-in remains the no-network fallback. */ }
     }
-    if (!html && entry.id === 'calibration-bloom') html = DEFAULT_VISUALIZER_HTML;
-    if (!/<html[\s>]/i.test(html) || !/<\/html\s*>/i.test(html)) {
-      throw new Error(`Featured Dream ${entry.id} did not load as a complete HTML document.`);
+    if (!html) {
+      reportLoadFailure(onFailure, entry, FEATURED_LOAD_FAILURES.UNAVAILABLE);
+      if (entry.id !== 'calibration-bloom') continue;
+      html = DEFAULT_VISUALIZER_HTML;
+    }
+    if (!completeHtml(html)) {
+      reportLoadFailure(onFailure, entry, FEATURED_LOAD_FAILURES.MALFORMED);
+      if (entry.id !== 'calibration-bloom') continue;
+      html = DEFAULT_VISUALIZER_HTML;
+      loadedFromManifestPath = false;
     }
     if (loadedFromManifestPath && await htmlDigest(html) !== entry.contentDigest) {
-      throw new Error(`Featured Dream ${entry.id} did not match its approved content digest.`);
+      reportLoadFailure(onFailure, entry, FEATURED_LOAD_FAILURES.DIGEST_MISMATCH);
+      if (entry.id !== 'calibration-bloom') continue;
+      html = DEFAULT_VISUALIZER_HTML;
+      loadedFromManifestPath = false;
     }
     loaded.push(Object.freeze({
       ...entry,

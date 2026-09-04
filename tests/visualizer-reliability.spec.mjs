@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { currentVisualSignal, latestCurrentVisualReport } from '../public/visualizer/reliability.js';
 
 const fixture = name => readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+const featured = name => readFile(new URL(`../public/visualizer/featured/${name}`, import.meta.url), 'utf8');
 const crispPromotionTraces = JSON.parse(await fixture('gemini-neutral-crisp-promotion-traces.json'));
 const crispHtmlBlobHashes = new Set(await Promise.all([
   'gemini-neutral-crisp-1.html',
@@ -161,6 +162,53 @@ for (const fixtureName of ['gemini-neutral-crisp-1.html', 'gemini-neutral-crisp-
     expect(result.watchdog.passed).toBe(true);
   });
 }
+
+for (const featuredName of ['klangfiguren.html']) {
+  test(`Featured launch artifact ${featuredName} passes current qualification and watchdog`, async ({ page }) => {
+    const result = await run(page, await featured(featuredName), 'runWatchdogFixture');
+    expect(result.preflight.passed).toBe(true);
+    expect(result.preflight.summary.visible).toBe(true);
+    expect(result.preflight.summary.vizConsumed).toBe(true);
+    expect(result.preflight.stages.some(stage => stage.name === 'viewport-canary')).toBe(true);
+    expect(result.preflight.stages.flatMap(stage => stage.report?.logs?.consoleErrors || [])).toEqual([]);
+    expect(result.preflight.stages.flatMap(stage => stage.report?.events || []).filter(event => event.fatal)).toEqual([]);
+    expect(result.watchdog.passed).toBe(true);
+  });
+
+  test(`Featured launch artifact ${featuredName} pauses, resumes, and reopens`, async ({ page }) => {
+    const html = await featured(featuredName);
+    const pause = await run(page, html, 'runPauseFixture');
+    expect(pause.boot.ready).toBe(true);
+    expect(pause.sessionUnchanged).toBe(true);
+    expect(pause.paused.runtime.playback.paused).toBe(true);
+    expect(pause.resumed.runtime.playback.paused).toBe(false);
+    expect(pause.resumed.viz.lastFrameSequence).toBeGreaterThan(pause.paused.viz.lastFrameSequence);
+    const reopen = await run(page, html, 'runReopenWatchdogFixture');
+    expect(reopen.reopen.passed).toBe(true);
+    expect(reopen.reopen.summary.quickReopen).toBe(true);
+    expect(reopen.watchdog.passed).toBe(true);
+  });
+}
+
+test('Klangfiguren retains Saver qualification and bounded frame backpressure', async ({ page }) => {
+  const html = await featured('klangfiguren.html');
+  const heavy = await run(page, html, 'runHeavyReliabilityFixture');
+  expect(heavy.passed).toBe(true);
+  expect(heavy.schema).toBe('dream-reliability-v3');
+  expect(heavy.stages.find(stage => stage.name === 'stimulation')).toMatchObject({ targetFps: 30 });
+  const canary = heavy.stages.find(stage => stage.name === 'viewport-canary').report;
+  expect(canary.visual.visibleProof).toBe(true);
+  expect(canary.viz.consumed).toBe(true);
+  expect(canary.renderer.contextLosses).toEqual([]);
+
+  const backpressure = await runWithArgs(page, 'runFrameBackpressureFixture', html, 180);
+  expect(backpressure.boot.ready).toBe(true);
+  expect(backpressure.queued).toMatchObject({ inFlightFrames: 1, pendingFrames: 1, receivedFrames: 180 });
+  expect(backpressure.queued.inFlightFrames + backpressure.queued.pendingFrames).toBeLessThanOrEqual(2);
+  expect(backpressure.settled).toMatchObject({ inFlightFrames: 0, pendingFrames: 0, receivedFrames: 180 });
+  expect(backpressure.report.visual.visibleProof).toBe(true);
+  expect(backpressure.report.viz.consumed).toBe(true);
+});
 
 test('trusted pause suspends generated RAF and host frames without reloading', async ({ page }) => {
   const result = await run(page, await fixture('pause-observable.html'), 'runPauseFixture');

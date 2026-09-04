@@ -37,7 +37,7 @@ Generated code is untrusted software, but unusual art is not a defect.
 
 The host verifies engineering facts—boot, visible output, VIZ consumption, real viewport compatibility, runtime health, and reversible promotion—without requiring a particular renderer, brightness, amount of motion, composition, color, or visual metaphor.
 
-A generated candidate becomes ready only after `dream-reliability-v2` preflight passes. It does not replace the last-known-good visualizer until the user chooses Open and the reversible launch watchdog succeeds. One same-model repair may use concrete diagnostics. Fatal post-launch failures roll back immediately; inferred heartbeat stalls require one bounded confirmation probe.
+A generated candidate becomes ready only after `dream-reliability-v3` preflight passes. It does not replace the last-known-good visualizer until the user chooses Open and the reversible launch watchdog succeeds. One same-model repair may use concrete diagnostics. Fatal post-launch failures roll back immediately; inferred heartbeat stalls require one bounded confirmation probe.
 
 ## Privacy sentence
 
@@ -50,7 +50,7 @@ Diagnostics are also local by default and never retain music, waveform/spectrum 
 V0 is real only when a user can:
 
 - open `/visualizer/` over HTTPS;
-- connect shared tab/window/system audio without microphone capture;
+- explicitly choose shared tab/window/system audio or local microphone capture;
 - authorize their own OpenRouter access using PKCE;
 - choose a model from the live catalog;
 - generate a new visualizer using the canonical prompt;
@@ -72,7 +72,7 @@ The normal product loop is now:
 `LIVE Dream → visual Play/Pause → music source → Dreams switcher → NEXT AI → Prompt → Dream → explicit Open when ready`
 
 - A first visit starts with working art and does not require provider authorization.
-- Play/Pause is trusted host control over the visual experience. It stops active VIZ delivery and generated animation frames without reloading the Dream. External tab/system music remains controlled by its source.
+- Play/Pause is trusted host control over the visual experience. It stops active VIZ delivery and generated animation frames without reloading the Dream. External tab/system or microphone-heard music remains controlled by its source.
 - A paid Dream is one background job at a time. Its detail panel can collapse while the request, optional same-model repair, and hidden preflight continue.
 - OpenRouter completion transport is streamed privately. Network activity extends the idle deadline; a secondary hard ceiling remains. Only a normal `[DONE]` stream with a fully assembled response may enter artifact validation.
 - Provider-complete, preflight-ready, and LIVE are separate truths. A ready artifact is saved locally before the UI offers Open; generation success never auto-interrupts LIVE.
@@ -87,8 +87,8 @@ The normal product loop is now:
 
 Host controls remain outside model authorship. In a safe canvas context, Left/Right wraps through Favorites in their displayed order; from a non-Favorite, Right opens the first and Left the last. A Favorite loads in the standby sandbox and becomes LIVE only after its open watchdog commits, so an absent or failed target leaves current LIVE intact and a background Dream may continue. Up/Down changes host audio sensitivity, while the persisted range and Reset support pointer/touch control from 50% to 200% in 10% steps with a 100% default. Sensitivity is a post-normalization host transform: it changes reactive values delivered through VIZ but not the canonical prompt, provider request, stored/generated artifact, model identity, pointer state, or non-reactive audio facts.
 
-The Featured manifest currently contains one truthful host-created item, Calibration Bloom. Every loadable entry requires a repository-local HTML path, content digest, CI reliability evidence, and accepted curation record. Developer export creates a pending-review package that cannot enter Featured until an operator supplies approval and complete model/request/prompt/trace provenance. One or two additional operator-approved model-generated artifacts remain operator-content work; no regression fixture or hand-authored substitute is presented as model output.
+The Featured launch set contains one operator-approved model-generated artifact plus the host-created Calibration Bloom fallback: Klangfiguren from GLM 5.3 Flash and Calibration Bloom. Calibration remains startup because keeping Klangfiguren active from first visit materially destabilized the complete product corpus; first-visit model-art startup is deferred. Every loadable entry requires a repository-local HTML path, content digest, CI reliability evidence, and accepted curation record. Developer export creates a pending-review package that cannot enter Featured until an operator supplies approval and complete model/request/prompt/trace provenance. No regression fixture or hand-authored substitute is presented as model output.
 
 ## Deliberately deferred
 
-Site-funded inference, monetization, final branding/domain, social feeds, serious leaderboards, native apps, desktop audio, consumer-subscription tunneling, community moderation, and any redesign that makes the primary canvas feel like an admin dashboard.
+Site-funded inference, monetization, final branding/domain, social feeds, serious leaderboards, native apps, service-specific audio integrations, consumer-subscription tunneling, community moderation, and any redesign that makes the primary canvas feel like an admin dashboard.

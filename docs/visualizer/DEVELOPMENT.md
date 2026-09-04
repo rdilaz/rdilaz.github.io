@@ -83,7 +83,7 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js`: own safe global arrow routing and the local post-normalization sensitivity transform.
 - `public/visualizer/dream-status.js` and `dream-transport.js`: own request-scoped fetch lifecycle, cancellation, body-activity idle timing, the secondary hard ceiling, and truthful connected/thinking/creating/checking events. `dream-job.js` owns product job state/UI.
 - `public/visualizer/model-eligibility.js`: owns the pure live-Dream model eligibility rules used by catalogs and the final availability check.
-- `public/visualizer/audio-engine.js`: owns local tab/window/system audio capture and normalized audio features supplied to the trusted host. It does not own model requests.
+- `public/visualizer/audio-engine.js`: owns local tab/window/system or explicit microphone capture and normalized audio features supplied to the trusted host. It does not own model requests.
 - `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the injected `window.VIZ` bridge, trusted iframe-activity reporting, effective DPR/generated-RAF policy, CSP, runtime instrumentation, heartbeats, and probes.
 - `public/visualizer/reliability.js`: owns deterministic synthetic VIZ stimulation, visible-output and VIZ-use evaluation, the real-viewport canary, watchdog checks, and repair diagnostics.
 - `public/visualizer/diagnostics.js`: owns the general diagnostic record, timeline, bounded retained artifacts, redaction, status labels, copy helpers, and export helpers.
@@ -96,9 +96,25 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 
 ## LIVE and NEXT
 
-`LIVE` identifies the visualizer currently on screen. It begins as the built-in Featured `Calibration Bloom` and changes only after a saved/Featured artifact passes the explicit Open watchdog and commits.
+`LIVE` identifies the visualizer currently on screen. It begins with embedded-safe `Calibration Bloom`; first-visit model-art startup is deferred because both reviewed model candidates materially destabilized the complete CI-class product corpus when kept continuously active. LIVE otherwise changes only after a saved/Featured artifact passes the explicit Open watchdog and commits.
 
 `NEXT` identifies the selected model for the next Dream. Selecting another model changes NEXT only; it must not relabel the currently visible artwork. A Dream keeps the model identity captured when that Dream began, even if NEXT changes while the request is in flight. Failed candidates and rollbacks leave LIVE truthful.
+
+## Featured Launch Set v1 provenance
+
+The admitted model artifact is immutable HTML from a `visualizer-featured-export-v1` package approved by the site operator on 2026-09-04. Manifest digests use UTF-8 SHA-256 after CRLF-to-LF normalization.
+
+| Featured ID | Visible title | Model / resolved model | Local generation | Provider generation | Trace | Prompt | Digest |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `klangfiguren` | Klangfiguren — sand on a sounding plate | `z-ai/glm-5.3-flash` | `c4fa9760-0439-4c79-9f5e-af69bb12b18d` | `gen-1788390975-8pCRpNg4jGDQAMxCjV60` | `e2c0c6ad-80cb-4da8-945f-8cccda6fdbed` | `neutral-v1` / `visualizer-prompt-v2` | `176bc18463d8f379ba5877dbe0f20333fb5c9bb0f579d340227d8048ee110700` |
+
+The export package intentionally stores only the eight-character local artifact marker in its generated manifest ID. The full local generation ID above is the operator-supplied source identity associated with that exact marker, provider-generation, trace, and digest tuple. Historical traces are not rewritten. Calibration Bloom remains separately identified as host-created and is the last-known-safe no-network fallback.
+
+### Removed Aural candidate evidence
+
+`Aural Cymatics: Genesis of Harmonic Form` was removed editorially from Featured v1 without modifying its model output. GitHub's CI-class product path recorded `REOPEN_FAILED` because the authenticated `reopen-baseline` probe timed out. An independent run passed safe-reopen qualification but measured approximately 1 FPS, delivered one stimulation frame, and remained in the opening transaction at the 30-second product deadline. The removed candidate was local generation `d0f89126-9305-45cf-8556-824c7549d79e`, provider generation `gen-1788390875-DLmI28KK32b7ScgczxCG`, trace `4eabe50a-5457-45de-9bff-8c24b7fa9a59`, and digest `8950a3eb24c88d57a06f3adeff76d20d7fb4e1aa47d2fae3e61bb1e53011fd2f`. Its production HTML is intentionally absent; this evidence does not relabel the artifact as unreliable outside the failed CI-class product-open contract.
+
+Klangfiguren passed focused cold-start, mobile Saver, microphone, qualification, pause/reopen, and backpressure checks. With Klangfiguren as startup, however, the complete local Chromium corpus produced 11 failures across otherwise independent generation, spend, immersive, cancellation, and reopen paths and expanded to 17.9 minutes. Calibration therefore remains startup without changing Klangfiguren, the reliability boundary, or render-quality semantics.
 
 ## Quality-first controls
 

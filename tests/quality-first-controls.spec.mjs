@@ -609,6 +609,8 @@ test('Ready and explicit Open produce PROVEN evidence, recommendations, and a sa
   expect(configuration.aggregate.liveOpenSuccessCount).toBe(0);
   expect(model.status).toBe('PROVEN');
 
+  await page.mouse.move(240, 220);
+  await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
   await page.locator('#modelButton').click();
   const recommendation = page.locator('#modelGuidePicks .model-pick').filter({ hasText: MODEL_NAME });
   await expect(recommendation).toBeVisible();
@@ -625,6 +627,10 @@ test('Ready and explicit Open produce PROVEN evidence, recommendations, and a sa
 
   await page.locator('#dreamJobOpen').click();
   await expect(page.locator('#liveIdentityName')).toContainText(MODEL_NAME, { timeout: 35000 });
+  await expect.poll(() => page.evaluate(modelId => {
+    const fit = window.VIZ_DEV.modelFit();
+    return fit.configurations.find(entry => entry.identity.modelId === modelId)?.aggregate.liveOpenSuccessCount || 0;
+  }, MODEL_ID)).toBe(1);
   fit = await page.evaluate(() => window.VIZ_DEV.modelFit());
   configuration = fit.configurations.find(entry => entry.identity.modelId === MODEL_ID);
   model = fit.models.find(entry => entry.modelId === MODEL_ID);
