@@ -6,9 +6,11 @@ The host owns audio capture and signal interpretation. Generated visualizers nev
 
 ## Capture boundary
 
-The web version uses `navigator.mediaDevices.getDisplayMedia()` after an explicit user gesture. It requests shared audio and hints for system/window audio where supported. The browser and operating system decide which audio sources can actually be shared. A video track is required by the browser API but the app does not render or analyze the video; the visualizer uses the audio track only.
+The web version offers two explicit, user-initiated host capture paths. `navigator.mediaDevices.getDisplayMedia()` requests shared audio and hints for system/window audio where supported. The browser and operating system decide which audio sources can actually be shared. A video track is required by the browser API but the app does not render or analyze the video; the visualizer uses the audio track only.
 
-`getUserMedia()` microphone capture is explicitly forbidden in V0.
+`navigator.mediaDevices.getUserMedia()` provides the mobile fallback. It captures environmental sound through the microphone, not internal phone/system audio. The host asks for supported music-friendly processing preferences, inspects the resulting track settings, and does not record, persist, or upload microphone audio. Both capture paths feed the same browser-local analysis graph and `visualizer-audio-v1` frame.
+
+Channel topology comes from actual track settings when reported. A confirmed stereo source retains balance/width analysis. Mono or unknown topology reports neutral stereo truth: `balance: 0` and `width: 0`.
 
 ## Host frame
 
