@@ -26,6 +26,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   const originalCancelRAF = window.cancelAnimationFrame.bind(window);
   const originalSetTimeout = window.setTimeout.bind(window);
   const originalSetInterval = window.setInterval.bind(window);
+  const originalQueueMicrotask = window.queueMicrotask.bind(window);
   const originalConsole = {
     error: console.error.bind(console),
     warn: console.warn.bind(console),
@@ -113,6 +114,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   const intensiveRestores = [];
   const pendingAnimationFrames = new Map();
   const hostPausedAnimations = new Set();
+  let webglCaptureRequest = 0;
   let animationFrameSequence = 0;
   let hostAnimationOperation = false;
   let currentFrame = {
@@ -523,11 +525,18 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   function contextRecord(canvas, type, context) {
     let record = contextByCanvas.get(canvas);
     if (!record) {
+      let preserveDrawingBuffer = null;
+      if (type === 'webgl' || type === 'experimental-webgl' || type === 'webgl2') {
+        try { preserveDrawingBuffer = Boolean(context.getContextAttributes()?.preserveDrawingBuffer); } catch {
+          // Context attributes are diagnostic-only and may be unavailable after loss.
+        }
+      }
       record = {
         id: `canvas-${contextRecords.length + 1}`,
         type,
         canvas,
         context,
+        preserveDrawingBuffer,
         createdAtMs: Math.round(performance.now() - state.startedAt),
         paintOps: 0,
         clearOps: 0,
@@ -538,6 +547,10 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
         programLinkAttempts: 0,
         submits: 0,
         lastActivityAt: 0,
+        renderPixel: null,
+        renderCaptureRequest: 0,
+        renderPixelDrawCalls: 0,
+        renderCaptureQueued: false,
       };
       contextRecords.push(record);
       contextByCanvas.set(canvas, record);
@@ -564,6 +577,79 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   }
 
   const originalGetContext = HTMLCanvasElement.prototype.getContext;
+
+  function readCanvasPixel(canvas) {
+    const sample = document.createElement('canvas');
+    sample.width = 32;
+    sample.height = 18;
+    const sampleContext = originalGetContext.call(sample, '2d', { willReadFrequently: true });
+    let pixel = {
+      sampled: false,
+      hash: 0,
+      uniqueBuckets: 0,
+      nonTransparentRatio: 0,
+      nonBlackRatio: 0,
+      luminanceVariance: 0,
+      informative: false,
+      error: '',
+    };
+    try {
+      sampleContext.clearRect(0, 0, sample.width, sample.height);
+      sampleContext.drawImage(canvas, 0, 0, sample.width, sample.height);
+      const data = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
+      const buckets = new Set();
+      let hash = 2166136261;
+      let nonTransparent = 0;
+      let nonBlack = 0;
+      let sum = 0;
+      let sumSq = 0;
+      const pixels = data.length / 4;
+      for (let index = 0; index < data.length; index += 4) {
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        const a = data[index + 3];
+        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (a > 8) nonTransparent += 1;
+        if (a > 8 && luminance > 2) nonBlack += 1;
+        sum += luminance;
+        sumSq += luminance * luminance;
+        const bucket = `${r >> 5}:${g >> 5}:${b >> 5}:${a >> 6}`;
+        buckets.add(bucket);
+        hash = hashStep(hash, bucket);
+      }
+      const mean = sum / Math.max(1, pixels);
+      const variance = Math.max(0, sumSq / Math.max(1, pixels) - mean * mean);
+      pixel = {
+        sampled: true,
+        hash,
+        uniqueBuckets: buckets.size,
+        nonTransparentRatio: nonTransparent / Math.max(1, pixels),
+        nonBlackRatio: nonBlack / Math.max(1, pixels),
+        luminanceVariance: variance,
+        informative: buckets.size > 1 || nonBlack > 0 || variance > 0.25,
+        error: '',
+      };
+    } catch (error) {
+      pixel.error = compactText(error).slice(0, 500);
+    }
+    return pixel;
+  }
+
+  function queueWebGLRenderCapture(context) {
+    const record = contextByObject.get(context);
+    if (!record || state.mode !== 'full' || !webglCaptureRequest || record.renderCaptureQueued) return;
+    if (record.renderCaptureRequest >= webglCaptureRequest) return;
+    record.renderCaptureQueued = true;
+    originalQueueMicrotask(() => {
+      record.renderCaptureQueued = false;
+      if (state.mode !== 'full' || record.renderCaptureRequest >= webglCaptureRequest) return;
+      record.renderPixel = readCanvasPixel(record.canvas);
+      record.renderCaptureRequest = webglCaptureRequest;
+      record.renderPixelDrawCalls = record.drawCalls;
+    });
+  }
+
   try {
     HTMLCanvasElement.prototype.getContext = function instrumentedGetContext(type, ...args) {
       stabilizeViewportCanvas(this);
@@ -619,8 +705,10 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     const drawMethods = ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced'];
     for (const name of drawMethods) {
       replaceFunction(Prototype, name, original => function (...args) {
+        const result = Reflect.apply(original, this, args);
         bumpContext(this, 'drawCalls');
-        return Reflect.apply(original, this, args);
+        queueWebGLRenderCapture(this);
+        return result;
       }, intensiveRestores);
     }
     replaceFunction(Prototype, 'clear', original => function (...args) {
@@ -779,60 +867,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     if (!visible) return null;
     const viewportArea = Math.max(1, innerWidth * innerHeight);
     const coverage = Math.min(1, Math.max(0, visible.rect.width * visible.rect.height) / viewportArea);
-    const sample = document.createElement('canvas');
-    sample.width = 32;
-    sample.height = 18;
-    const sampleContext = originalGetContext.call(sample, '2d', { willReadFrequently: true });
-    let pixel = {
-      sampled: false,
-      hash: 0,
-      uniqueBuckets: 0,
-      nonTransparentRatio: 0,
-      nonBlackRatio: 0,
-      luminanceVariance: 0,
-      informative: false,
-      error: '',
-    };
-    try {
-      sampleContext.clearRect(0, 0, sample.width, sample.height);
-      sampleContext.drawImage(canvas, 0, 0, sample.width, sample.height);
-      const data = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
-      const buckets = new Set();
-      let hash = 2166136261;
-      let nonTransparent = 0;
-      let nonBlack = 0;
-      let sum = 0;
-      let sumSq = 0;
-      const pixels = data.length / 4;
-      for (let index = 0; index < data.length; index += 4) {
-        const r = data[index];
-        const g = data[index + 1];
-        const b = data[index + 2];
-        const a = data[index + 3];
-        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        if (a > 8) nonTransparent += 1;
-        if (a > 8 && luminance > 2) nonBlack += 1;
-        sum += luminance;
-        sumSq += luminance * luminance;
-        const bucket = `${r >> 5}:${g >> 5}:${b >> 5}:${a >> 6}`;
-        buckets.add(bucket);
-        hash = hashStep(hash, bucket);
-      }
-      const mean = sum / Math.max(1, pixels);
-      const variance = Math.max(0, sumSq / Math.max(1, pixels) - mean * mean);
-      pixel = {
-        sampled: true,
-        hash,
-        uniqueBuckets: buckets.size,
-        nonTransparentRatio: nonTransparent / Math.max(1, pixels),
-        nonBlackRatio: nonBlack / Math.max(1, pixels),
-        luminanceVariance: variance,
-        informative: buckets.size > 1 || nonBlack > 0 || variance > 0.25,
-        error: '',
-      };
-    } catch (error) {
-      pixel.error = compactText(error).slice(0, 500);
-    }
+    const pixel = readCanvasPixel(canvas);
 
     const activity = record ? {
       type: record.type,
@@ -843,6 +878,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       shadersCompiled: record.shadersCompiled,
       programsLinked: record.programsLinked,
       programLinkAttempts: record.programLinkAttempts,
+      preserveDrawingBuffer: record.preserveDrawingBuffer,
       submits: record.submits,
       lastActivityAt: record.lastActivityAt,
     } : {
@@ -883,6 +919,9 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       coverage,
       pixel,
       activity,
+      renderPixel: record?.renderPixel || null,
+      renderCaptureRequest: record?.renderCaptureRequest || 0,
+      renderPixelDrawCalls: record?.renderPixelDrawCalls || 0,
       successfulActivity,
     };
   }
@@ -1110,6 +1149,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       visual: {
         visibleProof,
         dominantCanvasFailed,
+        renderCaptureRequest: webglCaptureRequest,
         canvases,
         dom,
       },
@@ -1234,6 +1274,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     }
 
     if (message.type === 'probe') {
+      webglCaptureRequest += 1;
       await nextPaint();
       post('probe-result', { probeId: message.probeId, report: collectProbe(message.label || 'probe') });
       return;
