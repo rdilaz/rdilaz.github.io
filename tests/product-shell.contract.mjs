@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
@@ -20,6 +21,7 @@ import {
 } from '../public/visualizer/dream-switcher.js';
 import {
   FEATURED_DREAM_MANIFEST,
+  FEATURED_LOAD_FAILURES,
   FEATURED_MANIFEST_SCHEMA,
   createFeaturedExportPackage,
   loadFeaturedDreams,
@@ -30,6 +32,14 @@ import { createLiveIdentityController } from '../public/visualizer/live-identity
 const MODEL = Object.freeze({ id: 'moonshotai/kimi-k3', name: 'Kimi K3', provider: 'moonshotai' });
 const PROMPT = Object.freeze({ id: 'neutral-v1', name: 'Neutral blank canvas', creativeBrief: 'Create what you think music looks like.' });
 const HTML = '<!doctype html><html><body><canvas></canvas><script>VIZ.onFrame(()=>{});</script></body></html>';
+const featuredHtml = Object.fromEntries(await Promise.all(FEATURED_DREAM_MANIFEST.map(async entry => [
+  entry.id,
+  await readFile(new URL(`../public/visualizer/${entry.htmlPath.replace(/^\.\//, '')}`, import.meta.url), 'utf8'),
+])));
+const featuredFetch = async url => ({
+  ok: true,
+  text: async () => featuredHtml[String(url).match(/\/([^/]+)\.html$/)?.[1]],
+});
 
 test('playback starts playing and idempotent pause/resume publishes only real changes', () => {
   let now = 100;
@@ -131,32 +141,121 @@ test('switcher groups Featured, Favorites and bounded newest-first Recent determ
   ];
   const groups = buildDreamSwitcherGroups({ featured, generations, activeKey: localDreamKey(generations[0]), recentLimit: 2 });
   assert.equal(groups.schema, DREAM_SWITCHER_SCHEMA);
-  assert.deepEqual(groups.featured.map(item => item.id), ['calibration-bloom']);
+  assert.deepEqual(groups.featured.map(item => item.id), ['aural-cymatics-genesis', 'klangfiguren', 'calibration-bloom']);
   assert.deepEqual(groups.favorites.map(item => item.id), ['middle', 'old']);
   assert.deepEqual(groups.recent.map(item => item.id), ['new', 'middle']);
   assert.equal(groups.recent.some(item => item.id === 'broken'), false);
   assert.equal(groups.favorites.find(item => item.id === 'old').active, true);
 });
 
-test('Featured manifest is deterministic and truthfully labels the sole shipped art', async () => {
-  assert.ok(FEATURED_DREAM_MANIFEST.length >= 1 && FEATURED_DREAM_MANIFEST.length <= 3);
+test('Featured launch manifest preserves exact order, provenance, content and one startup', async () => {
+  assert.equal(FEATURED_DREAM_MANIFEST.length, 3);
   FEATURED_DREAM_MANIFEST.forEach(validateFeaturedEntry);
-  const [entry] = FEATURED_DREAM_MANIFEST;
-  assert.equal(entry.schema, FEATURED_MANIFEST_SCHEMA);
-  assert.equal(entry.id, 'calibration-bloom');
-  assert.equal(entry.startup, true);
-  assert.equal(entry.provenance.kind, 'host-created');
-  assert.equal(entry.provenance.generatedByModel, false);
-  assert.equal(entry.provenance.operatorApprovalRecord.kind, 'existing-shipped-artifact');
-  assert.match(entry.contentDigest, /^[a-f0-9]{64}$/);
-  assert.doesNotMatch(entry.htmlPath, /tests[\\/]fixtures/i);
-  const html = await readFile(new URL('../public/visualizer/featured/calibration-bloom.html', import.meta.url), 'utf8');
-  assert.match(html, /<canvas/i);
-  assert.match(html, /\bVIZ\.frame\b/);
-  assert.doesNotMatch(html, /https?:\/\/|openrouter|authorization|api[_-]?key/i);
-  const loaded = await loadFeaturedDreams({ fetchImpl: null });
-  assert.equal(loaded[0].source, 'featured');
+  assert.deepEqual(FEATURED_DREAM_MANIFEST.map(entry => entry.id), [
+    'aural-cymatics-genesis',
+    'klangfiguren',
+    'calibration-bloom',
+  ]);
+  assert.deepEqual(FEATURED_DREAM_MANIFEST.map(entry => entry.order), [1, 2, 3]);
+  assert.deepEqual(FEATURED_DREAM_MANIFEST.filter(entry => entry.startup).map(entry => entry.id), ['calibration-bloom']);
+  const expected = {
+    'aural-cymatics-genesis': {
+      title: 'Aural Cymatics: Genesis of Harmonic Form',
+      modelId: 'google/gemini-3.8-flash',
+      providerGenerationId: 'gen-1788390875-DLmI28KK32b7ScgczxCG',
+      localGenerationId: 'd0f89126-9305-45cf-8556-824c7549d79e',
+      traceId: '4eabe50a-5457-45de-9bff-8c24b7fa9a59',
+      digest: '8950a3eb24c88d57a06f3adeff76d20d7fb4e1aa47d2fae3e61bb1e53011fd2f',
+      htmlTitle: 'Aural Cymatics: Genesis of Harmonic Form',
+      bytes: 26777,
+    },
+    klangfiguren: {
+      title: 'Klangfiguren',
+      modelId: 'z-ai/glm-5.3-flash',
+      providerGenerationId: 'gen-1788390975-8pCRpNg4jGDQAMxCjV60',
+      localGenerationId: 'c4fa9760-0439-4c79-9f5e-af69bb12b18d',
+      traceId: 'e2c0c6ad-80cb-4da8-945f-8cccda6fdbed',
+      digest: '176bc18463d8f379ba5877dbe0f20333fb5c9bb0f579d340227d8048ee110700',
+      htmlTitle: 'Klangfiguren — sand on a sounding plate',
+      bytes: 27857,
+    },
+  };
+  for (const entry of FEATURED_DREAM_MANIFEST) {
+    assert.equal(entry.schema, FEATURED_MANIFEST_SCHEMA);
+    assert.match(entry.contentDigest, /^[a-f0-9]{64}$/);
+    assert.doesNotMatch(entry.htmlPath, /tests[\\/]fixtures/i);
+    const html = featuredHtml[entry.id];
+    assert.match(html, /^<!doctype html>/i);
+    assert.match(html, /<\/html>\s*$/i);
+    assert.match(html, /\bVIZ\.(?:frame|onFrame)\b/);
+    assert.doesNotMatch(html, /https?:\/\/|openrouter|authorization|api[_-]?key|<script[^>]+src=|<link[^>]+href=/i);
+    const digest = createHash('sha256').update(html.replace(/\r\n/g, '\n')).digest('hex');
+    assert.equal(digest, entry.contentDigest);
+    if (!entry.provenance.generatedByModel) continue;
+    const truth = expected[entry.id];
+    assert.equal(entry.title, truth.title);
+    assert.equal(entry.modelId, truth.modelId);
+    assert.equal(entry.resolvedModel, truth.modelId);
+    assert.equal(entry.providerGenerationId, truth.providerGenerationId);
+    assert.equal(entry.provenance.localGenerationId, truth.localGenerationId);
+    assert.equal(entry.provenance.generationTraceId, truth.traceId);
+    assert.equal(entry.contentDigest, truth.digest);
+    assert.equal(Buffer.byteLength(html, 'utf8'), truth.bytes);
+    assert.equal(html.endsWith('\n'), false);
+    assert.ok(html.includes(`<title>${truth.htmlTitle}</title>`));
+    assert.equal(entry.promptProfileId, 'neutral-v1');
+    assert.equal(entry.promptVersion, 'visualizer-prompt-v2');
+    assert.equal(entry.audioApiVersion, 'visualizer-audio-v1');
+    assert.equal(entry.reliability.contract, 'dream-reliability-v3');
+    assert.equal(entry.provenance.operatorApprovalRecord.kind, 'operator-curation-approval');
+    assert.equal(entry.provenance.operatorApprovalRecord.source, 'Featured Launch Set v1');
+  }
+  const loaded = await loadFeaturedDreams({ fetchImpl: featuredFetch });
+  assert.deepEqual(loaded.map(entry => entry.id), FEATURED_DREAM_MANIFEST.map(entry => entry.id));
+  assert.ok(loaded.every(entry => entry.source === 'featured' && entry.contentDigestVerified));
+});
+
+test('Featured loading quarantines unavailable, malformed, and digest-mismatched entries', async () => {
+  const runFault = async (faultId, response, expectedCode) => {
+    const failures = [];
+    const loaded = await loadFeaturedDreams({
+      fetchImpl: async url => {
+        const id = String(url).match(/\/([^/]+)\.html$/)?.[1];
+        return id === faultId ? response : featuredFetch(url);
+      },
+      onFailure: failure => failures.push(failure),
+    });
+    assert.equal(loaded.some(entry => entry.id === faultId), faultId === 'calibration-bloom');
+    assert.ok(loaded.some(entry => entry.id === 'calibration-bloom'));
+    assert.deepEqual(failures, [{ id: faultId, code: expectedCode }]);
+    return loaded;
+  };
+
+  const withoutKlang = await runFault('klangfiguren', { ok: false }, FEATURED_LOAD_FAILURES.UNAVAILABLE);
+  assert.deepEqual(withoutKlang.map(entry => entry.id), ['aural-cymatics-genesis', 'calibration-bloom']);
+  const withoutAural = await runFault('aural-cymatics-genesis', {
+    ok: true,
+    text: async () => `${featuredHtml['aural-cymatics-genesis']} `,
+  }, FEATURED_LOAD_FAILURES.DIGEST_MISMATCH);
+  assert.deepEqual(withoutAural.filter(entry => entry.startup).map(entry => entry.id), ['calibration-bloom']);
+  assert.deepEqual(withoutAural.map(entry => entry.id), ['klangfiguren', 'calibration-bloom']);
+  await runFault('klangfiguren', {
+    ok: true,
+    text: async () => '<!doctype html><html><body>incomplete',
+  }, FEATURED_LOAD_FAILURES.MALFORMED);
+});
+
+test('Featured no-network mode preserves embedded Calibration without admitting unverified model bytes', async () => {
+  const failures = [];
+  const loaded = await loadFeaturedDreams({ fetchImpl: null, onFailure: failure => failures.push(failure) });
+  assert.deepEqual(loaded.map(entry => entry.id), ['calibration-bloom']);
+  assert.equal(loaded[0].contentDigestVerified, false);
   assert.match(loaded[0].html, /Calibration Bloom/);
+  assert.deepEqual(failures, [
+    { id: 'aural-cymatics-genesis', code: FEATURED_LOAD_FAILURES.UNAVAILABLE },
+    { id: 'klangfiguren', code: FEATURED_LOAD_FAILURES.UNAVAILABLE },
+    { id: 'calibration-bloom', code: FEATURED_LOAD_FAILURES.UNAVAILABLE },
+  ]);
 });
 
 test('Featured identity uses stable title and never changes NEXT model truth', () => {

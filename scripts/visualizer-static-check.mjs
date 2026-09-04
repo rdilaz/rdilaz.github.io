@@ -29,6 +29,8 @@ const [
   featuredDreams,
   featuredManifest,
   featuredHtml,
+  featuredAuralHtml,
+  featuredKlangHtml,
   workflow,
   deploy,
   development,
@@ -66,6 +68,8 @@ const [
   read('public/visualizer/featured-dreams.js'),
   read('public/visualizer/featured/manifest.js'),
   read('public/visualizer/featured/calibration-bloom.html'),
+  read('public/visualizer/featured/aural-cymatics-genesis.html'),
+  read('public/visualizer/featured/klangfiguren.html'),
   read('.github/workflows/visualizer-check.yml'),
   read('.github/workflows/deploy.yml'),
   read('docs/visualizer/DEVELOPMENT.md'),
@@ -725,10 +729,14 @@ expect((app.match(/withCandidateSlot\(/g) || []).length >= 5, 'Every candidate-s
 expect(index.includes('sandbox="allow-scripts"') && !dreamSwitcher.includes('innerHTML'), 'Switcher must never execute stored HTML in the trusted parent.');
 
 expect(featuredManifest.includes("id: 'calibration-bloom'") && featuredManifest.includes("kind: 'host-created'") && featuredManifest.includes('generatedByModel: false'), 'Featured manifest must truthfully identify Calibration Bloom as host-created.');
+expect(featuredManifest.includes("id: 'aural-cymatics-genesis'") && featuredManifest.includes("modelId: 'google/gemini-3.8-flash'") && featuredManifest.includes("localGenerationId: 'd0f89126-9305-45cf-8556-824c7549d79e'"), 'Featured manifest must retain exact Aural Cymatics model and local generation provenance.');
+expect(featuredManifest.includes("id: 'klangfiguren'") && featuredManifest.includes("modelId: 'z-ai/glm-5.3-flash'") && featuredManifest.includes("localGenerationId: 'c4fa9760-0439-4c79-9f5e-af69bb12b18d'"), 'Featured manifest must retain exact Klangfiguren model and local generation provenance.');
+expect((featuredManifest.match(/startup: true/g) || []).length === 1 && featuredManifest.lastIndexOf("id: 'calibration-bloom'") < featuredManifest.indexOf('startup: true'), 'Calibration Bloom must remain the sole startup after Aural startup promotion was withheld.');
 expect(!featuredManifest.includes('tests/fixtures') && !featuredManifest.includes('aetheria'), 'Regression fixtures must never enter the Featured manifest.');
-expect(featuredHtml.includes('<canvas') && featuredHtml.includes('VIZ.frame') && !/https?:\/\//.test(featuredHtml), 'Featured startup art must be self-contained, audio-reactive HTML without external assets.');
+expect([featuredAuralHtml, featuredKlangHtml, featuredHtml].every(html => html.includes('<canvas') && /VIZ\.(?:frame|onFrame)/.test(html) && !/https?:\/\//.test(html)), 'Every Featured launch artifact must be self-contained, audio-reactive HTML without external assets.');
 expect(featuredDreams.includes('validateFeaturedEntry') && featuredDreams.includes('contentDigest') && featuredDreams.includes("curationStatus !== 'operator-approved'"), 'Featured loading must enforce digest, reliability and operator approval provenance.');
 expect(featuredDreams.includes('pending-operator-review') && featuredDreams.includes('operatorApprovalRecord: null'), 'Featured export must remain pending operator review rather than fabricate approval.');
+expect(featuredDreams.includes('FEATURED_DIGEST_MISMATCH') && featuredDreams.includes('reportLoadFailure') && featuredDreams.includes("entry.id !== 'calibration-bloom'"), 'Featured loading must quarantine invalid optional entries while preserving Calibration fallback.');
 
 expect(index.includes('id="promptLabButton"') && index.includes('id="audioButton"') && index.includes('id="fullscreenButton"'), 'Primary product dock must retain Prompt, audio source and fullscreen.');
 expect(!/<div class="top-actions">[\s\S]{0,400}id="spendButton"/.test(index), 'Spend details must not remain primary top chrome.');

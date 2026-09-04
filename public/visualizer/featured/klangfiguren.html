@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0c0a">
+<title>Klangfiguren — sand on a sounding plate</title>
+<style>
+  :root{
+    --serif:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  }
+  html,body{height:100%;margin:0}
+  body{
+    background:#0a0c0a;overflow:hidden;font-family:var(--serif);color:#cdc6b2;
+    -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+  }
+  #scene{position:fixed;inset:0;display:block;cursor:crosshair;touch-action:none}
+  .hud{position:fixed;z-index:3;pointer-events:none}
+  .hud-tl{top:22px;left:28px}
+  .title{font-size:clamp(13px,1.6vw,18px);letter-spacing:.44em;color:#d8d1bc;font-weight:600}
+  .rule{width:46px;height:1px;background:#454d43;margin:10px 0 9px}
+  .sub{font-style:italic;font-size:clamp(10px,1.1vw,12.5px);color:#7e8478;letter-spacing:.04em;max-width:46ch;line-height:1.5}
+  .sub2{margin-top:5px;font-size:9.5px;color:#565c52;letter-spacing:.18em}
+  .hud-tr{top:22px;right:28px;text-align:right}
+  .plateNo{font-size:11.5px;letter-spacing:.34em;color:#9aa08e}
+  #contour{display:block;margin:9px 0 5px auto;width:140px;height:22px}
+  .micro{font-family:var(--mono);font-size:8.5px;letter-spacing:.24em;color:#565c52}
+  .hud-bl{bottom:22px;left:28px}
+  .state{font-style:italic;font-size:clamp(13px,1.4vw,16px);letter-spacing:.07em;color:#c9c2ad}
+  .detail{margin-top:6px;font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:#767c70}
+  .hud-br{bottom:22px;right:28px;text-align:right}
+  .tempo{font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:#cdc6b2;display:flex;align-items:center;justify-content:flex-end;gap:9px}
+  #beatdot{width:6px;height:6px;border-radius:50%;background:#d29a5a;opacity:.14;flex:none}
+  .conf{margin-top:6px;font-family:var(--mono);font-size:9px;letter-spacing:.22em;color:#767c70}
+  .hud-bc{
+    bottom:22px;left:50%;transform:translateX(-50%);font-style:italic;font-size:11px;
+    color:#5f665a;letter-spacing:.06em;opacity:0;transition:opacity 1.6s ease;white-space:nowrap;
+  }
+  .hud-bc.show{opacity:1}
+  @media (max-width:680px){
+    .sub2,#contourWrap,.hud-bc{display:none}
+    .hud-tl{top:14px;left:16px}.hud-tr{top:14px;right:16px}
+    .hud-bl{bottom:14px;left:16px}.hud-br{bottom:14px;right:16px}
+    .sub{max-width:30ch}
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div class="hud hud-tl">
+  <div class="title">KLANGFIGUREN</div>
+  <div class="rule"></div>
+  <div class="sub">sand strewn on a sounding plate — bass shakes it loose, pitch chooses the figure, silence lets it settle.</div>
+  <div class="sub2">AFTER E.&nbsp;F.&nbsp;F.&nbsp;CHLADNI · 1787</div>
+</div>
+
+<div class="hud hud-tr" id="contourWrap">
+  <div class="plateNo" id="plateNo">PLATE I</div>
+  <canvas id="contour" width="280" height="44"></canvas>
+  <div class="micro">PITCH CONTOUR</div>
+</div>
+
+<div class="hud hud-bl">
+  <div class="state" id="state">AWAKENING</div>
+  <div class="detail" id="detail">MODE 2·3 · FLUX 0.00 · CENTRE 0.40</div>
+</div>
+
+<div class="hud hud-br">
+  <div class="tempo"><span id="beatdot"></span><span id="tempoTxt">TEMPO ——</span></div>
+  <div class="conf" id="confTxt">AWAITING SIGNAL</div>
+</div>
+
+<div class="hud hud-bc" id="hint">trace a finger across the plate to stir the sand — press to strike it</div>
+
+<script>
+'use strict';
+/* ============================================================
+   KLANGFIGUREN — music rendered as a Chladni plate.
+   Thousands of sand grains obey a standing-wave field whose
+   mode numbers, tension and agitation are driven by the music.
+   ============================================================ */
+const TAU = Math.PI * 2;
+const clamp   = (v,a,b)=> v<a?a : v>b?b : v;
+const clamp01 = v => clamp(v,0,1);
+const num     = v => (typeof v==='number' && isFinite(v)) ? v : 0;
+const expo    = (cur,tgt,tau,dt)=> cur + (tgt-cur)*(1-Math.exp(-dt/tau));
+const easeIO  = t => t<0.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+let RM = false;
+try{ RM = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
+
+/* fast deterministic rng for grain jitter */
+let _s = 0x9e3779b9|0;
+function rnd(){ _s = (_s*1664525 + 1013904223)|0; return (_s>>>9)/8388608; }
+
+/* ---------- dom ---------- */
+const canvas   = document.getElementById('scene');
+const ctx      = canvas.getContext('2d');
+const stateEl  = document.getElementById('state');
+const detailEl = document.getElementById('detail');
+const tempoEl  = document.getElementById('tempoTxt');
+const confEl   = document.getElementById('confTxt');
+const beatdot  = document.getElementById('beatdot');
+const plateNoEl= document.getElementById('plateNo');
+const hintEl   = document.getElementById('hint');
+const contourCv= document.getElementById('contour');
+const cctx     = contourCv.getContext('2d');
+cctx.scale(2,2);
+
+/* ---------- state ---------- */
+const S = {
+  t:0, dt:1/60, fc:0,
+  env:0, transEnv:0, beatEnv:0, fluxS:0, centroidS:0.4, peakS:0,
+  subS:0, bassS:0, trebleS:0, bodyS:0, airS:0, widthS:0.5, balS:0,
+  connected:false, everLoud:false,
+  bpm:0, bpmConf:0, bpmPhase:0,
+  rot:0, rotDir:1, tilt:0, breath:1,
+  ex:0, kickPop:0, borderKick:0, lastRip:-9,
+  beatAcc:0, lastMorph:-10, centroidAnchor:0.4, idleClock:0,
+  plate:1,
+  plx:0, ply:0, hasP:false, pvS:0, pstr:0,
+  strike:null,
+  usingVIZ:false,
+  phR: Math.random()*6.283
+};
+const Fig = { m1:2, n1:3, Rb1:0.9, m2:2, n2:3, Rb2:0.9, R1:0.9, R2:0.9, w:1, mT:1, mDur:1.35 };
+const plate = { cx:0, cy:0, half:0 };
+let vw=0, vh=0, dpr=1, vignette=null;
+
+/* ---------- sand particles ---------- */
+const MAX = 6500;
+const px=new Float32Array(MAX), py=new Float32Array(MAX),
+      vx=new Float32Array(MAX), vy=new Float32Array(MAX),
+      ppx=new Float32Array(MAX), ppy=new Float32Array(MAX);
+let N = 0;
+const buckets=[]; for(let b=0;b<6;b++) buckets.push(new Int32Array(MAX));
+const bc=new Int32Array(6);
+const SIZES=[1.9,1.75,1.62,1.5,1.35,1.25];
+/* bone at rest -> ember in motion */
+const BCOL=[
+  'rgba(240,231,208,0.62)','rgba(238,224,187,0.55)','rgba(234,208,152,0.50)',
+  'rgba(229,183,112,0.48)','rgba(226,146,74,0.42)','rgba(255,124,64,0.38)'
+];
+const VMAX=0.5, VMAX2=VMAX*VMAX;
+
+/* ---------- waveform caches ---------- */
+let NW=null, BW=null, lastWave=null;
+const BWtmp=new Float32Array(200);
+const ripples=[];
+
+/* ---------- film grain ---------- */
+const grainCv=document.createElement('canvas'); grainCv.width=grainCv.height=140;
+(function(){
+  const g=grainCv.getContext('2d'), id=g.createImageData(140,140), d=id.data;
+  for(let i=0;i<d.length;i+=4){
+    const on=Math.random()>0.5;
+    d[i]=d[i+1]=d[i+2]=on?255:0; d[i+3]=on?11:8;
+  }
+  g.putImageData(id,0,0);
+})();
+let grainPat=null, gx=0, gy=0, gTick=0;
+
+function roman(n){
+  const M=[[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],
+           [50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];
+  let s='';
+  for(let i=0;i<M.length;i++){ while(n>=M[i][0]){ s+=M[i][1]; n-=M[i][0]; } }
+  return s||'I';
+}
+function rrect(c,x,y,w,h,r){
+  c.beginPath();
+  if(typeof c.roundRect==='function'){ c.roundRect(x,y,w,h,r); return; }
+  c.moveTo(x+r,y);
+  c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r);     c.arcTo(x,y,x+w,y,r);
+  c.closePath();
+}
+
+/* ---------- layout ---------- */
+function resize(w,h,d){
+  vw=w; vh=h; dpr=Math.min(2, d||window.devicePixelRatio||1);
+  canvas.width =Math.max(1,Math.round(vw*dpr));
+  canvas.height=Math.max(1,Math.round(vh*dpr));
+  plate.cx=vw/2; plate.cy=vh*0.485;
+  plate.half=Math.min(vw*0.40, vh*0.37);
+  vignette=ctx.createRadialGradient(plate.cx,plate.cy,Math.min(vw,vh)*0.26,
+                                    plate.cx,plate.cy,Math.hypot(vw,vh)*0.60);
+  vignette.addColorStop(0,'rgba(0,0,0,0)');
+  vignette.addColorStop(1,'rgba(3,5,4,0.66)');
+  adaptParticles();
+}
+window.addEventListener('resize',()=>resize(window.innerWidth,window.innerHeight,window.devicePixelRatio));
+
+function adaptParticles(){
+  const target=Math.round(clamp((vw*vh)/300, 2000, MAX));
+  if(target>N){
+    for(let i=N;i<target;i++){
+      px[i]=rnd()*2-1; py[i]=rnd()*2-1;
+      vx[i]=0; vy[i]=0; ppx[i]=px[i]; ppy[i]=py[i];
+    }
+  }
+  N=target;
+}
+
+/* screen -> plate-local (inverse of centre/tilt/breath) */
+function toLocal(sx,sy){
+  const dx=sx-plate.cx, dy=sy-plate.cy;
+  const c=Math.cos(S.tilt), s2=-Math.sin(S.tilt);
+  const k=1/((plate.half*S.breath)||1);
+  return { x:(c*dx - s2*dy)*k, y:(s2*dx + c*dy)*k };
+}
+
+/* ---------- figure selection ---------- */
+const LISTS=[
+  [[1,2],[2,3],[1,3],[2,1],[1,4]],                       /* low  register: broad curves   */
+  [[2,3],[3,4],[2,5],[1,5],[3,2],[3,5]],                 /* mid  register                 */
+  [[4,5],[3,6],[4,7],[5,6],[3,7],[5,4]]                  /* high register: fine lace      */
+];
+function pickMode(){
+  const reg=S.centroidS;
+  const list=LISTS[reg<0.36?0 : reg<0.62?1 : 2];
+  const cm=Fig.m2, cn=Fig.n2;
+  let pick=list[0];
+  for(let t=0;t<10;t++){
+    pick=list[(Math.random()*list.length)|0];
+    if(!((pick[0]===cm&&pick[1]===cn)||(pick[0]===cn&&pick[1]===cm))) break;
+  }
+  return { m:pick[0], n:pick[1], R:(Math.random()<0.5?-1:1)*(0.55+Math.random()*0.75) };
+}
+function morph(idle){
+  if(Fig.w<1){ Fig.m1=Fig.m2; Fig.n1=Fig.n2; Fig.Rb1=Fig.Rb2; }
+  const p=pickMode();
+  Fig.m2=p.m; Fig.n2=p.n; Fig.Rb2=p.R;
+  Fig.w=0; Fig.mT=0; Fig.mDur=idle?2.6:1.35;
+  S.lastMorph=S.t; S.beatAcc=0; S.centroidAnchor=S.centroidS;
+  S.plate++; plateNoEl.textContent='PLATE '+roman(S.plate);
+  if(!idle) ripples.push({t0:S.t,str:0.45});
+}
+
+/* ---------- pointer ---------- */
+const LP={x:0,y:0,active:false,down:false};
+window.addEventListener('pointermove',e=>{LP.x=e.clientX;LP.y=e.clientY;LP.active=true;},{passive:true});
+window.addEventListener('pointerdown',e=>{
+  LP.x=e.clientX;LP.y=e.clientY;LP.active=true;LP.down=true;
+  S.strike={sx:e.clientX,sy:e.clientY,age:0};
+  S.borderKick=1;
+  ripples.push({t0:S.t,str:0.8});
+  hideHint();
+},{passive:true});
+window.addEventListener('pointerup',   ()=>{LP.down=false;},{passive:true});
+window.addEventListener('pointercancel',()=>{LP.down=false;LP.active=false;},{passive:true});
+
+let hintGone=false;
+function hideHint(){ if(hintGone)return; hintGone=true; hintEl.classList.remove('show'); }
+setTimeout(()=>{ if(!hintGone) hintEl.classList.add('show'); },1500);
+setTimeout(hideHint,16000);
+
+/* ---------- waveform normalisation & border wave ---------- */
+function buildWaves(w){
+  if(!w||w.length<8){ NW=null; BW=null; return; }
+  const n=w.length;
+  let mean=0;
+  for(let i=0;i<n;i++) mean+=num(w[i]);
+  mean/=n;
+  let mx=1e-4;
+  for(let i=0;i<n;i++){ const v=Math.abs(num(w[i])-mean); if(v>mx)mx=v; }
+  if(!NW||NW.length!==n) NW=new Float32Array(n);
+  const g=1/mx;
+  for(let i=0;i<n;i++) NW[i]=(num(w[i])-mean)*g;
+  const M=200;
+  if(!BW) BW=new Float32Array(M);
+  for(let j=0;j<M;j++){
+    const p=j/M*n, i0=p|0, f=p-i0;
+    const a=NW[i0%n], b2=NW[(i0+1)%n];
+    BW[j]=a+(b2-a)*f;
+  }
+  for(let pass=0;pass<2;pass++){
+    for(let j=0;j<M;j++){
+      let s2=0;
+      for(let k=-2;k<=2;k++) s2+=BW[(j+k+M)%M];
+      BWtmp[j]=s2/5;
+    }
+    BW.set(BWtmp);
+  }
+}
+
+/* ---------- sand physics ---------- */
+function stepParticles(s){
+  const ex=S.ex;
+  const kappa=0.0023*(0.5+0.95*ex);                              /* pull toward nodal lines */
+  const thermal=(0.0006+0.030*ex*ex+0.007*S.airS*ex+0.005*S.trebleS*ex)*(RM?0.7:1);
+  const dampN=clamp(0.905-0.05*S.trebleS+0.03*S.bassS,0.86,0.945);
+  const damp=Math.exp(Math.log(dampN)*s);
+  const K=(0.30*Math.min(1.4,S.transEnv)+(S.strike?0.10:0))*(RM?0.55:1);
+  const c=Math.cos(S.rot), sn=Math.sin(S.rot);
+  const m1=Fig.m1, n1=Fig.n1, R1=Fig.R1, P1=Math.PI*m1, Q1=Math.PI*n1;
+  const m2=Fig.m2, n2=Fig.n2, R2=Fig.R2, P2=Math.PI*m2, Q2=Math.PI*n2;
+  const w=Fig.w, iw=1-w, blend=w<1;
+  const kap=-kappa*s;
+  const pOn=S.pstr>0.0005, plx=S.plx, ply=S.ply, pr=0.30, pr2=pr*pr;
+  const pstr=S.pstr*s;
+  const st=S.strike;
+  let stx=0, sty=0, stf=0;
+  if(st){
+    const l=toLocal(st.sx,st.sy);
+    stx=l.x; sty=l.y; stf=(1-st.age/0.12)*0.55*s;
+  }
+  for(let b=0;b<6;b++) bc[b]=0;
+  const th0=3.6e-5, th1=4.0e-4, th2=2.03e-3, th3=1.0e-2, th4=4.0e-2;
+
+  for(let i=0;i<N;i++){
+    let x=px[i], y=py[i], u=vx[i], v=vy[i];
+    /* sample the standing wave in the (slowly rotating) plate frame */
+    const X=c*x+sn*y, Y=-sn*x+c*y;
+    const a1=Math.cos(P1*X), b1=Math.cos(Q1*Y), d1=Math.cos(Q1*X), e1=Math.cos(P1*Y);
+    const s1=Math.sin(P1*X), t1=Math.sin(Q1*Y), u1=Math.sin(Q1*X), w1=Math.sin(P1*Y);
+    let F = a1*b1 - R1*d1*e1;
+    let fX= -P1*s1*b1 + R1*Q1*u1*e1;
+    let fY= -Q1*a1*t1 + R1*P1*d1*w1;
+    if(blend){ /* crossfade toward the next figure */
+      const a2=Math.cos(P2*X), b2=Math.cos(Q2*Y), d2=Math.cos(Q2*X), e2=Math.cos(P2*Y);
+      const s2=Math.sin(P2*X), t2=Math.sin(Q2*Y), u2=Math.sin(Q2*X), w2=Math.sin(P2*Y);
+      F  = iw*F    + w*(a2*b2 - R2*d2*e2);
+      fX = iw*fX   + w*(-P2*s2*b2 + R2*Q2*u2*e2);
+      fY = iw*fY   + w*(-Q2*a2*t2 + R2*P2*d2*w2);
+    }
+    /* gradient descent on F^2 (rotate gradient back to plate frame) */
+    const gx=c*fX-sn*fY, gy=sn*fX+c*fY;
+    u += kap*F*gx + (rnd()*2-1)*thermal;
+    v += kap*F*gy + (rnd()*2-1)*thermal;
+    if(K>0.002){ u+=(rnd()*2-1)*K; v+=(rnd()*2-1)*K; }             /* transient kick */
+    if(pOn){                                                        /* finger stir */
+      const dx=x-plx, dy=y-ply, d2=dx*dx+dy*dy;
+      if(d2<pr2){
+        const d=Math.sqrt(d2)+0.04, f=(1-d/pr)*pstr/d;
+        u+=(dx-dy*0.7)*f; v+=(dy+dx*0.7)*f;
+      }
+    }
+    if(stf>0){                                                      /* press strike */
+      const dx=x-stx, dy=y-sty, d2=dx*dx+dy*dy;
+      if(d2<0.3025){
+        const d=Math.sqrt(d2)+0.03, f=stf*(1-d/0.55)/d;
+        u+=dx*f; v+=dy*f;
+      }
+    }
+    u*=damp; v*=damp;
+    const sp2=u*u+v*v;
+    if(sp2>VMAX2){ const r=VMAX/Math.sqrt(sp2); u*=r; v*=r; }
+    ppx[i]=x; ppy[i]=y;
+    x+=u*s; y+=v*s;
+    if(x> 1){ x= 2-x; u*=-0.5; } else if(x<-1){ x=-2-x; u*=-0.5; }
+    if(y> 1){ y= 2-y; v*=-0.5; } else if(y<-1){ y=-2-y; v*=-0.5; }
+    px[i]=x; py[i]=y; vx[i]=u; vy[i]=v;
+    let b;
+    if(sp2<th0)b=0; else if(sp2<th1)b=1; else if(sp2<th2)b=2;
+    else if(sp2<th3)b=3; else if(sp2<th4)b=4; else b=5;
+    buckets[b][bc[b]++]=i;
+  }
+}
+
+/* ---------- render ---------- */
+function render(){
+  const cx=plate.cx, cy=plate.cy, H=plate.half*S.breath;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle='#0a0c0a'; ctx.fillRect(0,0,vw,vh);
+  if(vignette){ ctx.fillStyle=vignette; ctx.fillRect(0,0,vw,vh); }
+
+  ctx.save();
+  ctx.translate(cx,cy); ctx.rotate(S.tilt);
+  ctx.fillStyle='#0d110e'; rrect(ctx,-H,-H,2*H,2*H,10); ctx.fill();
+  const sheen=ctx.createRadialGradient(0,-H*0.22,H*0.1,0,0,H*1.05);
+  sheen.addColorStop(0,'rgba(228,233,210,0.05)');
+  sheen.addColorStop(1,'rgba(228,233,210,0)');
+  ctx.fillStyle=sheen; rrect(ctx,-H,-H,2*H,2*H,10); ctx.fill();
+  if(S.kickPop>0.02){
+    ctx.fillStyle='rgba(224,150,72,'+(0.06*S.kickPop).toFixed(3)+')';
+    rrect(ctx,-H,-H,2*H,2*H,10); ctx.fill();
+  }
+  /* sand, clipped to the plate, drawn in plate-local units */
+  ctx.save();
+  rrect(ctx,-H,-H,2*H,2*H,10); ctx.clip();
+  ctx.scale(H,H);
+  const invH=1/H;
+  for(let b=0;b<6;b++){
+    const cnt=bc[b];
+    if(!cnt) continue;
+    const arr=buckets[b];
+    if(b<4){
+      const hs=SIZES[b]*0.5*invH;
+      ctx.fillStyle=BCOL[b];
+      for(let k=0;k<cnt;k++){
+        const id=arr[k];
+        ctx.fillRect(px[id]-hs,py[id]-hs,hs*2,hs*2);
+      }
+    }else{ /* fast grains leave ember streaks */
+      ctx.strokeStyle=BCOL[b];
+      ctx.lineWidth=(b===5?1.3:1.15)*invH;
+      ctx.beginPath();
+      for(let k=0;k<cnt;k++){
+        const id=arr[k];
+        ctx.moveTo(ppx[id],ppy[id]); ctx.lineTo(px[id],py[id]);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  /* engraved outer hairline + centre mark */
+  ctx.strokeStyle='rgba(64,72,64,0.55)'; ctx.lineWidth=1;
+  rrect(ctx,-H-7,-H-7,2*H+14,2*H+14,14); ctx.stroke();
+  ctx.strokeStyle='rgba(196,206,184,0.15)';
+  ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.moveTo(0,-4); ctx.lineTo(0,4); ctx.stroke();
+  ctx.restore();
+
+  drawBorder(cx,cy,H);
+  drawRipples(cx,cy,H);
+  drawTicks(cx,cy,H);
+  drawSeismo();
+  drawGrain();
+}
+
+function drawBorder(cx,cy,H){
+  if(!BW){ /* no waveform yet: static edge */
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(S.tilt);
+    ctx.strokeStyle='rgba(205,214,192,0.18)'; ctx.lineWidth=1;
+    rrect(ctx,-H,-H,2*H,2*H,10); ctx.stroke();
+    ctx.restore(); return;
+  }
+  let amp=1.1+0.45*Math.sin(S.t*0.9)+6.2*S.ex+2.6*S.subS+2.2*S.peakS+6.5*S.borderKick;
+  amp=Math.min(22,amp);
+  const cosT=Math.cos(S.tilt), sinT=Math.sin(S.tilt);
+  ctx.strokeStyle='rgba(205,214,192,'+(0.15+0.30*S.ex+0.25*S.borderKick).toFixed(3)+')';
+  ctx.lineWidth=1; ctx.beginPath();
+  const M=BW.length;
+  for(let j=0;j<M;j++){
+    const t=j/M, v=BW[j]*amp;
+    const side=Math.min(3,(t*4)|0), u=t*4-side;
+    let bx,by,nx,ny;
+    if(side===0){ bx=-H+2*H*u; by=-H; nx=0;  ny=-1; }
+    else if(side===1){ bx=H; by=-H+2*H*u; nx=1;  ny=0; }
+    else if(side===2){ bx=H-2*H*u; by=H;  nx=0;  ny=1; }
+    else            { bx=-H; by=H-2*H*u; nx=-1; ny=0; }
+    const lx=bx+nx*v, ly=by+ny*v;
+    const X=cx+lx*cosT-ly*sinT, Y=cy+lx*sinT+ly*cosT;
+    if(j) ctx.lineTo(X,Y); else ctx.moveTo(X,Y);
+  }
+  ctx.closePath(); ctx.stroke();
+}
+
+function drawRipples(cx,cy,H){
+  for(let i=0;i<ripples.length;i++){
+    const r=ripples[i], k=(S.t-r.t0)/0.9;
+    if(k<0||k>1) continue;
+    const al=(1-k)*(1-k)*0.28*r.str;
+    if(al<0.01) continue;
+    const size=H*(1.02+k*0.34);
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(S.tilt);
+    ctx.strokeStyle='rgba(214,166,104,'+al.toFixed(3)+')'; ctx.lineWidth=1;
+    rrect(ctx,-size,-size,2*size,2*size,14); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawTicks(cx,cy,H){
+  const cosT=Math.cos(S.tilt), sinT=Math.sin(S.tilt);
+  ctx.strokeStyle='#39413a'; ctx.lineWidth=1; ctx.beginPath();
+  const cs=[[1,1],[1,-1],[-1,1],[-1,-1]];
+  for(let i=0;i<4;i++){
+    const sx=cs[i][0], sy=cs[i][1];
+    const lx=sx*(H+16), ly=sy*(H+16);
+    const X=cx+lx*cosT-ly*sinT, Y=cy+lx*sinT+ly*cosT;
+    ctx.moveTo(X+sx*9,Y); ctx.lineTo(X,Y); ctx.lineTo(X,Y+sy*9);
+  }
+  ctx.stroke();
+}
+
+function drawSeismo(){
+  if(!NW||vw<680||vh<540) return;
+  const w2=Math.min(vw*0.46,520), x0=(vw-w2)/2, mid=vh-60, h2=18;
+  ctx.strokeStyle='#39413a'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(x0-16,mid-3); ctx.lineTo(x0-16,mid+3);
+  ctx.moveTo(x0+w2+16,mid-3); ctx.lineTo(x0+w2+16,mid+3);
+  ctx.stroke();
+  ctx.strokeStyle='rgba(150,158,140,0.18)';
+  ctx.beginPath(); ctx.moveTo(x0,mid); ctx.lineTo(x0+w2,mid); ctx.stroke();
+  const amp=h2*(0.22+0.78*Math.min(1,S.env*1.5));
+  ctx.strokeStyle='rgba(210,154,90,0.50)';
+  ctx.beginPath();
+  const n=NW.length;
+  for(let i=0;i<n;i++){
+    const X=x0+i/(n-1)*w2, Y=mid-NW[i]*amp;
+    if(i) ctx.lineTo(X,Y); else ctx.moveTo(X,Y);
+  }
+  ctx.stroke();
+  ctx.fillStyle='rgba(118,124,112,0.75)';
+  ctx.font='500 9px Menlo, Consolas, "DejaVu Sans Mono", monospace';
+  ctx.letterSpacing='3px';
+  ctx.textAlign='center';
+  ctx.fillText('SIGNAL', vw/2, mid-h2-7);
+  ctx.letterSpacing='0px';
+  ctx.textAlign='left';
+}
+
+function drawGrain(){
+  if(!grainPat) grainPat=ctx.createPattern(grainCv,'repeat');
+  if((gTick=(gTick+1)%5)===0){ gx=Math.random()*140; gy=Math.random()*140; }
+  ctx.save(); ctx.translate(gx,gy);
+  ctx.fillStyle=grainPat;
+  ctx.fillRect(-gx-140,-gy-140,vw+280,vh+280);
+  ctx.restore();
+}
+
+/* ---------- pitch contour sparkline ---------- */
+const HN=140, hist=new Float32Array(HN).fill(0.4);
+let histHead=0, histT=0;
+function drawContour(dt){
+  histT+=dt;
+  if(histT>0.08){ histT=0; hist[histHead%HN]=S.centroidS; histHead++; }
+  const c=cctx;
+  c.clearRect(0,0,140,22);
+  c.strokeStyle='rgba(160,168,150,0.14)'; c.lineWidth=1;
+  c.beginPath(); c.moveTo(0,20.5); c.lineTo(140,20.5); c.stroke();
+  c.strokeStyle='rgba(156,163,144,0.85)';
+  c.beginPath();
+  for(let i=0;i<HN;i++){
+    const v=hist[(histHead+i)%HN], y=20-v*15.5-2;
+    if(i) c.lineTo(i,y); else c.moveTo(i,y);
+  }
+  c.stroke();
+  const lv=hist[(histHead+HN-1)%HN];
+  c.fillStyle='#d29a5a';
+  c.fillRect(137,20-lv*15.5-3.5,3,3);
+}
+
+/* ---------- hud ---------- */
+function stateWord(){
+  if(!S.everLoud&&S.env<0.05) return S.usingVIZ?'AWAITING SIGNAL':'STANDING BY';
+  if(S.env<0.05)              return 'SILENCE — SAND AT REST';
+  if(S.kickPop>0.55)          return 'STRUCK';
+  if(Fig.w>0&&Fig.w<1)        return 'REFORMING FIGURE';
+  if(S.ex>0.62)               return 'EXCITED — SAND ALIGHT';
+  return 'LISTENING — FIGURE RESOLVING';
+}
+function updateHUD(){
+  stateEl.textContent=stateWord();
+  const changing=Fig.w>0&&Fig.w<1;
+  const mtxt=changing ? (Fig.m1+'·'+Fig.n1+' → '+Fig.m2+'·'+Fig.n2) : (Fig.m1+'·'+Fig.n1);
+  detailEl.textContent='MODE '+mtxt+' · FLUX '+S.fluxS.toFixed(2)+' · CENTRE '+S.centroidS.toFixed(2);
+  const bpmOK=S.connected&&S.bpmConf>0.15&&S.bpm>=25;
+  tempoEl.textContent=bpmOK?('TEMPO '+Math.round(S.bpm)):'TEMPO ——';
+  confEl.textContent=!S.connected?'NO SIGNAL':(bpmOK?('PULSE '+Math.round(S.bpmConf*100)+'%'):'PULSE UNSTEADY');
+}
+
+/* ---------- pointer resolution ---------- */
+function resolvePointer(frame,dt){
+  let P=null;
+  const hp=frame.pointer;
+  if(hp&&hp.active) P={x:hp.x,y:hp.y,down:!!hp.down};
+  else if(LP.active) P={x:LP.x,y:LP.y,down:LP.down};
+  S.pstr=0;
+  if(P){
+    const l=toLocal(P.x,P.y);
+    if(Math.max(Math.abs(l.x),Math.abs(l.y))<1.28){
+      if(S.hasP){
+        const ddx=l.x-S.plx, ddy=l.y-S.ply;
+        S.pvS=expo(S.pvS, Math.sqrt(ddx*ddx+ddy*ddy)/(dt+1e-4), 0.12, dt);
+      }
+      S.plx=l.x; S.ply=l.y; S.hasP=true;
+      const mod=0.5+Math.min(2.5,S.pvS*1.6);
+      S.pstr=(P.down?0.0075:0.0016)*mod;
+    }else{ S.hasP=false; S.pvS=expo(S.pvS,0,0.3,dt); }
+  }else{ S.hasP=false; S.pvS=expo(S.pvS,0,0.3,dt); }
+}
+
+/* ---------- frame intake ---------- */
+let lastHost=0, lastPolled=-1, lastSynth=0;
+
+function tick(frame){
+  if(!frame) return;
+  lastHost=performance.now();
+  let at=num(frame.time);
+  if(!at) at=lastHost/1000;
+  if(at>1e5) at/=1000;                       /* defensive: ms timestamps */
+  let dt;
+  if(!S.t){ dt=1/60; }
+  else{
+    const dtn=num(frame.deltaTime);
+    dt=(dtn>0.0005&&dtn<0.12)?dtn:clamp(at-S.t,0.001,0.05);
+  }
+  S.t=at; S.dt=dt;
+  const s=clamp(dt*60,0.4,2.2);
+  const vp=frame.viewport;
+  if(vp&&vp.width&&vp.height&&
+     (vp.width!==vw||vp.height!==vh||(vp.dpr&&Math.min(2,vp.dpr)!==dpr)))
+    resize(vp.width,vp.height,vp.dpr);
+
+  /* ----- interpret the music ----- */
+  const a=frame.audio||{};
+  S.connected=a.connected!==false;
+  const vol=clamp01(num(a.volume));
+  const silent=!S.connected||a.silence===true||vol<0.004;
+  S.env=expo(S.env, silent?0:vol, silent?0.9:0.10, dt);
+  if(S.env>0.06) S.everLoud=true;
+  const tr=clamp01(num(a.transient));
+  S.transEnv=expo(S.transEnv, tr, tr>S.transEnv?0.03:0.18, dt);
+  const bt=clamp01(num(a.beat));
+  S.beatEnv=expo(S.beatEnv, bt, bt>S.beatEnv?0.05:0.28, dt);
+  S.fluxS=expo(S.fluxS, clamp01(num(a.spectralFlux)), 0.25, dt);
+  let cRaw=num(a.spectralCentroid);
+  if(cRaw>1.5) cRaw=clamp01((Math.log2(Math.max(30,cRaw))-5.9)/7.6);  /* Hz -> register */
+  S.centroidS=expo(S.centroidS, clamp01(cRaw), 0.4, dt);
+  const bd=a.bands||{};
+  const sub=clamp01(num(bd.subBass)), bas=clamp01(num(bd.bass));
+  const lo=clamp01(num(bd.lowMid)), mid=clamp01(num(bd.mid));
+  const hi=clamp01(num(bd.highMid)), tre=clamp01(num(bd.treble));
+  S.subS   =expo(S.subS,   sub,             0.16, dt);
+  S.bassS  =expo(S.bassS,  (sub+bas)*0.5,   0.16, dt);
+  S.trebleS=expo(S.trebleS,(hi+tre)*0.5,    0.30, dt);
+  S.bodyS  =expo(S.bodyS,  (lo+mid+hi)/3,   0.30, dt);
+  S.peakS  =expo(S.peakS,  clamp01(num(a.peak)), 0.05, dt);
+  const st2=a.stereo||{};
+  S.widthS=expo(S.widthS, clamp01(num(st2.width)), 0.6, dt);
+  S.balS  =expo(S.balS,   clamp(num(st2.balance),-1,1), 0.6, dt);
+  let tp=num(a.tempo), tc=clamp01(num(a.tempoConfidence));
+  if(!(tp>=25&&tp<=250)){ tp=0; tc=0; }
+  if(tp) S.bpm=S.bpm?expo(S.bpm,tp,0.8,dt):tp;
+  S.bpmConf=expo(S.bpmConf,tc,0.8,dt);
+  if(tc>0.3&&S.bpm) S.bpmPhase=(S.bpmPhase+dt*S.bpm/60)%1;
+  const sp=a.spectrum;
+  if(sp&&sp.length>8){
+    let sum=0,c2=0;
+    for(let i=(sp.length*2/3)|0;i<sp.length;i++){ sum+=num(sp[i]); c2++; }
+    S.airS=expo(S.airS, clamp01(sum/Math.max(1,c2)), 0.4, dt);
+  }
+  S.ex=Math.min(1, S.env*1.08 + S.fluxS*0.30 + S.bodyS*0.06);
+  if(tr>0.45) S.kickPop=Math.max(S.kickPop, Math.min(1,(tr-0.45)*1.6));
+  S.kickPop*=Math.exp(-dt/0.16);
+  S.borderKick*=Math.exp(-dt/0.22);
+  if(bt>0.55&&S.t-S.lastRip>0.24){
+    ripples.push({t0:S.t,str:Math.min(1,bt)});
+    if(ripples.length>6) ripples.shift();
+    S.lastRip=S.t;
+  }
+  for(let i=ripples.length-1;i>=0;i--) if(S.t-ripples[i].t0>0.95) ripples.splice(i,1);
+
+  /* ----- plate motion ----- */
+  const dirT=Math.abs(S.balS)<0.06?Math.sign(S.rotDir||1):(S.balS>=0?1:-1);
+  S.rotDir=expo(S.rotDir,dirT,1.2,dt);
+  let om=(0.03+0.11*S.ex)*S.rotDir;
+  om*=1+0.25*Math.sin(TAU*S.bpmPhase)*S.bpmConf;
+  if(Fig.w<1) om*=0.35;
+  if(RM) om*=0.45;
+  S.rot+=om*dt;
+  S.tilt=expo(S.tilt, S.balS*0.055, 0.5, dt);
+  S.breath=1+0.007*Math.sin(TAU*S.bpmPhase)*S.bpmConf*(0.25+0.75*S.env)+0.013*S.kickPop;
+
+  /* ----- figure scheduling ----- */
+  if(Fig.w<1){
+    Fig.mT+=dt;
+    const q=Math.min(1,Fig.mT/Fig.mDur);
+    Fig.w=easeIO(q);
+    if(q>=1){ Fig.m1=Fig.m2; Fig.n1=Fig.n2; Fig.Rb1=Fig.Rb2; Fig.w=1; }
+  }
+  S.beatAcc=S.beatAcc*Math.exp(-dt/7)+S.beatEnv*dt*(1+S.bpmConf);
+  const since=S.t-S.lastMorph;
+  const cShift=Math.abs(S.centroidS-S.centroidAnchor)>0.26;
+  if(since>7&&(S.beatAcc>2.6||cShift)) morph(false);
+  else if(since>26&&S.env>0.12) morph(false);
+  if(S.env<0.05){ S.idleClock+=dt; if(S.idleClock>26){ morph(true); S.idleClock=0; } }
+  else S.idleClock=0;
+  const wob=0.20*Math.sin(S.t*0.33+S.phR)*(0.25+0.75*S.widthS)
+           +0.10*Math.sin(S.t*0.71+S.phR*2.7)*S.widthS;
+  Fig.R1=Fig.Rb1+wob; Fig.R2=Fig.Rb2+wob;
+
+  buildWaves(a.waveform);
+  resolvePointer(frame,dt);
+  if(S.strike){ S.strike.age+=dt; if(S.strike.age>0.13) S.strike=null; }
+
+  stepParticles(s);
+  render();
+  beatdot.style.opacity=(0.14+0.86*Math.min(1,S.beatEnv*1.35)).toFixed(3);
+  S.fc++;
+  if(S.fc%6===0) updateHUD();
+  drawContour(dt);
+}
+
+/* ---------- frame source: VIZ, polled frame, or silent clock ---------- */
+function synthFrame(){
+  const now=performance.now();
+  const dt=lastSynth?Math.min(0.05,(now-lastSynth)/1000):1/60;
+  lastSynth=now;
+  return {
+    version:'visualizer-audio-v1', time:now/1000, deltaTime:dt,
+    audio:{ connected:false, silence:true, volume:0, peak:0, transient:0, beat:0,
+            tempo:0, tempoConfidence:0, spectralFlux:0, spectralCentroid:0.4,
+            bands:{subBass:0,bass:0,lowMid:0,mid:0,highMid:0,treble:0},
+            stereo:{balance:0,width:0.5}, waveform:[], spectrum:[] },
+    pointer:{x:LP.x,y:LP.y,active:LP.active,down:LP.down},
+    viewport:{width:vw,height:vh,dpr:dpr}
+  };
+}
+function driver(){
+  requestAnimationFrame(driver);
+  if(S.usingVIZ&&performance.now()-lastHost<80) return;   /* host is driving */
+  if(window.VIZ&&VIZ.frame&&num(VIZ.frame.time)!==lastPolled){
+    lastPolled=num(VIZ.frame.time);
+    tick(VIZ.frame);
+  }else{
+    tick(synthFrame());
+  }
+}
+(function attach(){
+  try{
+    if(window.VIZ&&typeof window.VIZ.onFrame==='function'){
+      window.VIZ.onFrame(f=>{ S.usingVIZ=true; tick(f); });
+    }
+  }catch(e){ /* fall through to driver */ }
+  requestAnimationFrame(driver);
+})();
+
+/* ---------- boot ---------- */
+resize(window.innerWidth,window.innerHeight,window.devicePixelRatio||1);
+updateHUD();
+</script>
+</body>
+</html>
