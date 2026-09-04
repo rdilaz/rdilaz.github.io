@@ -153,9 +153,23 @@ const ordered = (...positions) => positions.every((position, index) => (
 expect(/sandbox="allow-scripts"/.test(index), 'Generated visualizer iframes must allow scripts inside a sandbox.');
 expect(!/sandbox="[^"]*allow-same-origin/.test(index), 'Generated visualizer sandbox must never use allow-same-origin.');
 expect(audio.includes('getDisplayMedia'), 'Audio engine must use display/system audio capture.');
-expect(!audio.includes('getUserMedia('), 'Microphone capture is forbidden.');
-expect(audio.includes("audioSelection:'preferred'"), 'Chromium capture must prefer audio-bearing sources.');
-expect(audio.includes('smoothingTimeConstant=.08'), 'Fast analyser smoothing must stay low-latency.');
+expect(audio.includes('getUserMedia'), 'Audio engine must support explicit microphone fallback.');
+expect(/audioSelection:\s*'preferred'/.test(audio), 'Chromium capture must prefer audio-bearing sources.');
+expect(/smoothingTimeConstant\s*=\s*\.08/.test(audio), 'Fast analyser smoothing must stay low-latency.');
+expect(
+  audio.includes('getSupportedConstraints')
+    && audio.includes('connectDisplayAudio')
+    && audio.includes('connectMicrophone')
+    && audio.includes("sourceKind === 'microphone'"),
+  'Audio capture must remain explicit, capability-aware and source-agnostic.',
+);
+expect(
+  index.includes('Listen with microphone')
+    && index.includes('Share tab / system audio')
+    && index.includes('never sent to the AI')
+    && index.includes('not internal phone audio'),
+  'Audio source UX must preserve mobile fallback and privacy truth.',
+);
 expect(prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v2'") && prompt.includes('There are no aesthetic requirements.'), 'Versioned legacy baseline prompt must remain aesthetically unconstrained.');
 expect(
   prompt.includes("DEFAULT_PROMPT_PRESET_ID = 'neutral-v1'")
