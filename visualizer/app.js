@@ -244,6 +244,7 @@ const modelFitEvidenceStore = createModelFitEvidenceStore({ storage: localSettin
 const fixtureDiagnostics = new Map();
 let dreamSwitcher = null;
 let featuredDreams = [];
+const featuredLoadFailures = [];
 let currentDreamKey = 'featured:calibration-bloom';
 let drawerReturnFocus = null;
 let selectedReasoningSelection = null;
@@ -2457,6 +2458,7 @@ function runtimeSummary() {
     heartbeatAgeMs: heartbeatAge,
     audioConnected: Boolean(audio.connected),
     audio: audio.diagnostics(),
+    featuredLoadFailures: structuredClone(featuredLoadFailures),
     sensitivityPercent,
     renderQuality: {
       ...renderQuality,
@@ -3182,11 +3184,17 @@ async function initialize() {
     onFavorite: snapshot => { void toggleReadyJobFavorite(snapshot); },
     onSpend: () => window.VIZ_COST_GUARD?.openSpendProtection?.(),
   });
+  const recordFeaturedFailure = failure => {
+    if (!featuredLoadFailures.some(item => item.id === failure.id && item.code === failure.code)) {
+      featuredLoadFailures.push({ id: failure.id, code: failure.code });
+    }
+    console.warn(`Featured Dream ${failure.id} was skipped safely (${failure.code}).`);
+  };
   try {
-    featuredDreams = await loadFeaturedDreams();
+    featuredDreams = await loadFeaturedDreams({ onFailure: recordFeaturedFailure });
   } catch (error) {
     console.warn('Featured manifest could not load from its static HTML path:', error);
-    featuredDreams = await loadFeaturedDreams({ fetchImpl: null });
+    featuredDreams = await loadFeaturedDreams({ fetchImpl: null, onFailure: recordFeaturedFailure });
   }
   currentDreamKey = featuredDreams.find(item => item.startup)?.key || currentDreamKey;
   dreamSwitcher = mountDreamSwitcher({
@@ -3202,12 +3210,23 @@ async function initialize() {
   wireEvents();
   updateConnectionUi();
 
-  const startupFeatured = featuredDreams.find(item => item.startup);
+  let startupFeatured = featuredDreams.find(item => item.startup);
   currentHtml = startupFeatured?.html || DEFAULT_VISUALIZER_HTML;
-  await activeSlot.sandbox.load(currentHtml, {
-    viewport: currentViewport(),
-    readyTimeoutMs: 2200,
-  });
+  try {
+    const startupBoot = await activeSlot.sandbox.load(currentHtml, {
+      viewport: currentViewport(),
+      readyTimeoutMs: 2200,
+    });
+    if (!startupBoot.ready || startupBoot.fatalEvents.length) throw new Error('Featured startup did not become ready.');
+  } catch {
+    if (startupFeatured) recordFeaturedFailure({ id: startupFeatured.id, code: 'FEATURED_STARTUP_FAILED' });
+    startupFeatured = null;
+    currentHtml = DEFAULT_VISUALIZER_HTML;
+    await activeSlot.sandbox.load(currentHtml, {
+      viewport: currentViewport(),
+      readyTimeoutMs: 2200,
+    });
+  }
   if (startupFeatured) {
     const startupArtifact = featuredArtifact(startupFeatured);
     const startupToken = stageLiveCandidate(liveIdentityForGeneration(startupArtifact, { kind: 'featured' }));
