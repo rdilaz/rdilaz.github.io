@@ -1,3 +1,5 @@
+import { dreamDisplayTitle, dreamPromptLabel } from './dream-metadata.js';
+
 export const DREAM_SWITCHER_SCHEMA = 'visualizer-dream-switcher-v1';
 export const RECENT_DREAM_LIMIT = 8;
 
@@ -14,7 +16,7 @@ function usableLocalDream(generation) {
     || ['ready-to-open', 'verified-live', 'failed-to-open'].includes(generation.openStatus);
 }
 
-function localItem(generation, activeKey) {
+function localItem(generation, activeKey, savedPrompts) {
   const key = localDreamKey(generation);
   const state = generation.openStatus === 'ready-to-open'
     ? 'Ready'
@@ -27,8 +29,9 @@ function localItem(generation, activeKey) {
     key,
     source: 'local',
     id: generation.id,
-    title: generation.title || generation.modelName || generation.modelId,
+    title: dreamDisplayTitle(generation),
     modelName: generation.modelName || generation.modelId,
+    promptLabel: dreamPromptLabel(generation, { savedPrompts }),
     createdAt: Number(generation.readyAt || generation.createdAt || 0),
     favorite: Boolean(generation.favorite),
     active: key === activeKey,
@@ -42,23 +45,23 @@ export function buildDreamSwitcherGroups({
   generations = [],
   activeKey = '',
   recentLimit = RECENT_DREAM_LIMIT,
+  savedPrompts = [],
 } = {}) {
   const featuredItems = featured
     .map(item => ({
       key: item.key || `featured:${item.id}`,
       source: 'featured',
       id: item.id,
-      title: item.title,
-      modelName: item.provenance?.generatedByModel
-        ? `${item.modelName} · ${item.promptProfileName}`
-        : `Built-in visual · ${item.promptProfileName}`,
+      title: dreamDisplayTitle(item),
+      modelName: item.provenance?.generatedByModel ? item.modelName : 'Built-in visual',
+      promptLabel: dreamPromptLabel(item, { savedPrompts }),
       favorite: false,
       active: (item.key || `featured:${item.id}`) === activeKey,
       state: (item.key || `featured:${item.id}`) === activeKey ? 'LIVE' : 'Featured',
       featured: item,
     }))
     .sort((a, b) => Number(a.featured.order) - Number(b.featured.order) || a.id.localeCompare(b.id));
-  const locals = generations.filter(usableLocalDream).map(generation => localItem(generation, activeKey));
+  const locals = generations.filter(usableLocalDream).map(generation => localItem(generation, activeKey, savedPrompts));
   const newestFirst = (a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id);
   return Object.freeze({
     schema: DREAM_SWITCHER_SCHEMA,
@@ -131,15 +134,18 @@ export function mountDreamSwitcher({
       choose.className = 'dream-switcher__choose';
       choose.dataset.switcherChoose = item.key;
       choose.dataset.switcherAction = 'choose';
-      choose.setAttribute('aria-label', `${item.active ? 'Current Dream' : 'Open Dream'}: ${item.title}, ${item.modelName}`);
+      choose.setAttribute('aria-label', `${item.active ? 'Current Dream' : 'Open Dream'}: ${item.title}, ${item.modelName}, prompt ${item.promptLabel}`);
       if (item.active) choose.setAttribute('aria-current', 'true');
       const title = document.createElement('strong');
       title.textContent = item.title;
       const model = document.createElement('small');
       model.textContent = item.modelName;
+      const prompt = document.createElement('small');
+      prompt.className = 'dream-switcher__prompt';
+      prompt.textContent = `Prompt: ${item.promptLabel}`;
       const state = document.createElement('span');
       state.textContent = item.state;
-      choose.append(title, model, state);
+      choose.append(title, model, prompt, state);
       choose.addEventListener('click', () => onOpen(item));
       row.appendChild(choose);
       if (item.source === 'local') {

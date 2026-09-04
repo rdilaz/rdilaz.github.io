@@ -78,6 +78,10 @@ function normalizedEntries(document) {
   return entries;
 }
 
+export function readPromptLibraryEntries(storage = null) {
+  return Object.freeze(normalizedEntries(parseDocument(storageOrNull(storage))).map(copyEntry));
+}
+
 export function createPromptLibrary({
   storage = null,
   activeProfile = null,

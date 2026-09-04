@@ -1,3 +1,5 @@
+import { dreamDisplayTitle, dreamPromptLabel } from './dream-metadata.js';
+
 export const DREAM_JOB_SCHEMA = 'visualizer-dream-job-v1';
 
 export const DREAM_JOB_PHASES = Object.freeze({
@@ -178,7 +180,12 @@ export function createDreamJobController({
       phase: DREAM_JOB_PHASES.READY,
       modelId: String(artifact.modelId),
       modelName: String(artifact.modelName || artifact.modelId),
-      artifact: { generationId: artifact.id, favorite: Boolean(artifact.favorite) },
+      artifact: {
+        generationId: artifact.id,
+        favorite: Boolean(artifact.favorite),
+        displayTitle: dreamDisplayTitle(artifact),
+        promptLabel: dreamPromptLabel(artifact),
+      },
       detail: 'Ready whenever you are.',
       expanded: Boolean(expanded),
       visible: true,
@@ -292,8 +299,10 @@ export function mountDreamJobView({
     els.pillButton?.setAttribute('aria-expanded', String(!idle && snapshot.visible && snapshot.expanded));
     if (els.phase) els.phase.textContent = label;
     if (els.pillPhase) els.pillPhase.textContent = label;
-    if (els.model) els.model.textContent = snapshot.modelName;
-    if (els.pillModel) els.pillModel.textContent = snapshot.modelName;
+    const displayTitle = snapshot.artifact?.displayTitle || snapshot.modelName;
+    const promptLabel = snapshot.artifact?.promptLabel;
+    if (els.model) els.model.textContent = promptLabel ? `${displayTitle} · Prompt: ${promptLabel}` : displayTitle;
+    if (els.pillModel) els.pillModel.textContent = displayTitle;
     if (els.detail) els.detail.textContent = snapshot.detail || '';
     if (els.cancel) els.cancel.hidden = !snapshot.cancellable;
     if (els.open) els.open.hidden = !ready;

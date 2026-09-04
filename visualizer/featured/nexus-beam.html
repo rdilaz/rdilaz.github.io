@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Kinetic Harmonic Astrolabe</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #06090e;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", monospace;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+    #hud {
+      position: absolute;
+      top: 18px;
+      left: 20px;
+      pointer-events: none;
+      color: rgba(180, 210, 230, 0.45);
+      font-size: 10px;
+      line-height: 1.45;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      z-index: 10;
+    }
+    #hud span {
+      color: rgba(230, 245, 255, 0.85);
+      font-weight: 600;
+    }
+    #readout {
+      position: absolute;
+      bottom: 18px;
+      right: 20px;
+      pointer-events: none;
+      color: rgba(180, 210, 230, 0.4);
+      font-size: 9px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div>SYS &bull; <span>HARMONIC ASTROLABE</span></div>
+    <div>FREQ ENGINE &bull; <span id="hud-flux">IDLE</span></div>
+    <div>TEMPO &bull; <span id="hud-tempo">-- BPM</span></div>
+  </div>
+  <div id="readout">
+    <div id="hud-bands">SUB:00 BSS:00 MID:00 TRB:00</div>
+    <div>GEOMETRIC DEPTH LATTICE // VIZ-V1</div>
+  </div>
+  <canvas id="stage"></canvas>
+
+  <script>
+    (function () {
+      const canvas = document.getElementById('stage');
+      const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+      const hudFlux = document.getElementById('hud-flux');
+      const hudTempo = document.getElementById('hud-tempo');
+      const hudBands = document.getElementById('hud-bands');
+
+      let width = 0, height = 0, dpr = 1;
+      let rotX = 0.45, rotY = 0.25, rotZ = 0;
+      let targetRotX = 0.45, targetRotY = 0.25;
+      let isDragging = false;
+      let lastPointerX = 0, lastPointerY = 0;
+
+      // Polyhedron definitions (Icosahedron & Dodecahedron dual)
+      const phi = (1 + Math.sqrt(5)) / 2;
+      const rawIcoVerts = [
+        [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+        [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+        [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1]
+      ];
+      const icoFaces = [
+        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
+      ];
+
+      // Normalized ico vertices
+      const icoVerts = rawIcoVerts.map(v => {
+        const d = Math.hypot(v[0], v[1], v[2]);
+        return [v[0] / d, v[1] / d, v[2] / d];
+      });
+
+      // Octahedron inner core
+      const octVerts = [
+        [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]
+      ];
+      const octEdges = [
+        [0, 2], [2, 1], [1, 3], [3, 0],
+        [0, 4], [2, 4], [1, 4], [3, 4],
+        [0, 5], [2, 5], [1, 5], [3, 5]
+      ];
+
+      // Smooth audio state tracking
+      const state = {
+        volume: 0,
+        subBass: 0,
+        bass: 0,
+        mid: 0,
+        treble: 0,
+        transient: 0,
+        beatPulse: 0,
+        flux: 0,
+        centroid: 0,
+        balance: 0,
+        tempo: 0,
+        hasAudio: false
+      };
+
+      // Circular ring history for ribbon tunnel
+      const HISTORY_STEPS = 28;
+      const historyRibbon = [];
+      for (let i = 0; i < HISTORY_STEPS; i++) {
+        historyRibbon.push({
+          radius: 180 + i * 14,
+          zOffset: -i * 38,
+          flux: 0,
+          bass: 0,
+          rotOffset: i * 0.04
+        });
+      }
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = rect.width;
+        height = rect.height;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      // Matrix math helpers for 3D projection
+      function createMat4() {
+        return new Float32Array(16);
+      }
+
+      function identity(m) {
+        m.fill(0);
+        m[0] = m[5] = m[10] = m[15] = 1;
+        return m;
+      }
+
+      function multiply(out, a, b) {
+        const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+        const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+        const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+        const a30 = a[12], a31 = a[13], a32 = a[14], a33 = a[15];
+        let b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3];
+        out[0] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+        out[1] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+        out[2] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+        out[3] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+        b0 = b[4]; b1 = b[5]; b2 = b[6]; b3 = b[7];
+        out[4] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+        out[5] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+        out[6] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+        out[7] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+        b0 = b[8]; b1 = b[9]; b2 = b[10]; b3 = b[11];
+        out[8] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+        out[9] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+        out[10] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+        out[11] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+        b0 = b[12]; b1 = b[13]; b2 = b[14]; b3 = b[15];
+        out[12] = b0 * a00 + b1 * a10 + b2 * a20 + b3 * a30;
+        out[13] = b0 * a01 + b1 * a11 + b2 * a21 + b3 * a31;
+        out[14] = b0 * a02 + b1 * a12 + b2 * a22 + b3 * a32;
+        out[15] = b0 * a03 + b1 * a13 + b2 * a23 + b3 * a33;
+        return out;
+      }
+
+      function rotateX(out, a, rad) {
+        const s = Math.sin(rad), c = Math.cos(rad);
+        const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+        const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+        if (a !== out) {
+          out[0] = a[0]; out[1] = a[1]; out[2] = a[2]; out[3] = a[3];
+          out[12] = a[12]; out[13] = a[13]; out[14] = a[14]; out[15] = a[15];
+        }
+        out[4] = a10 * c + a20 * s;
+        out[5] = a11 * c + a21 * s;
+        out[6] = a12 * c + a22 * s;
+        out[7] = a13 * c + a23 * s;
+        out[8] = a20 * c - a10 * s;
+        out[9] = a21 * c - a11 * s;
+        out[10] = a22 * c - a12 * s;
+        out[11] = a23 * c - a13 * s;
+        return out;
+      }
+
+      function rotateY(out, a, rad) {
+        const s = Math.sin(rad), c = Math.cos(rad);
+        const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+        const a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+        if (a !== out) {
+          out[4] = a[4]; out[5] = a[5]; out[6] = a[6]; out[7] = a[7];
+          out[12] = a[12]; out[13] = a[13]; out[14] = a[14]; out[15] = a[15];
+        }
+        out[0] = a00 * c - a20 * s;
+        out[1] = a01 * c - a21 * s;
+        out[2] = a02 * c - a22 * s;
+        out[3] = a03 * c - a23 * s;
+        out[8] = a00 * s + a20 * c;
+        out[9] = a01 * s + a21 * c;
+        out[10] = a02 * s + a22 * c;
+        out[11] = a03 * s + a23 * c;
+        return out;
+      }
+
+      function rotateZ(out, a, rad) {
+        const s = Math.sin(rad), c = Math.cos(rad);
+        const a00 = a[0], a01 = a[1], a02 = a[2], a03 = a[3];
+        const a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
+        if (a !== out) {
+          out[8] = a[8]; out[9] = a[9]; out[10] = a[10]; out[11] = a[11];
+          out[12] = a[12]; out[13] = a[13]; out[14] = a[14]; out[15] = a[15];
+        }
+        out[0] = a00 * c + a10 * s;
+        out[1] = a01 * c + a11 * s;
+        out[2] = a02 * c + a12 * s;
+        out[3] = a03 * c + a13 * s;
+        out[4] = a10 * c - a00 * s;
+        out[5] = a11 * c - a01 * s;
+        out[6] = a12 * c - a02 * s;
+        out[7] = a13 * c - a03 * s;
+        return out;
+      }
+
+      function transformPoint(p, m) {
+        const x = p[0], y = p[1], z = p[2];
+        return [
+          m[0] * x + m[4] * y + m[8] * z + m[12],
+          m[1] * x + m[5] * y + m[9] * z + m[13],
+          m[2] * x + m[6] * y + m[10] * z + m[14]
+        ];
+      }
+
+      function project(p, cx, cy, fov) {
+        const z = p[2] + fov;
+        if (z <= 10) return null;
+        const scale = fov / z;
+        return [cx + p[0] * scale, cy + p[1] * scale, scale, z];
+      }
+
+      // Pointer interaction for manual inspection
+      window.addEventListener('pointerdown', (e) => {
+        isDragging = true;
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
+      });
+      window.addEventListener('pointermove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastPointerX;
+        const dy = e.clientY - lastPointerY;
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
+        targetRotY += dx * 0.006;
+        targetRotX += dy * 0.006;
+        targetRotX = Math.max(-1.4, Math.min(1.4, targetRotX));
+      });
+      window.addEventListener('pointerup', () => { isDragging = false; });
+      window.addEventListener('pointercancel', () => { isDragging = false; });
+
+      // Fallback autonomous oscillator if no frames arrive
+      let lastTime = performance.now() / 1000;
+      let globalTime = 0;
+
+      function render(frame) {
+        const now = performance.now() / 1000;
+        const dt = Math.min(0.1, frame ? frame.deltaTime : (now - lastTime));
+        lastTime = now;
+        globalTime = frame ? frame.time : globalTime + dt;
+
+        // Parse host frame audio or fallback simulation
+        if (frame && frame.audio) {
+          const a = frame.audio;
+          state.hasAudio = !a.silence && a.connected;
+          const k = 0.22;
+          state.volume += ((a.volume || 0) - state.volume) * k;
+          state.subBass += ((a.bands ? a.bands.subBass : 0) - state.subBass) * k;
+          state.bass += ((a.bands ? a.bands.bass : 0) - state.bass) * k;
+          state.mid += ((a.bands ? a.bands.mid : 0) - state.mid) * k;
+          state.treble += ((a.bands ? a.bands.treble : 0) - state.treble) * k;
+          state.transient += ((a.transient || 0) - state.transient) * 0.35;
+          state.flux += ((a.spectralFlux || 0) - state.flux) * k;
+          state.centroid += ((a.spectralCentroid || 0) - state.centroid) * k;
+          state.balance += ((a.stereo ? a.stereo.balance : 0) - state.balance) * 0.1;
+          state.beatPulse = Math.max(state.beatPulse * 0.88, a.beat ? 1.0 : 0);
+          state.tempo = a.tempo || 0;
+        } else {
+          // Autonomous idle drift
+          const idleT = globalTime;
+          state.volume = 0.15 + Math.sin(idleT * 0.8) * 0.08;
+          state.subBass = 0.2 + Math.cos(idleT * 0.5) * 0.15;
+          state.bass = 0.25 + Math.sin(idleT * 0.9) * 0.15;
+          state.mid = 0.2 + Math.sin(idleT * 1.3) * 0.12;
+          state.treble = 0.18 + Math.cos(idleT * 1.7) * 0.1;
+          state.flux = 0.1 + Math.sin(idleT * 2.2) * 0.05;
+          state.transient = Math.max(0, Math.sin(idleT * 2.0) ** 7);
+          state.beatPulse = Math.max(0, Math.sin(idleT * 1.8) ** 14);
+          state.balance = Math.sin(idleT * 0.3) * 0.2;
+          state.tempo = 120;
+          state.hasAudio = false;
+        }
+
+        // Camera dynamics
+        if (!isDragging) {
+          const autoRot = globalTime * 0.15 + state.balance * 0.3;
+          targetRotY = Math.sin(autoRot * 0.7) * 0.5;
+          targetRotX = 0.45 + Math.sin(autoRot * 0.4) * 0.18;
+        }
+        rotX += (targetRotX - rotX) * 0.08;
+        rotY += (targetRotY - rotY) * 0.08;
+        rotZ = (state.balance * 0.15) + Math.sin(globalTime * 0.2) * 0.05;
+
+        // HUD updates
+        hudFlux.textContent = state.hasAudio
+          ? `ACTIVE // FLUX ${state.flux.toFixed(2)}`
+          : `IDLE // AUTONOMOUS CYCLER`;
+        hudTempo.textContent = (state.tempo > 0)
+          ? `${Math.round(state.tempo)} BPM`
+          : `-- BPM`;
+        hudBands.textContent = `SUB:${Math.floor(state.subBass * 99)} BSS:${Math.floor(state.bass * 99)} MID:${Math.floor(state.mid * 99)} TRB:${Math.floor(state.treble * 99)}`;
+
+        // Clear canvas with deep slate gradient
+        ctx.save();
+        ctx.scale(dpr, dpr);
+
+        const grad = ctx.createRadialGradient(
+          width * 0.5, height * 0.5, 20,
+          width * 0.5, height * 0.5, Math.max(width, height) * 0.75
+        );
+        grad.addColorStop(0, '#0d1522');
+        grad.addColorStop(0.5, '#080d15');
+        grad.addColorStop(1, '#030508');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+
+        const cx = width * 0.5;
+        const cy = height * 0.5;
+        const fov = Math.min(width, height) * 1.35;
+
+        // Base world transform matrix
+        const mWorld = createMat4();
+        identity(mWorld);
+        rotateX(mWorld, mWorld, rotX);
+        rotateY(mWorld, mWorld, rotY);
+        rotateZ(mWorld, mWorld, rotZ);
+
+        // Render Background Reticle Grid
+        drawPrecisionGrid(ctx, cx, cy, width, height, state, globalTime);
+
+        // Render Historical Spectral Depth Tunnel
+        updateAndDrawHistoryTunnel(ctx, cx, cy, fov, mWorld, state, globalTime);
+
+        // Render Outer Gimbal Rings & Calibrated Scales
+        drawAstrolabeGimbals(ctx, cx, cy, fov, mWorld, state, globalTime);
+
+        // Render Circular Spectrum Extrusion Ring
+        drawSpectralRing(ctx, cx, cy, fov, mWorld, frame ? frame.audio.spectrum : null, state, globalTime);
+
+        // Render Waveform Cylindrical Band
+        drawWaveformRibbon(ctx, cx, cy, fov, mWorld, frame ? frame.audio.waveform : null, state, globalTime);
+
+        // Render Central Articulated Polyhedron Core
+        drawHarmonicCore(ctx, cx, cy, fov, mWorld, state, globalTime);
+
+        // Precision reticle overlays & vernier marks
+        drawTelemetryOverlay(ctx, cx, cy, width, height, state, globalTime);
+
+        ctx.restore();
+      }
+
+      function drawPrecisionGrid(ctx, cx, cy, w, h, st, t) {
+        ctx.save();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(25, 45, 65, 0.28)';
+
+        // Deep concentric target rings
+        const maxR = Math.hypot(cx, cy);
+        for (let r = 80; r < maxR; r += 90) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Crosshairs with vernier dashes
+        ctx.beginPath();
+        ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(60, 110, 150, 0.4)';
+        for (let x = cx - 300; x <= cx + 300; x += 30) {
+          if (x < 0 || x > w) continue;
+          ctx.beginPath();
+          ctx.moveTo(x, cy - 4); ctx.lineTo(x, cy + 4);
+          ctx.stroke();
+        }
+        for (let y = cy - 300; y <= cy + 300; y += 30) {
+          if (y < 0 || y > h) continue;
+          ctx.beginPath();
+          ctx.moveTo(cx - 4, y); ctx.lineTo(cx + 4, y);
+          ctx.stroke();
+        }
+
+        // Subtle diagonal guide chords
+        ctx.strokeStyle = 'rgba(25, 45, 65, 0.15)';
+        ctx.beginPath();
+        ctx.moveTo(cx - 400, cy - 400); ctx.lineTo(cx + 400, cy + 400);
+        ctx.moveTo(cx - 400, cy + 400); ctx.lineTo(cx + 400, cy - 400);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      function updateAndDrawHistoryTunnel(ctx, cx, cy, fov, mWorld, st, t) {
+        // Shift history
+        const first = historyRibbon[0];
+        first.flux = st.flux;
+        first.bass = st.bass;
+        first.rotOffset = t * 0.2;
+
+        for (let i = historyRibbon.length - 1; i > 0; i--) {
+          historyRibbon[i].flux = historyRibbon[i - 1].flux;
+          historyRibbon[i].bass = historyRibbon[i - 1].bass;
+          historyRibbon[i].rotOffset = historyRibbon[i - 1].rotOffset;
+        }
+
+        ctx.save();
+        for (let i = historyRibbon.length - 1; i >= 0; i--) {
+          const seg = historyRibbon[i];
+          const zDepth = -i * 26 - (st.beatPulse * 15);
+          const segR = (170 + i * 8) * (1 + seg.bass * 0.25);
+          const alpha = Math.max(0.04, 0.35 - (i / historyRibbon.length) * 0.32);
+
+          // Build circle points in 3D
+          const pts = [];
+          const numNodes = 32;
+          for (let n = 0; n <= numNodes; n++) {
+            const theta = (n / numNodes) * Math.PI * 2 + seg.rotOffset;
+            const px = Math.cos(theta) * segR;
+            const py = Math.sin(theta) * segR;
+            const p3 = transformPoint([px, py, zDepth], mWorld);
+            const proj = project(p3, cx, cy, fov);
+            if (proj) pts.push(proj);
+          }
+
+          if (pts.length > 2) {
+            ctx.beginPath();
+            ctx.moveTo(pts[0][0], pts[0][1]);
+            for (let k = 1; k < pts.length; k++) {
+              ctx.lineTo(pts[k][0], pts[k][1]);
+            }
+            ctx.strokeStyle = `rgba(0, 180, 240, ${alpha * 0.7})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Geometric tick anchors on outer edges
+            if (i % 4 === 0) {
+              for (let k = 0; k < pts.length - 1; k += 8) {
+                const pt = pts[k];
+                ctx.fillStyle = `rgba(0, 255, 200, ${alpha * 1.5})`;
+                ctx.fillRect(pt[0] - 1.5, pt[1] - 1.5, 3, 3);
+              }
+            }
+          }
+        }
+        ctx.restore();
+      }
+
+      function drawAstrolabeGimbals(ctx, cx, cy, fov, mWorld, st, t) {
+        ctx.save();
+
+        // 1. Heavy Outer Boundary Astrolabe Ring
+        const outerR = 270 + st.subBass * 20;
+        const outerSteps = 72;
+        const outerPoints = [];
+
+        for (let i = 0; i <= outerSteps; i++) {
+          const a = (i / outerSteps) * Math.PI * 2;
+          const p3 = transformPoint([Math.cos(a) * outerR, Math.sin(a) * outerR, 0], mWorld);
+          const pr = project(p3, cx, cy, fov);
+          if (pr) outerPoints.push({ pr, a });
+        }
+
+        if (outerPoints.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(outerPoints[0].pr[0], outerPoints[0].pr[1]);
+          for (let i = 1; i < outerPoints.length; i++) {
+            ctx.lineTo(outerPoints[i].pr[0], outerPoints[i].pr[1]);
+          }
+          ctx.strokeStyle = 'rgba(70, 140, 190, 0.75)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+
+          // Calibrated division notches
+          for (let i = 0; i < outerPoints.length; i += 2) {
+            const item = outerPoints[i];
+            const isMajor = (i % 6 === 0);
+            const len = isMajor ? 12 + st.mid * 10 : 5;
+            const r2 = outerR + len;
+            const pEdge = transformPoint([Math.cos(item.a) * r2, Math.sin(item.a) * r2, 0], mWorld);
+            const prEdge = project(pEdge, cx, cy, fov);
+            if (prEdge) {
+              ctx.beginPath();
+              ctx.moveTo(item.pr[0], item.pr[1]);
+              ctx.lineTo(prEdge[0], prEdge[1]);
+              ctx.strokeStyle = isMajor ? 'rgba(0, 240, 255, 0.85)' : 'rgba(70, 140, 190, 0.45)';
+              ctx.lineWidth = isMajor ? 1.5 : 1;
+              ctx.stroke();
+            }
+          }
+        }
+
+        // 2. Tilted Meridian Gyro Ring (Rotating on skewed axis)
+        const mMeridian = createMat4();
+        rotateY(mMeridian, mWorld, t * 0.35 + st.bass * 0.5);
+        rotateX(mMeridian, mMeridian, 1.1);
+
+        const medR = 230 + st.mid * 15;
+        const medSteps = 48;
+        let lastPt = null;
+        ctx.strokeStyle = 'rgba(255, 170, 50, 0.7)';
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        for (let i = 0; i <= medSteps; i++) {
+          const a = (i / medSteps) * Math.PI * 2;
+          const p3 = transformPoint([Math.cos(a) * medR, Math.sin(a) * medR, 0], mMeridian);
+          const pr = project(p3, cx, cy, fov);
+          if (pr) {
+            if (!lastPt) ctx.moveTo(pr[0], pr[1]);
+            else ctx.lineTo(pr[0], pr[1]);
+            lastPt = pr;
+          }
+        }
+        ctx.stroke();
+
+        // 3. Counter-rotating Equinoctial Ring
+        const mEquinox = createMat4();
+        rotateZ(mEquinox, mWorld, -t * 0.28 - st.treble * 0.4);
+        rotateY(mEquinox, mEquinox, 0.85);
+
+        const eqR = 200 + st.flux * 30;
+        ctx.strokeStyle = 'rgba(0, 255, 170, 0.65)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        lastPt = null;
+        for (let i = 0; i <= medSteps; i++) {
+          const a = (i / medSteps) * Math.PI * 2;
+          const p3 = transformPoint([Math.cos(a) * eqR, Math.sin(a) * eqR, 0], mEquinox);
+          const pr = project(p3, cx, cy, fov);
+          if (pr) {
+            if (!lastPt) ctx.moveTo(pr[0], pr[1]);
+            else ctx.lineTo(pr[0], pr[1]);
+            lastPt = pr;
+          }
+        }
+        ctx.stroke();
+
+        ctx.restore();
+      }
+
+      function drawSpectralRing(ctx, cx, cy, fov, mWorld, spectrum, st, t) {
+        ctx.save();
+        const baseRadius = 145;
+        const count = 48;
+        const barMatrix = createMat4();
+        rotateZ(barMatrix, mWorld, t * 0.1);
+
+        for (let i = 0; i < count; i++) {
+          const a = (i / count) * Math.PI * 2;
+          let val = 0;
+          if (spectrum && spectrum.length > 0) {
+            const idx = Math.floor((i / count) * Math.min(spectrum.length, 96));
+            val = spectrum[idx] || 0;
+          } else {
+            // Idle harmonic wave
+            val = 0.2 + 0.3 * Math.sin(i * 0.4 + t * 3.5) ** 2;
+          }
+
+          const h = 8 + val * (70 + st.transient * 40);
+          const cosA = Math.cos(a);
+          const sinA = Math.sin(a);
+
+          // Inner point & Extruded outer point
+          const pIn = transformPoint([cosA * baseRadius, sinA * baseRadius, 0], barMatrix);
+          const pOut = transformPoint([cosA * (baseRadius + h), sinA * (baseRadius + h), (val * 35)], barMatrix);
+
+          const pr1 = project(pIn, cx, cy, fov);
+          const pr2 = project(pOut, cx, cy, fov);
+
+          if (pr1 && pr2) {
+            // Color based on frequency height and crisp alpha
+            const hue = 180 + (i / count) * 80;
+            const alpha = 0.4 + val * 0.55;
+            ctx.beginPath();
+            ctx.moveTo(pr1[0], pr1[1]);
+            ctx.lineTo(pr2[0], pr2[1]);
+            ctx.strokeStyle = `hsla(${hue}, 100%, 72%, ${alpha})`;
+            ctx.lineWidth = 1.6;
+            ctx.stroke();
+
+            // Diamond tip cap
+            ctx.fillStyle = val > 0.6 ? '#ffffff' : `hsla(${hue}, 100%, 85%, 0.9)`;
+            ctx.beginPath();
+            ctx.arc(pr2[0], pr2[1], 1.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+
+      function drawWaveformRibbon(ctx, cx, cy, fov, mWorld, waveform, st, t) {
+        ctx.save();
+        const ribbonR = 105;
+        const waveCount = 64;
+        const ptsUpper = [];
+        const ptsLower = [];
+        const mRibbon = createMat4();
+        rotateY(mRibbon, mWorld, -t * 0.4);
+        rotateX(mRibbon, mRibbon, 0.35);
+
+        for (let i = 0; i <= waveCount; i++) {
+          const norm = i / waveCount;
+          const a = norm * Math.PI * 2;
+          let amp = 0;
+          if (waveform && waveform.length > 0) {
+            const wIdx = Math.floor(norm * (waveform.length - 1));
+            amp = waveform[wIdx] || 0;
+          } else {
+            amp = Math.sin(norm * 14 + t * 4) * 0.25;
+          }
+
+          const elevation = amp * 45;
+          const r1 = ribbonR + elevation;
+          const r2 = ribbonR - elevation * 0.4;
+          const z1 = elevation * 0.8;
+          const z2 = -elevation * 0.8;
+
+          const p3Up = transformPoint([Math.cos(a) * r1, Math.sin(a) * r1, z1], mRibbon);
+          const p3Down = transformPoint([Math.cos(a) * r2, Math.sin(a) * r2, z2], mRibbon);
+
+          const prUp = project(p3Up, cx, cy, fov);
+          const prDown = project(p3Down, cx, cy, fov);
+
+          if (prUp && prDown) {
+            ptsUpper.push(prUp);
+            ptsLower.push(prDown);
+          }
+        }
+
+        // Draw crisp double ribbon with linking struts
+        if (ptsUpper.length > 2) {
+          ctx.beginPath();
+          ctx.moveTo(ptsUpper[0][0], ptsUpper[0][1]);
+          for (let i = 1; i < ptsUpper.length; i++) {
+            ctx.lineTo(ptsUpper[i][0], ptsUpper[i][1]);
+          }
+          ctx.strokeStyle = 'rgba(0, 240, 255, 0.9)';
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(ptsLower[0][0], ptsLower[0][1]);
+          for (let i = 1; i < ptsLower.length; i++) {
+            ctx.lineTo(ptsLower[i][0], ptsLower[i][1]);
+          }
+          ctx.strokeStyle = 'rgba(140, 70, 255, 0.75)';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+
+          // Geometric struts connecting the two edges
+          ctx.strokeStyle = 'rgba(210, 240, 255, 0.28)';
+          ctx.lineWidth = 1;
+          for (let i = 0; i < ptsUpper.length; i += 2) {
+            ctx.beginPath();
+            ctx.moveTo(ptsUpper[i][0], ptsUpper[i][1]);
+            ctx.lineTo(ptsLower[i][0], ptsLower[i][1]);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+
+      function drawHarmonicCore(ctx, cx, cy, fov, mWorld, st, t) {
+        ctx.save();
+        const mCore = createMat4();
+        identity(mCore);
+        // Spin the core dynamically
+        rotateX(mCore, mWorld, t * 0.7);
+        rotateY(mCore, mCore, t * 0.85 + st.subBass * 0.6);
+        rotateZ(mCore, mCore, t * 0.4);
+
+        const coreScale = 52 * (1 + st.subBass * 0.45 + st.beatPulse * 0.2);
+
+        // Transform icosahedron vertices
+        const tVerts = icoVerts.map(v => {
+          const scaled = [v[0] * coreScale, v[1] * coreScale, v[2] * coreScale];
+          return transformPoint(scaled, mCore);
+        });
+
+        // Depth-sort faces for solid geometric facets
+        const sortedFaces = icoFaces.map((f, idx) => {
+          const v0 = tVerts[f[0]];
+          const v1 = tVerts[f[1]];
+          const v2 = tVerts[f[2]];
+          const avgZ = (v0[2] + v1[2] + v2[2]) / 3;
+
+          // Normal for backface culling & Lambertian shading
+          const ax = v1[0] - v0[0], ay = v1[1] - v0[1], az = v1[2] - v0[2];
+          const bx = v2[0] - v0[0], by = v2[1] - v0[1], bz = v2[2] - v0[2];
+          const nx = ay * bz - az * by;
+          const ny = az * bx - ax * bz;
+          const nz = ax * by - ay * bx;
+
+          return { indices: f, avgZ, normal: [nx, ny, nz] };
+        }).sort((a, b) => b.avgZ - a.avgZ);
+
+        // Draw shaded faces
+        const lightDir = [0.4, -0.6, 0.7];
+        const lLen = Math.hypot(lightDir[0], lightDir[1], lightDir[2]);
+        const lx = lightDir[0] / lLen, ly = lightDir[1] / lLen, lz = lightDir[2] / lLen;
+
+        for (let i = 0; i < sortedFaces.length; i++) {
+          const face = sortedFaces[i];
+          const n = face.normal;
+          const nLen = Math.hypot(n[0], n[1], n[2]);
+          if (nLen === 0) continue;
+          const dot = (n[0] / nLen) * lx + (n[1] / nLen) * ly + (n[2] / nLen) * lz;
+          const intensity = Math.max(0.08, dot);
+
+          const p0 = project(tVerts[face.indices[0]], cx, cy, fov);
+          const p1 = project(tVerts[face.indices[1]], cx, cy, fov);
+          const p2 = project(tVerts[face.indices[2]], cx, cy, fov);
+
+          if (p0 && p1 && p2) {
+            // Facet fill: Obsidian Slate with reactive amber/cyan sheen
+            const r = Math.floor(10 + intensity * (st.transient > 0.4 ? 120 : 40));
+            const g = Math.floor(25 + intensity * (60 + st.mid * 50));
+            const b = Math.floor(45 + intensity * 95);
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+            ctx.beginPath();
+            ctx.moveTo(p0[0], p0[1]);
+            ctx.lineTo(p1[0], p1[1]);
+            ctx.lineTo(p2[0], p2[1]);
+            ctx.closePath();
+            ctx.fill();
+
+            // Facet wireframe seam
+            ctx.strokeStyle = `rgba(100, 220, 255, ${0.35 + intensity * 0.55})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+
+        // Inner Octahedron core floating in suspension
+        const octScale = coreScale * (0.4 + st.treble * 0.35);
+        const octT = octVerts.map(v => {
+          return transformPoint([v[0] * octScale, v[1] * octScale, v[2] * octScale], mCore);
+        });
+
+        ctx.strokeStyle = 'rgba(255, 195, 75, 0.9)';
+        ctx.lineWidth = 1.5;
+        for (let e = 0; e < octEdges.length; e++) {
+          const edge = octEdges[e];
+          const pA = project(octT[edge[0]], cx, cy, fov);
+          const pB = project(octT[edge[1]], cx, cy, fov);
+          if (pA && pB) {
+            ctx.beginPath();
+            ctx.moveTo(pA[0], pA[1]);
+            ctx.lineTo(pB[0], pB[1]);
+            ctx.stroke();
+          }
+        }
+
+        // Central Singularity Node
+        const originProjected = project(transformPoint([0, 0, 0], mCore), cx, cy, fov);
+        if (originProjected) {
+          const prR = 3 + st.subBass * 5;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(originProjected[0], originProjected[1], prR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      function drawTelemetryOverlay(ctx, cx, cy, w, h, st, t) {
+        ctx.save();
+        // Corner bracket framing
+        const pad = 24;
+        const bLen = 22;
+        ctx.strokeStyle = 'rgba(80, 150, 200, 0.5)';
+        ctx.lineWidth = 1.5;
+
+        // Top-left
+        ctx.beginPath();
+        ctx.moveTo(pad, pad + bLen); ctx.lineTo(pad, pad); ctx.lineTo(pad + bLen, pad);
+        ctx.stroke();
+        // Top-right
+        ctx.beginPath();
+        ctx.moveTo(w - pad - bLen, pad); ctx.lineTo(w - pad, pad); ctx.lineTo(w - pad, pad + bLen);
+        ctx.stroke();
+        // Bottom-left
+        ctx.beginPath();
+        ctx.moveTo(pad, h - pad - bLen); ctx.lineTo(pad, h - pad); ctx.lineTo(pad + bLen, h - pad);
+        ctx.stroke();
+        // Bottom-right
+        ctx.beginPath();
+        ctx.moveTo(w - pad - bLen, h - pad); ctx.lineTo(w - pad, h - pad); ctx.lineTo(w - pad, h - pad - bLen);
+        ctx.stroke();
+
+        // Level Bars on Left Flank
+        const barX = pad + 4;
+        const barY = cy - 60;
+        const bands = [st.subBass, st.bass, st.mid, st.treble];
+        const bandLabels = ['SUB', 'BAS', 'MID', 'TRB'];
+
+        ctx.font = '8px ui-monospace, monospace';
+        for (let b = 0; b < 4; b++) {
+          const y = barY + b * 32;
+          ctx.fillStyle = 'rgba(140, 180, 210, 0.5)';
+          ctx.fillText(bandLabels[b], barX, y);
+
+          // Track
+          ctx.fillStyle = 'rgba(25, 45, 65, 0.6)';
+          ctx.fillRect(barX, y + 4, 45, 4);
+
+          // Fill
+          const fillW = Math.max(1, Math.min(45, bands[b] * 45));
+          ctx.fillStyle = b === 0 ? '#ffaa33' : (b === 1 ? '#00ffa3' : '#00f0ff');
+          ctx.fillRect(barX, y + 4, fillW, 4);
+        }
+
+        // Stereo Azimuth Dial on Right Flank
+        const azX = w - pad - 30;
+        const azY = cy;
+        const azR = 24;
+
+        ctx.beginPath();
+        ctx.arc(azX, azY, azR, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(60, 110, 160, 0.4)';
+        ctx.stroke();
+
+        const balAngle = -Math.PI / 2 + (st.balance * Math.PI * 0.4);
+        ctx.beginPath();
+        ctx.moveTo(azX, azY);
+        ctx.lineTo(azX + Math.cos(balAngle) * azR, azY + Math.sin(balAngle) * azR);
+        ctx.strokeStyle = '#00f0ff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(140, 180, 210, 0.5)';
+        ctx.fillText('ST-AZ', azX - 12, azY + azR + 14);
+
+        ctx.restore();
+      }
+
+      // Hook up to window.VIZ contract
+      if (window.VIZ && typeof window.VIZ.onFrame === 'function') {
+        window.VIZ.onFrame((frame) => {
+          render(frame);
+        });
+      } else {
+        // Fallback standalone render loop
+        function loop() {
+          render(null);
+          requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+      }
+    })();
+  </script>
+</body>
+</html>
