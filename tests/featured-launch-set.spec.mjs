@@ -52,11 +52,79 @@ async function waitForStartup(page, expected = 'Calibration Bloom') {
   return probe;
 }
 
+async function featuredOpenFailureEvidence(page) {
+  return page.evaluate(async () => {
+    const diagnostic = await window.VIZ_DEV.latest();
+    const stages = diagnostic?.reliability?.stages || [];
+    return {
+      identity: window.VIZ_DEV.identity(),
+      state: {
+        reopening: window.VIZ_DEV.state().reopening,
+        recovering: window.VIZ_DEV.state().recovering,
+        activeSessionId: window.VIZ_DEV.state().activeSessionId,
+      },
+      diagnostic: diagnostic ? {
+        id: diagnostic.id,
+        kind: diagnostic.kind,
+        status: diagnostic.status,
+        failureCode: diagnostic.failureCode,
+        failureMessage: diagnostic.failureMessage,
+        modelId: diagnostic.modelId,
+        reliability: {
+          passed: diagnostic.reliability?.passed,
+          failure: diagnostic.reliability?.failure,
+          summary: diagnostic.reliability?.summary,
+          warnings: diagnostic.reliability?.warnings,
+          stages: stages.map(stage => ({
+            name: stage.name,
+            ready: stage.ready,
+            frames: stage.frames,
+            targetFps: stage.targetFps,
+            failure: stage.failure,
+            report: stage.report ? {
+              renderer: {
+                types: stage.report.renderer?.types,
+                contextLosses: stage.report.renderer?.contextLosses,
+                contextFailures: stage.report.renderer?.contextFailures,
+                shaderFailures: stage.report.renderer?.shaderFailures,
+                programFailures: stage.report.renderer?.programFailures,
+              },
+              viz: {
+                consumed: stage.report.viz?.consumed,
+                receivedFrames: stage.report.viz?.receivedFrames,
+                deliveredFrames: stage.report.viz?.deliveredFrames,
+                lastFrameSequence: stage.report.viz?.lastFrameSequence,
+              },
+              visual: {
+                visibleProof: stage.report.visual?.visibleProof,
+                canvases: stage.report.visual?.canvases?.map(canvas => ({
+                  id: canvas.id,
+                  coverage: canvas.coverage,
+                  informative: canvas.pixel?.informative,
+                  renderInformative: canvas.renderPixel?.informative,
+                  drawCalls: canvas.activity?.drawCalls,
+                })),
+              },
+              fatalEvents: stage.report.events?.filter(event => event.severity === 'fatal'),
+              consoleErrors: stage.report.logs?.consoleErrors,
+            } : null,
+          })),
+        },
+      } : null,
+    };
+  });
+}
+
 async function openFeatured(page, id, title) {
   await wakeHost(page);
   await page.locator('#switcherButton').click();
   await page.locator(`[data-dream-key="featured:${id}"] .dream-switcher__choose`).click();
-  await expect(page.locator('#liveIdentityName')).toHaveText(title, { timeout: 30000 });
+  try {
+    await expect(page.locator('#liveIdentityName')).toHaveText(title, { timeout: 30000 });
+  } catch (error) {
+    const evidence = await featuredOpenFailureEvidence(page);
+    throw new Error(`Featured ${id} did not become LIVE. Evidence: ${JSON.stringify(evidence)}`, { cause: error });
+  }
   const probe = await page.evaluate(label => window.VIZ_DEV.probeActive(label), `featured-open-${id}`);
   expect(probe.visual.visibleProof).toBe(true);
   expect(probe.viz.consumed).toBe(true);

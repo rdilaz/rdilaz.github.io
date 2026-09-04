@@ -274,7 +274,43 @@ test('mono microphone VIZ remains viable across both model-generated Featured Dr
   await expect(page.locator('#audioButtonLabel')).toHaveText('Microphone connected');
 
   const assertActiveFeatured = async title => {
-    await expect(page.locator('#liveIdentityName')).toHaveText(title, { timeout: 30000 });
+    try {
+      await expect(page.locator('#liveIdentityName')).toHaveText(title, { timeout: 30000 });
+    } catch (error) {
+      const evidence = await page.evaluate(async () => {
+        const diagnostic = await window.VIZ_DEV.latest();
+        return {
+          identity: window.VIZ_DEV.identity(),
+          diagnostic: diagnostic ? {
+            id: diagnostic.id,
+            kind: diagnostic.kind,
+            status: diagnostic.status,
+            failureCode: diagnostic.failureCode,
+            failureMessage: diagnostic.failureMessage,
+            modelId: diagnostic.modelId,
+            reliability: {
+              passed: diagnostic.reliability?.passed,
+              failure: diagnostic.reliability?.failure,
+              summary: diagnostic.reliability?.summary,
+              warnings: diagnostic.reliability?.warnings,
+              stages: diagnostic.reliability?.stages?.map(stage => ({
+                name: stage.name,
+                ready: stage.ready,
+                frames: stage.frames,
+                targetFps: stage.targetFps,
+                failure: stage.failure,
+                visible: stage.report?.visual?.visibleProof,
+                vizConsumed: stage.report?.viz?.consumed,
+                rendererTypes: stage.report?.renderer?.types,
+                fatalEvents: stage.report?.events?.filter(event => event.severity === 'fatal'),
+                consoleErrors: stage.report?.logs?.consoleErrors,
+              })),
+            },
+          } : null,
+        };
+      });
+      throw new Error(`Featured open did not become LIVE. Evidence: ${JSON.stringify(evidence)}`, { cause: error });
+    }
     const evidence = await page.evaluate(async label => ({
       audio: window.VIZ_DEV.state().audio,
       probe: await window.VIZ_DEV.probeActive(label),
