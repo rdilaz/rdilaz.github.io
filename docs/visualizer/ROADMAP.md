@@ -67,7 +67,7 @@ Requirements:
 - They remain distinct from the user's local Favorites/Recent library.
 - Featured content can be replaced editorially as better examples are discovered.
 
-The launch set is Aural Cymatics from Gemini 3.8 Flash, Klangfiguren from GLM 5.3 Flash, and the host-created Calibration Bloom fallback. The two model artifacts retain exact Neutral v1, provider-generation, trace, digest, CI reliability, and operator-curation provenance in the manifest.
+The launch set is the model-generated Klangfiguren from GLM 5.3 Flash plus the host-created Calibration Bloom fallback. Klangfiguren retains exact Neutral v1, provider-generation, trace, digest, CI reliability, and operator-curation provenance in the manifest. Aural Cymatics was removed editorially after its unchanged output could not reliably complete the CI-class product Open path. Calibration remains startup after Klangfiguren startup materially destabilized the complete corpus, so the first-visit model-art startup requirement is explicitly deferred.
 
 ## 2. Fast Dream switcher
 

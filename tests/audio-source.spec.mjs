@@ -264,7 +264,7 @@ test('microphone choice is local, music-friendly, mono-safe, diagnostic-safe, an
   expect(provider.completions).toBe(0);
 });
 
-test('mono microphone VIZ remains viable across both model-generated Featured Dreams', async ({ page }) => {
+test('mono microphone VIZ remains viable when Klangfiguren opens', async ({ page }) => {
   test.setTimeout(80000);
   const provider = await blockProviderCompletions(page);
   await installAudioFixture(page, { channels: 1 });
@@ -323,11 +323,6 @@ test('mono microphone VIZ remains viable across both model-generated Featured Dr
 
   await assertActiveFeatured('Calibration Bloom');
   await page.mouse.move(12, 12);
-  await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
-  await page.locator('#switcherButton').click();
-  await page.locator('[data-dream-key="featured:aural-cymatics-genesis"] .dream-switcher__choose').click();
-  await assertActiveFeatured('Aural Cymatics: Genesis of Harmonic Form');
-  await page.mouse.move(180, 160);
   await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
   await page.locator('#switcherButton').click();
   await page.locator('[data-dream-key="featured:klangfiguren"] .dream-switcher__choose').click();

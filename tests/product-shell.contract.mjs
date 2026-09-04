@@ -141,7 +141,7 @@ test('switcher groups Featured, Favorites and bounded newest-first Recent determ
   ];
   const groups = buildDreamSwitcherGroups({ featured, generations, activeKey: localDreamKey(generations[0]), recentLimit: 2 });
   assert.equal(groups.schema, DREAM_SWITCHER_SCHEMA);
-  assert.deepEqual(groups.featured.map(item => item.id), ['aural-cymatics-genesis', 'klangfiguren', 'calibration-bloom']);
+  assert.deepEqual(groups.featured.map(item => item.id), ['klangfiguren', 'calibration-bloom']);
   assert.deepEqual(groups.favorites.map(item => item.id), ['middle', 'old']);
   assert.deepEqual(groups.recent.map(item => item.id), ['new', 'middle']);
   assert.equal(groups.recent.some(item => item.id === 'broken'), false);
@@ -149,26 +149,15 @@ test('switcher groups Featured, Favorites and bounded newest-first Recent determ
 });
 
 test('Featured launch manifest preserves exact order, provenance, content and one startup', async () => {
-  assert.equal(FEATURED_DREAM_MANIFEST.length, 3);
+  assert.equal(FEATURED_DREAM_MANIFEST.length, 2);
   FEATURED_DREAM_MANIFEST.forEach(validateFeaturedEntry);
   assert.deepEqual(FEATURED_DREAM_MANIFEST.map(entry => entry.id), [
-    'aural-cymatics-genesis',
     'klangfiguren',
     'calibration-bloom',
   ]);
-  assert.deepEqual(FEATURED_DREAM_MANIFEST.map(entry => entry.order), [1, 2, 3]);
+  assert.deepEqual(FEATURED_DREAM_MANIFEST.map(entry => entry.order), [1, 2]);
   assert.deepEqual(FEATURED_DREAM_MANIFEST.filter(entry => entry.startup).map(entry => entry.id), ['calibration-bloom']);
   const expected = {
-    'aural-cymatics-genesis': {
-      title: 'Aural Cymatics: Genesis of Harmonic Form',
-      modelId: 'google/gemini-3.8-flash',
-      providerGenerationId: 'gen-1788390875-DLmI28KK32b7ScgczxCG',
-      localGenerationId: 'd0f89126-9305-45cf-8556-824c7549d79e',
-      traceId: '4eabe50a-5457-45de-9bff-8c24b7fa9a59',
-      digest: '8950a3eb24c88d57a06f3adeff76d20d7fb4e1aa47d2fae3e61bb1e53011fd2f',
-      htmlTitle: 'Aural Cymatics: Genesis of Harmonic Form',
-      bytes: 26777,
-    },
     klangfiguren: {
       title: 'Klangfiguren',
       modelId: 'z-ai/glm-5.3-flash',
@@ -232,13 +221,12 @@ test('Featured loading quarantines unavailable, malformed, and digest-mismatched
   };
 
   const withoutKlang = await runFault('klangfiguren', { ok: false }, FEATURED_LOAD_FAILURES.UNAVAILABLE);
-  assert.deepEqual(withoutKlang.map(entry => entry.id), ['aural-cymatics-genesis', 'calibration-bloom']);
-  const withoutAural = await runFault('aural-cymatics-genesis', {
+  assert.deepEqual(withoutKlang.map(entry => entry.id), ['calibration-bloom']);
+  assert.deepEqual(withoutKlang.filter(entry => entry.startup).map(entry => entry.id), ['calibration-bloom']);
+  await runFault('klangfiguren', {
     ok: true,
-    text: async () => `${featuredHtml['aural-cymatics-genesis']} `,
+    text: async () => `${featuredHtml.klangfiguren} `,
   }, FEATURED_LOAD_FAILURES.DIGEST_MISMATCH);
-  assert.deepEqual(withoutAural.filter(entry => entry.startup).map(entry => entry.id), ['calibration-bloom']);
-  assert.deepEqual(withoutAural.map(entry => entry.id), ['klangfiguren', 'calibration-bloom']);
   await runFault('klangfiguren', {
     ok: true,
     text: async () => '<!doctype html><html><body>incomplete',
@@ -252,7 +240,6 @@ test('Featured no-network mode preserves embedded Calibration without admitting 
   assert.equal(loaded[0].contentDigestVerified, false);
   assert.match(loaded[0].html, /Calibration Bloom/);
   assert.deepEqual(failures, [
-    { id: 'aural-cymatics-genesis', code: FEATURED_LOAD_FAILURES.UNAVAILABLE },
     { id: 'klangfiguren', code: FEATURED_LOAD_FAILURES.UNAVAILABLE },
     { id: 'calibration-bloom', code: FEATURED_LOAD_FAILURES.UNAVAILABLE },
   ]);

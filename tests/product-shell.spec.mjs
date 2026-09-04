@@ -215,7 +215,6 @@ test('390x844 keeps the canvas, product controls, switcher and Prompt usable wit
   const switcherBounds = await page.locator('#dreamSwitcherPanel').boundingBox();
   expect(switcherBounds.x).toBeGreaterThanOrEqual(0);
   expect(switcherBounds.x + switcherBounds.width).toBeLessThanOrEqual(390);
-  await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Aural Cymatics: Genesis of Harmonic Form');
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Klangfiguren');
   await expect(page.locator('[data-switcher-group="featured"]')).toContainText('Calibration Bloom');
   await page.locator('#dreamSwitcherPanel').press('Escape');
