@@ -79,7 +79,7 @@
 
         <nav class="controls chrome" id="controls" aria-label="Visualizer controls">
           <button class="control control--icon control--playback" id="playbackButton" type="button" aria-label="Pause visual" aria-pressed="false" title="Pause visual">⏸</button>
-          <button class="control control--audio" id="audioButton" type="button"><span class="audio-dot" id="audioDot" aria-hidden="true"></span><span id="audioButtonLabel">Connect audio</span></button>
+          <button class="control control--audio" id="audioButton" type="button" aria-haspopup="dialog" aria-controls="audioPicker" aria-expanded="false"><span class="audio-dot" id="audioDot" aria-hidden="true"></span><span id="audioButtonLabel">Connect audio</span></button>
           <button class="control control--switcher" id="switcherButton" type="button" aria-expanded="false" aria-controls="dreamSwitcherPanel"><span class="control__hint">DREAMS</span><strong id="switcherCurrent">Calibration Bloom</strong></button>
           <button class="control control--model" id="modelButton" type="button" aria-labelledby="nextModelLabel selectedModelName"><span class="control__hint" id="nextModelLabel">NEXT</span><strong id="selectedModelName" aria-live="polite">Choose a model</strong></button>
           <button class="control control--prompt" id="promptLabButton" type="button" aria-label="Edit creative prompt"><span class="control__hint">PROMPT</span><strong>Neutral</strong></button>
@@ -89,6 +89,26 @@
         </nav>
       </section>
     </main>
+
+    <dialog class="audio-picker" id="audioPicker" aria-labelledby="audioPickerTitle" aria-describedby="audioPickerIntro">
+      <div class="audio-picker__head">
+        <div><span class="eyebrow">LIVE AUDIO</span><h2 id="audioPickerTitle">What should the art hear?</h2></div>
+        <form method="dialog"><button class="audio-picker__close" id="audioPickerClose" type="submit" aria-label="Close audio source chooser">×</button></form>
+      </div>
+      <p class="audio-picker__intro" id="audioPickerIntro">Audio is analyzed locally on this device and is never sent to the AI.</p>
+      <div class="audio-picker__sources">
+        <button class="audio-source audio-source--display" id="audioDisplayOption" type="button" data-audio-source="display">
+          <span class="audio-source__top"><strong>Share tab / system audio</strong><span>BEST QUALITY</span></span>
+          <small>Direct digital audio, best on desktop. Availability depends on your browser, OS, and the source you select.</small>
+        </button>
+        <button class="audio-source audio-source--microphone" id="audioMicrophoneOption" type="button" data-audio-source="microphone">
+          <span class="audio-source__top"><strong>Listen with microphone</strong><span>BEST ON PHONES</span></span>
+          <small>Hears speakers, live music, a car stereo, instruments, or another device. This is not internal phone audio; headphones may leave little music to hear.</small>
+          <em>Microphone permission is requested only after you choose this.</em>
+        </button>
+      </div>
+      <p class="audio-picker__unavailable" id="audioUnavailable" hidden>Live audio capture is unavailable in this browser.</p>
+    </dialog>
 
     <aside class="drawer" id="modelDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Choose a model" inert>
       <div class="drawer__head"><div><span class="eyebrow">MODELS</span><h2>Choose a mind.</h2><p>You do not need to understand the whole catalog. Start with one good choice and see what happens.</p></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>

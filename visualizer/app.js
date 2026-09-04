@@ -130,6 +130,10 @@ const els = {
   audioButton: $('#audioButton'),
   audioButtonLabel: $('#audioButtonLabel'),
   audioDot: $('#audioDot'),
+  audioPicker: $('#audioPicker'),
+  audioDisplayOption: $('#audioDisplayOption'),
+  audioMicrophoneOption: $('#audioMicrophoneOption'),
+  audioUnavailable: $('#audioUnavailable'),
   sensitivityInput: $('#sensitivityInput'),
   sensitivityValue: $('#sensitivityValue'),
   resetSensitivity: $('#resetSensitivity'),
@@ -446,7 +450,9 @@ function renderPlayback(snapshot = playbackController.snapshot()) {
 function updateAudioState(state) {
   const connected = Boolean(state.connected);
   els.audioDot.classList.toggle('is-live', connected);
-  els.audioButtonLabel.textContent = connected ? 'Audio connected' : 'Connect audio';
+  els.audioButtonLabel.textContent = connected
+    ? state.sourceKind === 'microphone' ? 'Microphone connected' : 'Audio connected'
+    : 'Connect audio';
   renderPlayback();
   if (!connected && state.label) showToast(state.label);
 }
@@ -749,7 +755,7 @@ function anyDrawerOpen() {
 
 function visibleHostDialog() {
   if (document.querySelector('dialog[open]')) return 'dialog-open';
-  for (const selector of ['#costConfirmBackdrop:not([hidden])', '#audioPicker:not([hidden])']) {
+  for (const selector of ['#costConfirmBackdrop:not([hidden])']) {
     if (document.querySelector(selector)) return selector.slice(1).split(':')[0];
   }
   return '';
@@ -2054,21 +2060,68 @@ async function renderLibrary() {
   await refreshDreamSwitcher(all);
 }
 
+function renderAudioCapabilities() {
+  const capabilities = AudioEngine.capabilities();
+  els.audioDisplayOption.hidden = !capabilities.display.supported;
+  els.audioMicrophoneOption.hidden = !capabilities.microphone.supported;
+  els.audioUnavailable.hidden = capabilities.display.supported || capabilities.microphone.supported;
+  return capabilities;
+}
+
+function closeAudioPicker() {
+  if (els.audioPicker.open) els.audioPicker.close();
+}
+
+function openAudioPicker() {
+  const capabilities = renderAudioCapabilities();
+  closeDrawers({ restoreFocus: false });
+  dreamSwitcher?.close();
+  els.audioButton.setAttribute('aria-expanded', 'true');
+  els.audioPicker.showModal();
+  showUi('dialog-open');
+  const mobile = matchMedia('(max-width: 820px)').matches;
+  const preferred = mobile ? els.audioMicrophoneOption : els.audioDisplayOption;
+  const fallback = mobile ? els.audioDisplayOption : els.audioMicrophoneOption;
+  const first = !preferred.hidden ? preferred : !fallback.hidden ? fallback : document.getElementById('audioPickerClose');
+  queueMicrotask(() => first?.focus());
+  return capabilities;
+}
+
+async function connectAudioSource(sourceKind) {
+  const sourceButtons = [els.audioDisplayOption, els.audioMicrophoneOption];
+  sourceButtons.forEach(button => { button.disabled = true; });
+  els.audioPicker.setAttribute('aria-busy', 'true');
+  showCenter(
+    sourceKind === 'microphone' ? 'Listening for microphone permission.' : 'Choose what to share.',
+    sourceKind === 'microphone'
+      ? 'The microphone hears nearby physical audio. It does not capture internal phone audio.'
+      : 'Choose a source with audio enabled. Video is ignored.',
+  );
+  try {
+    if (sourceKind === 'microphone') await audio.connectMicrophone();
+    else await audio.connectDisplayAudio();
+    closeAudioPicker();
+    hideCenter();
+    showToast(sourceKind === 'microphone'
+      ? 'Microphone connected. Audio stays on this device.'
+      : 'Audio connected. The visualizer can see the music now.');
+  } catch (error) {
+    closeAudioPicker();
+    hideCenter();
+    showToast(error?.message || 'Audio could not be connected.', 6500);
+  } finally {
+    sourceButtons.forEach(button => { button.disabled = false; });
+    els.audioPicker.removeAttribute('aria-busy');
+  }
+}
+
 async function toggleAudio() {
   showUi();
   if (audio.connected) {
     await audio.stop();
     return;
   }
-  showCenter('Choose what to listen to.', 'Share a tab/window/system source with audio. Video is ignored; the audio is analyzed locally and never sent to the AI.');
-  try {
-    await audio.connect();
-    hideCenter();
-    showToast('Audio connected. The visualizer can see the music now.');
-  } catch (error) {
-    hideCenter();
-    showToast(error?.message || 'Audio could not be connected.', 6500);
-  }
+  openAudioPicker();
 }
 
 async function toggleFavorite() {
@@ -2403,6 +2456,7 @@ function runtimeSummary() {
     diagnosticId: currentDiagnosticId,
     heartbeatAgeMs: heartbeatAge,
     audioConnected: Boolean(audio.connected),
+    audio: audio.diagnostics(),
     sensitivityPercent,
     renderQuality: {
       ...renderQuality,
@@ -2927,6 +2981,16 @@ function wireEvents() {
   els.dreamButton.addEventListener('click', dream);
   els.favoriteButton.addEventListener('click', toggleFavorite);
   els.audioButton.addEventListener('click', toggleAudio);
+  els.audioDisplayOption.addEventListener('click', () => { void connectAudioSource('display'); });
+  els.audioMicrophoneOption.addEventListener('click', () => { void connectAudioSource('microphone'); });
+  els.audioPicker.addEventListener('click', event => {
+    if (event.target === els.audioPicker) closeAudioPicker();
+  });
+  els.audioPicker.addEventListener('close', () => {
+    els.audioButton.setAttribute('aria-expanded', 'false');
+    showUi('dialog-close');
+    queueMicrotask(() => els.audioButton.focus());
+  });
   els.sensitivityInput?.addEventListener('input', () => {
     const snapshot = sensitivityController.setSensitivity(els.sensitivityInput.value);
     showSensitivityHud(snapshot);
