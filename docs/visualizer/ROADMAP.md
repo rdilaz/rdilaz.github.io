@@ -32,7 +32,7 @@ These remain true through every milestone:
 
 1. Open the Visualizer.
 2. An excellent featured Dream is already running.
-3. Connect audio, or optionally play audio in a future built-in player.
+3. Connect shared/microphone audio, or play user-selected local files in the built-in session player.
 4. Switch instantly among Featured, Favorites, and Recent Dreams.
 5. Pick a model and a prompt style.
 6. Press Dream.
@@ -47,7 +47,7 @@ Everything else is progressive disclosure.
 
 # Stage 1 — Product Shell / Core UX v1
 
-The accepted shell is on `main`. Featured Dreams, streaming transport, immersive playback, microphone fallback, and local render quality have completed their Stage 1 implementation milestones; live acceptance remains milestone-specific.
+The accepted shell is on `main`. Featured Dreams, streaming transport, immersive playback, microphone fallback, and local render quality have completed their Stage 1 implementation milestones. First Session v1 is implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending.
 
 Goal: make the working system feel like a product rather than a lab.
 
@@ -174,7 +174,7 @@ Spend protection remains active even when its UI is secondary.
 - Passive viewing hides host chrome and cursor; trusted pointer, touch, wheel, focus, or keyboard activity wakes it without stealing iframe interaction.
 - Full, Balanced, and Saver change local DPR and generated cadence only. They never alter prompts, model requests, audio analysis, generated HTML, or saved artifacts.
 
-After live acceptance of the Featured launch set, the next likely product milestone is **Built-in Local Player v1**. This does not mark the later Prompt Productization stage complete.
+First Session v1 now combines compact onboarding, host-owned Featured guidance, and Built-in Local Player v1 without marking later creator, sharing, or commercial stages complete.
 
 ---
 
@@ -182,28 +182,28 @@ After live acceptance of the Featured launch set, the next likely product milest
 
 Prompt Lab already proves custom creative briefs work. Convert that capability into a friendly product surface.
 
+**Status:** friendly presets, Custom prompt editing, a local Prompt Library with save/rename/duplicate/delete, saved Dream titles, and prompt attribution are implemented and tested; production acceptance remains milestone-specific.
+
 ## Prompt presets
 
-Start with a small set, not a giant gallery.
+The implemented set stays deliberately small rather than becoming a giant gallery.
 
-Candidate product presets:
+Current product presets:
 
-- Blank Canvas — minimal creative direction.
-- Cinematic — immersive/dramatic framing.
-- Minimal — restrained interpretation.
-- Experimental — unusual visual language encouraged.
+- Neutral blank canvas — minimal creative direction.
+- Neutral Clean v1 — restrained brightness, haze, and blur direction.
+- Original baseline — the preserved first-experiment prompt.
 - Custom — user-written creative brief.
 
 The fixed technical runtime/VIZ contract stays separate and non-editable in normal use.
 
 ## Prompt library
 
-Later:
+Implemented local capabilities:
 
-- save custom prompts;
-- rename prompts;
-- reuse recent prompts;
-- favorite prompt/model combinations;
+- save custom prompt snapshots;
+- select and reuse saved prompts;
+- rename, duplicate, and delete saved prompts;
 - show which prompt created a saved Dream.
 
 Prompt presets are creative choices, not hidden quality tiers.
@@ -214,21 +214,24 @@ Prompt presets are creative choices, not hidden quality tiers.
 
 Goal: offer a clean music-player experience when the Visualizer actually owns playback.
 
+**Status:** Local Player v1 is implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending.
+
 ## Local-first web player
 
 The safest first source is user-selected local audio played entirely in the browser.
 
-Potential capabilities:
+Implemented v1 capabilities:
 
-- drag/drop or choose local audio files;
+- native selection of multiple local audio files;
 - local playlist/queue;
 - play/pause;
 - previous/next;
 - seek/progress;
-- volume;
-- repeat/shuffle later;
-- track title/metadata when available locally;
-- Media Session integration so hardware/OS play-pause controls can control this page's playback.
+- remove/clear and explicit disconnect/change-source paths;
+- inert current filename display;
+- one intentional audible route through the existing normalized analysis pipeline.
+
+Deferred player capabilities include drag/drop, folder import, metadata/artwork scraping, volume, repeat, shuffle, crossfade, Media Session integration, remote URLs, persistent audio storage, and sample-track sourcing.
 
 Files should remain local by default and should not be uploaded merely to play them.
 
@@ -397,35 +400,49 @@ Unless new evidence changes the priority, close and validate milestones in this 
    - Featured/Favorites/Recent fast switcher
    - background Dream jobs + ready notification
    - global visual Play/Pause
-    - simplified chrome
+   - simplified chrome
 
 2. **Streaming + Immersive Playback + Render Quality v1**
    - streamed activity-aware completion transport
    - immersive chrome hide/wake
    - host-owned Full/Balanced/Saver playback cost
 
-3. **Prompt Productization v1**
+3. **Prompt Productization v1 (implemented)**
    - friendly preset picker
    - Custom prompt
    - prompt attribution in saved Dreams
 
-4. **Built-in Local Player v1**
-   - local files + queue + transport controls
-   - Media Session support
-   - clear source-mode distinction
+4. **AI Visualizer First Session v1**
+   - compact first-run story and About reopen
+   - host-owned Featured Dream guidance
+   - bounded local files + queue + transport controls
+   - clear local versus external source and Pause semantics
+   - reduced-motion startup pause and 320 CSS pixel host UI
 
-5. **Core UX refinement**
-   - mobile
-   - accessibility
-   - transitions
-   - first-use onboarding
-   - latency/progress wording
+5. **Acceptance and evidence**
+   - desktop first-session dogfood
+   - real-iPhone first-session acceptance; mobile Chromium emulation is not a substitute
+   - separate evidence-led Full → Balanced → Saver → Full quality investigation
+   - latency/progress wording refinement from observed use
 
 A later deep HCDD/UX polish pass should be driven by observed first-use, model-choice, spend-confirmation, and failed-Dream behavior after the evidence campaign; it is not a substitute for current milestone verification.
 
-6. **Sharing discovery**
+6. **Creator value discovery**
+   - renderer-by-renderer recording/export feasibility
+   - willingness-to-pay research before building billing
 
-7. **Monetization discovery**
+7. **Commercial hosting and security review**
+   - treat GitHub Pages as incubation rather than the commercial SaaS host
+   - isolate untrusted artifact delivery from a trusted future account origin
+   - review direct artwork URL navigation plus navigation/network boundaries
+   - harden credentials, headers, dependencies, and required main-branch review/CI
+
+8. **Managed generation discovery**
+   - only with server-enforced authentication, budgets, idempotent accounting, abuse controls, and a clear failure/refund policy
+   - client-only spend caps remain user protection, not site-funded billing authority
+
+9. **Cloud sharing/library and community gates**
+   - proceed only after separate trust, rights, moderation, and privacy review
 
 Model-authored controls remain a later experiment rather than a dependency for product launch.
 
@@ -435,6 +452,6 @@ Model-authored controls remain a later experiment rather than a dependency for p
 
 The next meaningful product checkpoint is:
 
-> A first-time visitor can open the site, immediately see beautiful working examples, connect music, switch among Dreams, pause/resume or leave the visual experience running without chrome, start even a slow healthy Dream without being trapped waiting for it, know when it is ready, choose an appropriate local render cost, and reopen/favorite it without ever seeing developer machinery.
+> A first-time visitor can open the site, understand what a Dream is and that music stays local, connect external audio or play local files, explore truthful Featured guidance, switch among Dreams, control playback, start even a slow healthy Dream without being trapped waiting for it, and reopen/favorite it without seeing developer machinery.
 
 When this statement is true on desktop and mobile, the Visualizer has crossed from a successful technical experiment into an early usable product.

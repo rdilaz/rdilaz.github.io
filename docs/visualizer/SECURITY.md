@@ -45,4 +45,12 @@ Provider credentials, host cookies, host local/session storage, IndexedDB librar
 
 ## Audio privacy
 
-Audio analysis occurs only in the trusted host page using Web Audio. Model requests contain the canonical generation prompt and, at most, generated code plus technical repair diagnostics. Captured music and live audio features are never sent to the model provider.
+Audio analysis occurs only in the trusted host page using Web Audio. Model requests contain the canonical generation prompt and, at most, generated code plus technical repair diagnostics. Captured music, local files, filenames, MIME declarations, File objects, object URLs, bytes, queue state, waveform/spectrum arrays, and live audio features are never sent to the model provider or exposed to generated code.
+
+Local Player v1 uses a trusted HTML media element and a MediaElementAudioSourceNode. Its primary analyser has exactly one destination connection so user-requested local playback is audible once. Display/system and microphone MediaStream source graphs have no destination connection, preventing host monitoring and feedback. Local object URLs are session-only and revoked on removal, replacement, clear, disconnect, or page exit. Browser decoding remains the file-content authority; names and declared MIME types are treated as untrusted inert text.
+
+## Commercial hosting review pending
+
+GitHub Pages is the incubation host, not an approved commercial SaaS trust boundary. Before accounts, paid features, or public artifact delivery, a separate review must isolate untrusted artifact delivery from the trusted account origin; evaluate direct navigation to artwork URLs and navigation/network boundaries; harden credentials, headers, dependencies, and secret handling; and enforce reviewed main-branch CI. This milestone performs none of those migrations or audits.
+
+Managed paid generation is also deferred. It requires server-enforced authentication, budgets, idempotent accounting, abuse controls, and a clear failure/refund policy. Current client-only spend caps protect a user-funded browser session; they are not authority for site-funded billing. Cloud library/sharing and community features remain gated on separate trust, rights, moderation, and privacy work.

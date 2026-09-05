@@ -89,6 +89,9 @@ jobs:
       - name: Verify audio capture source contract
         run: node --test --test-concurrency=1 tests/audio-engine.contract.mjs
 
+      - name: Verify local player contract
+        run: node --test --test-concurrency=1 tests/local-player.contract.mjs
+
       - name: Verify streaming transport contract
         run: node --test --test-concurrency=1 tests/streaming-transport.contract.mjs
 

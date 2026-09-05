@@ -32,7 +32,7 @@ PowerShell can resolve `npm` to the `npm.ps1` shim. A restrictive script executi
 Read these files in order for the shortest path through a Dream:
 
 1. `public/visualizer/app.js` - composition, promotion/rollback orchestration, Library, and developer tools.
-2. `public/visualizer/playback-state.js`, `dream-job.js`, and `dream-switcher.js` - focused product state and shell views.
+2. `public/visualizer/playback-state.js`, `first-session.js`, `local-player.js`, `dream-job.js`, and `dream-switcher.js` - focused first-session, playback, queue, job, and shell state.
 3. `public/visualizer/featured-dreams.js` and `featured/manifest.js` - curated static Dream loading and pending-review export.
 4. `public/visualizer/prompt.js` - the versioned generation and repair messages.
 5. `public/visualizer/provider-runtime.js`, `openrouter-sse.js`, and `reasoning-settings.js` - provider normalization, private SSE assembly, exact reasoning choices, request construction, and HTML extraction.
@@ -73,6 +73,9 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/playback-state.js`: owns trusted visual playing/paused product state. Sandbox enforcement remains in `sandbox.js`.
 - `public/visualizer/dream-job.js`: owns the single background-job lifecycle and the collapsible job panel/pill presentation.
 - `public/visualizer/dream-switcher.js`: owns deterministic Featured/Favorites/Recent selection and keyboard navigation.
+- `public/visualizer/first-session.js`: owns the versioned first-session completion preference, non-modal story visibility, action handoff, and storage-denied fallback.
+- `public/visualizer/local-player.js`: owns the session queue, trusted media-element listeners, track transitions, native metadata probes, object URLs, and stale-operation exclusion. It never owns provider requests, VIZ schema, or generated code.
+- `public/visualizer/featured-dream-guide.js`: owns editorial explanations for the three known Featured artifacts. Unknown/local Dreams receive no inferred guide.
 - `public/visualizer/dream-metadata.js`: owns human display-title precedence, editable-title validation, immutable HTML-title capture for new Dreams, and truthful prompt labels. These fields are presentation metadata, not artifact identity.
 - `public/visualizer/diagnostic-details-state.js`: owns the single record-keyed Raw diagnostic JSON disclosure state retained across local list rerenders.
 - `public/visualizer/featured-dreams.js` and `public/visualizer/featured/manifest.js`: own static Featured metadata/HTML loading and pending-operator-review curation export.
@@ -85,7 +88,7 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js`: own safe global arrow routing and the local post-normalization sensitivity transform.
 - `public/visualizer/dream-status.js` and `dream-transport.js`: own request-scoped fetch lifecycle, cancellation, body-activity idle timing, the secondary hard ceiling, and truthful connected/thinking/creating/checking events. `dream-job.js` owns product job state/UI.
 - `public/visualizer/model-eligibility.js`: owns the pure live-Dream model eligibility rules used by catalogs and the final availability check.
-- `public/visualizer/audio-engine.js`: owns local tab/window/system or explicit microphone capture and normalized audio features supplied to the trusted host. It does not own model requests.
+- `public/visualizer/audio-engine.js`: owns tab/window/system capture, explicit microphone capture, the local MediaElementAudioSource graph, and normalized audio features supplied to the trusted host. Only the local media-element graph has one intentional destination route; capture graphs are never monitored. It does not own model requests.
 - `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the injected `window.VIZ` bridge, trusted iframe-activity reporting, effective DPR/generated-RAF policy, CSP, runtime instrumentation, heartbeats, and probes.
 - `public/visualizer/reliability.js`: owns deterministic synthetic VIZ stimulation, visible-output and VIZ-use evaluation, the real-viewport canary, watchdog checks, and repair diagnostics.
 - `public/visualizer/diagnostics.js`: owns the general diagnostic record, timeline, bounded retained artifacts, redaction, status labels, copy helpers, and export helpers.
@@ -112,6 +115,20 @@ The admitted model artifacts are immutable HTML from `visualizer-featured-export
 | `nexus-beam` | Nexus Beam / Kinetic Harmonic Astrolabe | `google/gemini-3.8-flash` | `dbeb41d5-411e-4964-af34-70ea48c8ddc6` | `gen-1788487061-Hz2FaGMJFxrfVhjEIWOF` | `f5240f15-ccf9-4f16-9f8a-84d35efea8cf` | `custom-784707e6` (Neutral Crisp V1) / `visualizer-prompt-v2` | `dd6ffcfe40fc2db07773144c55523db99d30521906bf08949b01663caf09d140` |
 
 The export package intentionally stores only the eight-character local artifact marker in its generated manifest ID. Full local generation IDs above are operator-supplied source identities associated with exact marker, provider-generation, trace, and digest tuples. Historical traces are not rewritten. Calibration Bloom remains separately identified as host-created and is the last-known-safe no-network fallback.
+
+## First Session v1 implementation
+
+Status: implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending. WebKit is not configured by the repository and is therefore untested for this milestone.
+
+- `ai-visualizer.first-session.v1=complete` is the only onboarding preference. A denied `localStorage` read/write leaves an in-memory dismissal for the page session and does not block startup.
+- Fresh reduced-motion visits call the existing `playbackController.pause()` before the startup sandbox load. A returning visit is not automatically paused by this policy, and explicit Play uses the existing trusted resume path.
+- Featured guide statements are backed by exact artifact code but live only in `featured-dream-guide.js`. Guide disclosure never invokes Open, reloads the iframe, or changes LIVE/NEXT.
+- Local selection accepts at most 24 files, 512 MiB per file, and 2 GiB in one session queue. MIME and filename values are not trusted as validation; the browser performs a metadata-only media probe before a source replacement commits.
+- A queue owns fresh object URLs and one fresh trusted audio element. Track changes reuse its single MediaElementAudioSourceNode; source replacement creates a new element because browsers permit only one media-element source registration per element. Removal, clear, replacement, disconnect, and every pagehide revoke discarded URLs and detach listeners, including after a BFCache-style return.
+- Audio source requests and host source UI use explicit monotonic operation ownership. Teardown drops authoritative references before awaiting context close, so stale request errors, compatibility fallbacks, close completions, and UI handlers cannot replace or clear a newer source.
+- The local graph is `media element → primary analyser → AudioContext destination` plus analysis-only branches. This is the sole host-created audible path. Display and microphone graphs have no destination connection.
+- File selection leaves media and visuals paused; actual `playing`, `pause`, `ended`, and rejected `play()` results drive host state. A started queue may advance, paused previous/next stays paused, and the final queue end pauses visuals without reloading the Dream.
+- `tests/helpers/synthetic-audio.mjs` generates deterministic test-only mono PCM sine-wave WAV buffers. Chromium tests feed those bytes through native media decoding and the real Web Audio analysis path; media state is mocked only for focused lifecycle contracts.
 
 ## Dream display metadata
 
@@ -221,6 +238,7 @@ The transparency additions are:
 - `modelTestMatrix()` returns the sanitized matrix object; `copyModelTestMatrix()` copies the framed matrix block.
 - `theoreticalModelCeilings()` returns developer-only catalog-ceiling diagnostics, never an expected-cost estimate.
 - `playback()` and `setPaused(value)` inspect/control trusted visual playback for local testing.
+- `audioAnalysis()` exposes only the latest normalized scalar analysis summary for local testing; it omits waveform/spectrum arrays, filenames, queue entries, URLs, File objects, and bytes.
 - `quality()` and `setQuality(mode)` inspect/control the persisted local render profile; `immersive()` reports hidden state and any legitimate blocker.
 - `probeActive(label)` requests a sanitized trusted probe from the active sandbox.
 - `exportFeatured(generationId)` downloads a local candidate package marked pending operator review.
@@ -317,6 +335,12 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --test --test-concurrency=1 tests/audio-sensitivity.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+node --test --test-concurrency=1 tests/audio-engine.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/local-player.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 node --test --test-concurrency=1 tests/streaming-transport.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -349,6 +373,14 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ```
 
 The final Playwright command runs the full configured browser suite, not only one transparency test.
+
+During implementation, the bounded First Session browser campaign can be run with:
+
+```powershell
+npx.cmd playwright test tests/first-session.spec.mjs tests/local-player.spec.mjs tests/audio-source.spec.mjs --config=playwright.config.mjs
+```
+
+Every OpenRouter route in that campaign is intercepted. It performs no provider inference and spends no provider credits.
 
 ## Safe Git workflow
 
@@ -397,7 +429,7 @@ Stored locally:
 
 Not intentionally stored in diagnostics or traces:
 
-- captured music, song names, song metadata, waveform arrays, spectrum arrays, or audio content;
+- captured music, local filenames, queue entries, File objects, object URLs, MIME declarations, song names, song metadata, waveform arrays, spectrum arrays, or audio content;
 - OpenRouter/API keys, authorization headers, cookies, or generated-frame access to host storage;
 - hidden model chain-of-thought, provider-internal processing, server logs, or a wire-level HTTP transcript.
 
