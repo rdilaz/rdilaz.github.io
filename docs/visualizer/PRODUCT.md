@@ -50,7 +50,7 @@ Diagnostics are also local by default and never retain music, waveform/spectrum 
 V0 is real only when a user can:
 
 - open `/visualizer/` over HTTPS;
-- explicitly choose shared tab/window/system audio or local microphone capture;
+- explicitly choose shared tab/window/system audio, local microphone capture, or session-only local music files;
 - authorize their own OpenRouter access using PKCE;
 - choose a model from the live catalog;
 - generate a new visualizer using the canonical prompt;
@@ -91,6 +91,26 @@ The Featured set contains two operator-approved model-generated artifacts plus t
 
 Dream presentation metadata is separate from artifact identity. Featured titles come from operator curation, while a saved local Dream can receive one short user-edited display title from its Library row. Clearing that title returns to the captured artifact title or deterministic model/generation fallback without changing HTML, trace, prompt hash, model-fit identity, or provenance. Dream switcher, Library details, and READY presentation show a human prompt label: an exact saved Prompt Library name when available, a known built-in preset name, a captured prompt name, or a deterministic truthful fallback.
 
+## First Session v1
+
+**Implementation status:** implemented and covered by local deterministic contracts plus the configured Chromium path on the feature branch; central review, merge, production acceptance, desktop dogfood, and real-iPhone acceptance remain pending.
+
+The bounded first-session journey is:
+
+`working Calibration Bloom startup → understand Dream + privacy boundary → connect external/microphone audio or choose local files → explore Featured guidance → control playback → favorite and revisit a Dream`
+
+- The compact first-run story says: **AI creates the visual instrument. Your music stays on this device.** It defines a Dream as a reusable visual instrument rather than a song-specific uploaded video, distinguishes host-created Calibration Bloom from AI-generated Featured art, and opens the existing audio chooser or Featured switcher without requiring provider authorization.
+- Only `ai-visualizer.first-session.v1` completion is persisted. Storage denial falls back to an in-memory dismissal; the story can be reopened from About and does not take focus on a fresh visit.
+- Featured guidance is host-owned editorial metadata outside immutable artwork. Klangfiguren is described as a Chladni-inspired artistic interpretation, Nexus Beam retains the immutable artifact title `Kinetic Harmonic Astrolabe`, and Calibration Bloom remains explicitly host-created.
+- Local Player v1 uses user-selected browser-decodable files, a trusted media element, and one audible MediaElementAudioSource graph feeding the existing normalized analysis. Its session-only queue is bounded to 24 files, 512 MiB per file, and 2 GiB total; object URLs are revoked when entries are replaced, removed, cleared, or disconnected.
+- Selecting files never autoplays. With local music, primary Play/Pause controls music and visuals together from actual media state; external shared/microphone sources retain visual-only Pause and are never routed to speakers by the host.
+- Filenames, MIME declarations, File objects, object URLs, metadata, and bytes remain outside VIZ, provider requests, diagnostics, traces, and debug exports. Generated code receives no additional authority.
+- A fresh reduced-motion visit starts the existing trusted visual playback controller paused. This is a host default, not a claim that arbitrary generated motion is certified safe.
+
+## Commercial hypotheses
+
+Repeat listening and creator value are hypotheses to validate, not proven demand. Potential later paid value includes reusable custom Dreams, validated recording/export, curated collections, and optional managed generation with explicitly bounded credits. Basic privacy, accessibility, safety, and user control remain core product responsibilities rather than paid upgrades.
+
 ## Deliberately deferred
 
-Site-funded inference, monetization, final branding/domain, social feeds, serious leaderboards, native apps, service-specific audio integrations, consumer-subscription tunneling, community moderation, and any redesign that makes the primary canvas feel like an admin dashboard.
+Accounts, billing, public sharing, video export, marketplaces, site-funded inference, monetization, final branding/domain, social feeds, serious leaderboards, native apps, service-specific audio integrations, consumer-subscription tunneling, community moderation, persistent audio storage, remote audio URLs, and any redesign that makes the primary canvas feel like an admin dashboard.

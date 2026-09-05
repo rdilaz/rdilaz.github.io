@@ -34,6 +34,18 @@
           </div>
         </header>
 
+        <section class="first-session-story" id="firstSessionStory" aria-labelledby="firstSessionTitle" aria-hidden="true" hidden>
+          <button class="first-session-story__dismiss" id="firstSessionDismiss" type="button" aria-label="Dismiss introduction">×</button>
+          <span class="eyebrow">FIRST SESSION</span>
+          <h1 id="firstSessionTitle">Give music a new instrument.</h1>
+          <p class="first-session-story__truth"><strong>AI creates the visual instrument. Your music stays on this device.</strong></p>
+          <p>A Dream is a reusable visual instrument, not a video generated from an uploaded song. Calibration Bloom is the built-in startup; Featured also holds AI-generated art.</p>
+          <div class="first-session-story__actions">
+            <button class="pill-button" id="firstSessionConnect" type="button">Connect audio</button>
+            <button class="first-session-story__featured" id="firstSessionExplore" type="button">Explore Featured</button>
+          </div>
+        </section>
+
         <div class="center-status" id="transientStatus" hidden>
           <strong id="transientStatusTitle">Connecting</strong>
           <span id="transientStatusDetail">The current visual stays live.</span>
@@ -77,6 +89,31 @@
           <footer class="dream-switcher__foot"><span>Featured stays with the site. Favorites and Recent stay on this device.</span><button class="text-button" id="libraryButton" type="button">Full Library</button></footer>
         </section>
 
+        <section class="local-transport chrome" id="localTransport" aria-label="Local music player" hidden>
+          <div class="local-transport__now">
+            <span class="eyebrow">LOCAL MUSIC</span>
+            <strong id="localTrackName">No local file selected</strong>
+          </div>
+          <div class="local-transport__buttons" aria-label="Local playback controls">
+            <button id="localPreviousButton" type="button" aria-label="Previous local track">Prev</button>
+            <button id="localPlayButton" type="button" aria-label="Play local music">Play</button>
+            <button id="localNextButton" type="button" aria-label="Next local track">Next</button>
+          </div>
+          <label class="local-transport__seek"><span class="sr-only">Seek local music</span><input id="localSeek" type="range" min="0" max="0" step="0.1" value="0" disabled /><output id="localTime" for="localSeek">0:00 / 0:00</output></label>
+          <details class="local-queue" id="localQueueDetails">
+            <summary id="localQueueSummary">Queue</summary>
+            <div class="local-queue__panel">
+              <div class="local-queue__list" id="localQueueList" role="list"></div>
+              <div class="local-queue__actions">
+                <button id="localChangeFiles" type="button">Change files</button>
+                <button id="localClearQueue" type="button">Clear queue</button>
+                <button id="localDisconnect" type="button">Disconnect</button>
+              </div>
+            </div>
+          </details>
+          <div id="localAudioMount" hidden></div>
+        </section>
+
         <nav class="controls chrome" id="controls" aria-label="Visualizer controls">
           <button class="control control--icon control--playback" id="playbackButton" type="button" aria-label="Pause visual" aria-pressed="false" title="Pause visual">⏸</button>
           <button class="control control--audio" id="audioButton" type="button" aria-haspopup="dialog" aria-controls="audioPicker" aria-expanded="false"><span class="audio-dot" id="audioDot" aria-hidden="true"></span><span id="audioButtonLabel">Connect audio</span></button>
@@ -96,7 +133,16 @@
         <form method="dialog"><button class="audio-picker__close" id="audioPickerClose" type="submit" aria-label="Close audio source chooser">×</button></form>
       </div>
       <p class="audio-picker__intro" id="audioPickerIntro">Audio is analyzed locally on this device and is never sent to the AI.</p>
+      <section class="audio-picker__current" id="audioCurrentSource" aria-live="polite" hidden>
+        <div><span>Current source</span><strong id="audioCurrentSourceLabel">Disconnected</strong></div>
+        <button id="audioDisconnectButton" type="button">Disconnect</button>
+      </section>
       <div class="audio-picker__sources">
+        <button class="audio-source audio-source--local" id="audioLocalOption" type="button" data-audio-source="local">
+          <span class="audio-source__top"><strong>Play local files</strong><span>PRIVATE QUEUE</span></span>
+          <small>Choose multiple browser-decodable audio files for this session. Selection alone never starts playback.</small>
+        </button>
+        <input id="localFileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.flac,.webm,.opus" multiple hidden />
         <button class="audio-source audio-source--display" id="audioDisplayOption" type="button" data-audio-source="display">
           <span class="audio-source__top"><strong>Share tab / system audio</strong><span>BEST QUALITY</span></span>
           <small>Direct digital audio, best on desktop. Availability depends on your browser, OS, and the source you select.</small>
@@ -107,7 +153,8 @@
           <em>Microphone permission is requested only after you choose this.</em>
         </button>
       </div>
-      <p class="audio-picker__unavailable" id="audioUnavailable" hidden>Live audio capture is unavailable in this browser.</p>
+      <p class="audio-picker__unavailable" id="audioUnavailable" hidden>Shared and microphone capture are unavailable in this browser. Local files may still work when Web Audio is available.</p>
+      <details class="audio-picker__privacy"><summary>Privacy and source limits</summary><p>Local files, filenames, audio bytes, and live audio signals stay in this browser and are not added to model requests, traces, or exports. Codec support varies by browser. Shared and microphone sources are observational, so Pause controls only the visual while those sources remain active elsewhere.</p></details>
     </dialog>
 
     <aside class="drawer" id="modelDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="Choose a model" inert>
@@ -175,8 +222,10 @@
       <div class="drawer__head"><div><span class="eyebrow">THE IDEA</span><h2>One blank canvas. Every model.</h2></div><button class="drawer__close" type="button" data-close-drawer aria-label="Close">×</button></div>
       <div class="about-copy">
         <p class="about-copy__lead">Play anything. Pick an AI. Watch what it thinks music looks like.</p>
-        <p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives.</p>
+        <p><strong>AI creates the visual instrument. Your music stays on this device.</strong> A Dream is a reusable visual instrument, not a video generated from an uploaded song.</p>
+        <p>The model never hears your song. It creates an instrument that can see music through the same standardized audio signals every other model receives. Calibration Bloom is host-created; the other Featured Dreams identify their AI and prompt provenance.</p>
         <p><strong>Your audio stays on this device.</strong> Generated visualizers run inside an isolated sandbox with no access to your model key, account data, storage, or the network.</p>
+        <button class="about-guide-button" id="reopenFirstSession" type="button">Open first-session guide</button>
         <section class="sensitivity-control" aria-labelledby="sensitivityLabel"><div class="sensitivity-control__head"><div><span class="eyebrow">AUDIO REACTION</span><strong id="sensitivityLabel">Sensitivity</strong></div><output id="sensitivityValue" for="sensitivityInput">100%</output></div><input id="sensitivityInput" type="range" min="50" max="200" step="10" value="100" aria-label="Audio sensitivity" /><div class="sensitivity-control__foot"><p>How strongly the visual reacts after the same local normalization used for every Dream. This is not speaker volume.</p><button class="text-button" id="resetSensitivity" type="button">Reset to 100%</button></div></section>
         <section class="render-quality-control" aria-labelledby="renderQualityLabel" aria-describedby="renderQualityHelp">
           <div><span class="eyebrow">VISUAL PERFORMANCE</span><strong id="renderQualityLabel">Render quality</strong></div>

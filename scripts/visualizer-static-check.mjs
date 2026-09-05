@@ -147,6 +147,24 @@ const [
   read('playwright.config.mjs'),
 ]);
 
+const [
+  localPlayer,
+  firstSession,
+  featuredDreamGuide,
+  localPlayerContract,
+  localPlayerBrowser,
+  firstSessionBrowser,
+  syntheticAudioFixture,
+] = await Promise.all([
+  read('public/visualizer/local-player.js'),
+  read('public/visualizer/first-session.js'),
+  read('public/visualizer/featured-dream-guide.js'),
+  read('tests/local-player.contract.mjs'),
+  read('tests/local-player.spec.mjs'),
+  read('tests/first-session.spec.mjs'),
+  read('tests/helpers/synthetic-audio.mjs'),
+]);
+
 const failures = [];
 let assertionCount = 0;
 const expect = (condition, message) => {
@@ -174,9 +192,64 @@ expect(
 expect(
   index.includes('Listen with microphone')
     && index.includes('Share tab / system audio')
+    && index.includes('Play local files')
     && index.includes('never sent to the AI')
     && index.includes('not internal phone audio'),
   'Audio source UX must preserve mobile fallback and privacy truth.',
+);
+expect(
+  audio.includes('createMediaElementSource(element)')
+    && audio.includes('analyser.connect(context.destination)')
+    && !audio.includes('captureStream'),
+  'Local playback must use a media-element source with one explicit output route and no captureStream dependency.',
+);
+expect(
+  localPlayer.includes('MAX_LOCAL_QUEUE_FILES = 24')
+    && localPlayer.includes('MAX_LOCAL_FILE_BYTES = 512 * 1024 * 1024')
+    && localPlayer.includes('MAX_LOCAL_QUEUE_BYTES = 2 * 1024 * 1024 * 1024')
+    && localPlayer.includes('URL.createObjectURL')
+    && localPlayer.includes('URL.revokeObjectURL'),
+  'Local queue bounds and object-URL ownership must remain explicit.',
+);
+expect(
+  index.includes('id="localFileInput"')
+    && index.includes('type="file"')
+    && index.includes('multiple hidden')
+    && index.includes('id="localTransport"')
+    && index.includes('AI creates the visual instrument. Your music stays on this device.'),
+  'First-session and local transport entry points must remain in the trusted host shell.',
+);
+expect(
+  firstSession.includes("FIRST_SESSION_STORAGE_KEY = 'ai-visualizer.first-session.v1'")
+    && firstSession.includes("FIRST_SESSION_COMPLETE_VALUE = 'complete'")
+    && featuredDreamGuide.includes("'nexus-beam'")
+    && featuredDreamGuide.includes('Kinetic Harmonic Astrolabe')
+    && featuredDreamGuide.includes('host-created, not AI-generated'),
+  'Versioned onboarding and truthful host-owned Featured guidance must remain present.',
+);
+const composeHostFrameStart = app.indexOf('function composeHostFrame');
+const composeHostFrameEnd = app.indexOf('function hostLoop', composeHostFrameStart);
+const composeHostFrameFlow = composeHostFrameStart >= 0 && composeHostFrameEnd > composeHostFrameStart
+  ? app.slice(composeHostFrameStart, composeHostFrameEnd)
+  : '';
+const runtimeSummaryStart = app.indexOf('function runtimeSummary');
+const runtimeSummaryEnd = app.indexOf('async function renderDiagnostics', runtimeSummaryStart);
+const runtimeSummaryFlow = runtimeSummaryStart >= 0 && runtimeSummaryEnd > runtimeSummaryStart
+  ? app.slice(runtimeSummaryStart, runtimeSummaryEnd)
+  : '';
+expect(
+  composeHostFrameFlow.includes('audio: {')
+    && !composeHostFrameFlow.includes('localPlayer')
+    && !runtimeSummaryFlow.includes('localPlayer'),
+  'Filenames, queue state, and File objects must remain outside VIZ frames and runtime diagnostics.',
+);
+expect(
+  localPlayerContract.includes('rapid replacement cannot regain stale ownership')
+    && localPlayerBrowser.includes('real local WAV decoding drives normalized analysis')
+    && localPlayerBrowser.includes('must omit local filenames')
+    && firstSessionBrowser.includes('storage denial falls back in memory')
+    && syntheticAudioFixture.includes('Test-only deterministic PCM fixture'),
+  'First-session and local-player contracts must remain on the configured deterministic test path.',
 );
 expect(prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v2'") && prompt.includes('There are no aesthetic requirements.'), 'Versioned legacy baseline prompt must remain aesthetically unconstrained.');
 expect(

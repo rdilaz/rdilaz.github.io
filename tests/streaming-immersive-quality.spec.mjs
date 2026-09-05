@@ -27,6 +27,7 @@ test.use({ deviceScaleFactor: 2 });
 
 async function seedConnectedSession(page) {
   await page.addInitScript(({ modelId, key }) => {
+    localStorage.setItem('ai-visualizer.first-session.v1', 'complete');
     localStorage.setItem('ai-visualizer.selected-model', modelId);
     localStorage.setItem('ai-visualizer.spend.settings.v1', JSON.stringify({
       perDream: 0.75,
@@ -493,6 +494,7 @@ test('premature SSE EOF remains incomplete in both trace and live transport stat
 });
 
 test('immersive chrome respects drawers and keyboard focus but pointer-focused controls still age out in fullscreen', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('ai-visualizer.first-session.v1', 'complete'));
   await routeOpenRouterMetadata(page);
   await page.goto('/visualizer/index.html?dev=1');
   await expect(page.locator('body')).toHaveClass(/ui-hidden/, { timeout: 5000 });

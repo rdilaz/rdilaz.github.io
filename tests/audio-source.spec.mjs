@@ -245,6 +245,7 @@ test('microphone choice is local, music-friendly, mono-safe, diagnostic-safe, an
     expect(evidence.identity.displayName).toBe('Calibration Bloom');
     expect(JSON.stringify(evidence.audio)).not.toMatch(/deviceId|groupId|waveform|spectrum|private-/i);
     await page.locator('#audioButton').click();
+    await page.locator('#audioDisconnectButton').click();
     await expect(page.locator('#audioButtonLabel')).toHaveText('Connect audio');
   }
   const cleanup = await page.evaluate(() => ({
@@ -330,6 +331,7 @@ test('mono microphone VIZ remains viable when Klangfiguren opens', async ({ page
   await page.mouse.move(340, 260);
   await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
   await page.locator('#audioButton').click();
+  await page.locator('#audioDisconnectButton').click();
   await expect(page.locator('#audioButtonLabel')).toHaveText('Connect audio');
   expect(provider.completions).toBe(0);
 });
@@ -341,7 +343,7 @@ test('desktop direct share stays first, preserves preferred call shape, and neve
   await page.locator('#audioButton').click();
   await expect(page.locator('#audioDisplayOption')).toBeFocused();
   await page.locator('#audioDisplayOption').click();
-  await expect(page.locator('#audioButtonLabel')).toHaveText('Audio connected');
+  await expect(page.locator('#audioButtonLabel')).toHaveText('Shared audio');
   const evidence = await page.evaluate(() => ({
     displayCalls: window.__audioFixture.displayMediaCalls,
     microphoneCalls: window.__audioFixture.userMediaCalls.length,
@@ -358,6 +360,10 @@ test('desktop direct share stays first, preserves preferred call shape, and neve
   expect(evidence.microphoneCalls).toBe(0);
   expect(evidence.videoEnabled).toBe(false);
   expect(evidence.audio).toMatchObject({ sourceKind: 'display', effectiveChannelCount: 2 });
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Pause visual only; external music keeps playing');
+  await page.locator('#playbackButton').click();
+  await expect(page.locator('#pauseMessage')).toHaveText('Visual paused · music source still controlled externally');
+  await page.locator('#playbackButton').click();
   expect(provider.completions).toBe(0);
 });
 

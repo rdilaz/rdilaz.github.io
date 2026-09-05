@@ -1,4 +1,5 @@
 import { AudioEngine } from './audio-engine.js';
+import { LocalPlayer } from './local-player.js';
 import { DEFAULT_VISUALIZER_HTML } from './default-visualizer.js';
 import {
   beginOpenRouterAuth,
@@ -81,6 +82,7 @@ import {
   globalArrowCommand,
 } from './keyboard-transport.js';
 import { createImmersiveUiController } from './immersive-ui.js';
+import { createFirstSessionController, mountFirstSession } from './first-session.js';
 import { modelSearchMatches } from './model-search.js';
 import { VISUALIZER_RUNTIME_VERSION } from './runtime-version.js';
 import {
@@ -141,7 +143,28 @@ const els = {
   audioPicker: $('#audioPicker'),
   audioDisplayOption: $('#audioDisplayOption'),
   audioMicrophoneOption: $('#audioMicrophoneOption'),
+  audioLocalOption: $('#audioLocalOption'),
+  localFileInput: $('#localFileInput'),
+  audioCurrentSource: $('#audioCurrentSource'),
+  audioCurrentSourceLabel: $('#audioCurrentSourceLabel'),
+  audioDisconnectButton: $('#audioDisconnectButton'),
   audioUnavailable: $('#audioUnavailable'),
+  localTransport: $('#localTransport'),
+  localTrackName: $('#localTrackName'),
+  localPreviousButton: $('#localPreviousButton'),
+  localPlayButton: $('#localPlayButton'),
+  localNextButton: $('#localNextButton'),
+  localSeek: $('#localSeek'),
+  localTime: $('#localTime'),
+  localQueueDetails: $('#localQueueDetails'),
+  localQueueSummary: $('#localQueueSummary'),
+  localQueueList: $('#localQueueList'),
+  localChangeFiles: $('#localChangeFiles'),
+  localClearQueue: $('#localClearQueue'),
+  localDisconnect: $('#localDisconnect'),
+  localAudioMount: $('#localAudioMount'),
+  firstSessionStory: $('#firstSessionStory'),
+  reopenFirstSession: $('#reopenFirstSession'),
   sensitivityInput: $('#sensitivityInput'),
   sensitivityValue: $('#sensitivityValue'),
   resetSensitivity: $('#resetSensitivity'),
@@ -244,6 +267,7 @@ const volatileDiagnostics = new Map();
 const MAX_VOLATILE_DIAGNOSTICS = 8;
 const identityController = createLiveIdentityController();
 const playbackController = createPlaybackController();
+const firstSessionController = createFirstSessionController({ storage: localSettingsStorage });
 const dreamJobController = createDreamJobController();
 const reasoningSelectionStore = createReasoningSelectionStore({ storage: localSettingsStorage });
 const sensitivityController = createAudioSensitivityController({ storage: localSettingsStorage });
@@ -252,6 +276,7 @@ const modelFitEvidenceStore = createModelFitEvidenceStore({ storage: localSettin
 const fixtureDiagnostics = new Map();
 const rawDiagnosticDetailsState = createDiagnosticDetailsState();
 let dreamSwitcher = null;
+let firstSessionView = null;
 let featuredDreams = [];
 const featuredLoadFailures = [];
 let currentDreamKey = 'featured:calibration-bloom';
@@ -262,6 +287,22 @@ let openingStatusTimer = 0;
 let openingStatusRevision = 0;
 let sensitivityPercent = sensitivityController.snapshot().sensitivityPercent;
 let renderQuality = resolveRenderQuality(renderQualityController.snapshot().mode, devicePixelRatio || 1);
+const localPlayer = new LocalPlayer({
+  audioEngine: audio,
+  mount: els.localAudioMount,
+  onState: renderLocalPlayer,
+  onPlaybackChange(playing) {
+    if (playing) playbackController.play();
+    else playbackController.pause();
+  },
+  onSourceSelected() {
+    playbackController.pause();
+    renderAudioSourceUi();
+  },
+  onError(error) {
+    showToast(error.message || 'Local audio could not be used.', 6500);
+  },
+});
 const audioAnalysisGate = createCadenceGate(60);
 const vizDeliveryGate = createCadenceGate(renderQuality.maxFps);
 let latestAudioSample = null;
@@ -442,16 +483,27 @@ function renderPlayback(snapshot = playbackController.snapshot()) {
   if (!visualPaused) lastDeliveredFrameAt = 0;
   document.body.classList.toggle('visual-paused', visualPaused);
   els.stage.classList.toggle('is-visual-paused', visualPaused);
+  const localSelected = localPlayer.hasSelection();
+  const localPlaying = localSelected && localPlayer.isPlaying();
+  const sourceKind = audio.connected ? audio.diagnostics().sourceKind : '';
+  const externalConnected = sourceKind === 'display' || sourceKind === 'microphone';
   if (els.playbackButton) {
+    const label = localSelected
+      ? localPlaying ? 'Pause local music and visual' : 'Play local music and visual'
+      : externalConnected
+        ? visualPaused ? 'Play visual only; external music is controlled elsewhere' : 'Pause visual only; external music keeps playing'
+        : visualPaused ? 'Play visual' : 'Pause visual';
     els.playbackButton.textContent = visualPaused ? '▶' : '⏸';
-    els.playbackButton.setAttribute('aria-label', visualPaused ? 'Play visual' : 'Pause visual');
+    els.playbackButton.setAttribute('aria-label', label);
     els.playbackButton.setAttribute('aria-pressed', String(visualPaused));
-    els.playbackButton.title = visualPaused ? 'Play visual' : 'Pause visual';
+    els.playbackButton.title = label;
   }
   if (els.pauseMessage) {
-    els.pauseMessage.textContent = visualPaused && audio.connected
-      ? EXTERNAL_CAPTURE_PAUSE_COPY
-      : 'Visual paused';
+    els.pauseMessage.textContent = visualPaused && localSelected
+      ? 'Local music and visual paused'
+      : visualPaused && externalConnected
+        ? EXTERNAL_CAPTURE_PAUSE_COPY
+        : 'Visual paused';
   }
   if (els.pauseOverlay) els.pauseOverlay.hidden = !visualPaused;
   activeSlot.sandbox.setPaused(visualPaused);
@@ -461,14 +513,89 @@ function renderPlayback(snapshot = playbackController.snapshot()) {
   immersiveUiController?.sync();
 }
 
-function updateAudioState(state) {
-  const connected = Boolean(state.connected);
+function formatMediaTime(value) {
+  const seconds = Math.max(0, Math.floor(Number(value) || 0));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function renderAudioSourceUi() {
+  const localSelected = localPlayer.hasSelection();
+  const diagnostics = audio.diagnostics();
+  const connected = Boolean(audio.connected || localSelected);
+  const sourceKind = localSelected ? 'local' : audio.connected ? diagnostics.sourceKind : '';
   els.audioDot.classList.toggle('is-live', connected);
-  els.audioButtonLabel.textContent = connected
-    ? state.sourceKind === 'microphone' ? 'Microphone connected' : 'Audio connected'
-    : 'Connect audio';
+  els.audioButtonLabel.textContent = sourceKind === 'local'
+    ? 'Local music'
+    : sourceKind === 'microphone'
+      ? 'Microphone connected'
+      : sourceKind === 'display'
+        ? 'Shared audio'
+        : 'Connect audio';
+  if (els.audioCurrentSource) els.audioCurrentSource.hidden = !connected;
+  if (els.audioCurrentSourceLabel) {
+    els.audioCurrentSourceLabel.textContent = sourceKind === 'local'
+      ? 'Local files selected'
+      : sourceKind === 'microphone'
+        ? 'Microphone'
+        : sourceKind === 'display'
+          ? 'Shared tab / system audio'
+          : 'Disconnected';
+  }
+}
+
+function renderLocalPlayer(snapshot = localPlayer.snapshot()) {
+  if (!els.localTransport) return;
+  const restoreFocus = !snapshot.selected && els.localTransport.contains(document.activeElement);
+  els.localTransport.hidden = !snapshot.selected;
+  els.localTransport.setAttribute('aria-busy', String(snapshot.loading));
+  if (!snapshot.selected && els.localQueueDetails) els.localQueueDetails.open = false;
+  const current = snapshot.queue[snapshot.currentIndex] || null;
+  if (els.localTrackName) els.localTrackName.textContent = current?.name || 'No local file selected';
+  if (els.localPreviousButton) els.localPreviousButton.disabled = snapshot.loading || snapshot.currentIndex <= 0;
+  if (els.localNextButton) els.localNextButton.disabled = snapshot.loading || snapshot.currentIndex >= snapshot.queue.length - 1;
+  if (els.localPlayButton) {
+    els.localPlayButton.disabled = snapshot.loading;
+    els.localPlayButton.textContent = snapshot.playing ? 'Pause' : 'Play';
+    els.localPlayButton.setAttribute('aria-label', snapshot.playing ? 'Pause local music and visual' : 'Play local music and visual');
+  }
+  if (els.localSeek) {
+    const duration = Math.max(0, Number(snapshot.duration) || 0);
+    els.localSeek.max = String(duration);
+    els.localSeek.value = String(Math.min(duration, Math.max(0, Number(snapshot.currentTime) || 0)));
+    els.localSeek.disabled = snapshot.loading || duration <= 0;
+    els.localSeek.setAttribute('aria-valuetext', `${formatMediaTime(snapshot.currentTime)} of ${formatMediaTime(snapshot.duration)}`);
+  }
+  if (els.localTime) els.localTime.textContent = `${formatMediaTime(snapshot.currentTime)} / ${formatMediaTime(snapshot.duration)}`;
+  if (els.localQueueSummary) els.localQueueSummary.textContent = `Queue (${snapshot.queue.length})`;
+  if (els.localQueueList) {
+    const fragment = document.createDocumentFragment();
+    for (const track of snapshot.queue) {
+      const row = document.createElement('div');
+      row.className = 'local-queue__item';
+      row.setAttribute('role', 'listitem');
+      if (track.current) row.classList.add('is-current');
+      const name = document.createElement('span');
+      name.textContent = track.name;
+      if (track.current) name.setAttribute('aria-current', 'true');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove ${track.name} from local queue`);
+      remove.addEventListener('click', () => { void localPlayer.remove(track.id).catch(() => {}); });
+      row.append(name, remove);
+      fragment.appendChild(row);
+    }
+    els.localQueueList.replaceChildren(fragment);
+  }
+  renderAudioSourceUi();
   renderPlayback();
-  if (!connected && state.label) showToast(state.label);
+  if (restoreFocus) queueMicrotask(() => els.audioButton?.focus({ preventScroll: true }));
+}
+
+function updateAudioState(state) {
+  renderAudioSourceUi();
+  renderPlayback();
+  if (!state.connected && state.label) showToast(state.label);
 }
 
 function effortLabel(effort) {
@@ -776,18 +903,21 @@ function visibleHostDialog() {
 }
 
 function keyboardFocusPinsUi() {
-  if (immersiveUiController?.snapshot().inputMode !== 'keyboard') return false;
   const active = document.activeElement;
   if (!(active instanceof HTMLElement) || active === document.body) return false;
+  if (active.closest('#localTransport, #firstSessionStory')) return true;
+  if (immersiveUiController?.snapshot().inputMode !== 'keyboard') return false;
   return true;
 }
 
 function immersiveUiBlocker() {
   if (anyDrawerOpen()) return 'drawer-open';
   if (dreamSwitcher?.isOpen()) return 'dream-switcher-open';
-  if (visualPaused) return 'playback-paused';
   const dialog = visibleHostDialog();
   if (dialog) return dialog;
+  if (els.firstSessionStory && !els.firstSessionStory.hidden) return 'first-session-open';
+  if (els.localQueueDetails?.open) return 'local-queue-open';
+  if (visualPaused) return 'playback-paused';
   if (keyboardFocusPinsUi()) return 'keyboard-focus';
   return '';
 }
@@ -2145,6 +2275,7 @@ function renderAudioCapabilities() {
   els.audioDisplayOption.hidden = !capabilities.display.supported;
   els.audioMicrophoneOption.hidden = !capabilities.microphone.supported;
   els.audioUnavailable.hidden = capabilities.display.supported || capabilities.microphone.supported;
+  renderAudioSourceUi();
   return capabilities;
 }
 
@@ -2162,15 +2293,21 @@ function openAudioPicker() {
   const mobile = matchMedia('(max-width: 820px)').matches;
   const preferred = mobile ? els.audioMicrophoneOption : els.audioDisplayOption;
   const fallback = mobile ? els.audioDisplayOption : els.audioMicrophoneOption;
-  const first = !preferred.hidden ? preferred : !fallback.hidden ? fallback : document.getElementById('audioPickerClose');
+  const first = !preferred.hidden ? preferred : !fallback.hidden ? fallback : els.audioLocalOption || document.getElementById('audioPickerClose');
   queueMicrotask(() => first?.focus());
   return capabilities;
 }
 
+function setAudioChooserBusy(busy) {
+  for (const button of [els.audioDisplayOption, els.audioMicrophoneOption, els.audioLocalOption, els.audioDisconnectButton]) {
+    if (button) button.disabled = Boolean(busy);
+  }
+  if (busy) els.audioPicker.setAttribute('aria-busy', 'true');
+  else els.audioPicker.removeAttribute('aria-busy');
+}
+
 async function connectAudioSource(sourceKind) {
-  const sourceButtons = [els.audioDisplayOption, els.audioMicrophoneOption];
-  sourceButtons.forEach(button => { button.disabled = true; });
-  els.audioPicker.setAttribute('aria-busy', 'true');
+  setAudioChooserBusy(true);
   showCenter(
     sourceKind === 'microphone' ? 'Listening for microphone permission.' : 'Choose what to share.',
     sourceKind === 'microphone'
@@ -2178,6 +2315,7 @@ async function connectAudioSource(sourceKind) {
       : 'Choose a source with audio enabled. Video is ignored.',
   );
   try {
+    await localPlayer.disconnect('source-change');
     if (sourceKind === 'microphone') await audio.connectMicrophone();
     else await audio.connectDisplayAudio();
     closeAudioPicker();
@@ -2190,17 +2328,62 @@ async function connectAudioSource(sourceKind) {
     hideCenter();
     showToast(error?.message || 'Audio could not be connected.', 6500);
   } finally {
-    sourceButtons.forEach(button => { button.disabled = false; });
-    els.audioPicker.removeAttribute('aria-busy');
+    setAudioChooserBusy(false);
   }
 }
 
-async function toggleAudio() {
+function chooseLocalFiles() {
+  els.localFileInput?.click();
+}
+
+async function selectLocalFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return false;
+  setAudioChooserBusy(true);
+  showCenter('Checking local audio.', 'The current source keeps running until a browser-decodable selection is ready.');
+  try {
+    const selected = await localPlayer.selectFiles(files);
+    if (!selected) return false;
+    closeAudioPicker();
+    hideCenter();
+    showToast(`${selected.queue.length} local ${selected.queue.length === 1 ? 'file' : 'files'} ready. Press Play when you want to listen.`);
+    return true;
+  } catch {
+    hideCenter();
+    return false;
+  } finally {
+    setAudioChooserBusy(false);
+  }
+}
+
+async function disconnectAudioSource({ closePicker = true } = {}) {
+  if (localPlayer.hasSelection()) await localPlayer.disconnect('user-disconnect');
+  else await audio.stop('user-disconnect');
+  renderAudioSourceUi();
+  if (closePicker) closeAudioPicker();
+}
+
+async function togglePrimaryPlayback() {
   showUi();
-  if (audio.connected) {
-    await audio.stop();
+  if (!localPlayer.hasSelection()) {
+    playbackController.toggle();
     return;
   }
+  if (localPlayer.isPlaying()) {
+    localPlayer.pause();
+    return;
+  }
+  playbackController.pause();
+  try {
+    await localPlayer.play();
+  } catch {
+    // LocalPlayer reports the safe user-facing failure and leaves visuals paused.
+  }
+}
+
+function toggleAudio() {
+  showUi();
+  if (firstSessionController.snapshot().visible) firstSessionController.complete();
   openAudioPicker();
 }
 
@@ -2988,6 +3171,18 @@ function installDevApi() {
     playback() {
       return playbackController.snapshot();
     },
+    audioAnalysis() {
+      const sample = latestAudioSample;
+      if (!sample) return null;
+      return structuredClone({
+        connected: Boolean(sample.connected),
+        silence: Boolean(sample.silence),
+        volume: Number(sample.volume) || 0,
+        peak: Number(sample.peak) || 0,
+        transient: Number(sample.transient) || 0,
+        bands: sample.bands,
+      });
+    },
     quality() {
       return structuredClone(renderQuality);
     },
@@ -2999,7 +3194,12 @@ function installDevApi() {
       return immersiveUiController.snapshot();
     },
     setPaused(paused) {
-      return playbackController.setPaused(paused);
+      if (!localPlayer.hasSelection()) return playbackController.setPaused(paused);
+      if (paused) {
+        localPlayer.pause();
+        return playbackController.snapshot();
+      }
+      return localPlayer.play().then(() => playbackController.snapshot());
     },
     async probeActive(label = 'developer-active-probe') {
       return activeSlot.sandbox.probe(label);
@@ -3068,10 +3268,7 @@ function installDevApi() {
 
 function wireEvents() {
   syncFullscreenControl();
-  els.playbackButton?.addEventListener('click', () => {
-    playbackController.toggle();
-    showUi();
-  });
+  els.playbackButton?.addEventListener('click', () => { void togglePrimaryPlayback(); });
   els.modelButton.addEventListener('click', () => {
     updateConnectionUi();
     renderReasoningControl({ announceStale: true });
@@ -3084,6 +3281,24 @@ function wireEvents() {
   els.audioButton.addEventListener('click', toggleAudio);
   els.audioDisplayOption.addEventListener('click', () => { void connectAudioSource('display'); });
   els.audioMicrophoneOption.addEventListener('click', () => { void connectAudioSource('microphone'); });
+  els.audioLocalOption?.addEventListener('click', chooseLocalFiles);
+  els.audioDisconnectButton?.addEventListener('click', () => { void disconnectAudioSource(); });
+  els.localFileInput?.addEventListener('change', event => {
+    const files = Array.from(event.currentTarget.files || []);
+    event.currentTarget.value = '';
+    if (files.length) void selectLocalFiles(files);
+  });
+  els.localPlayButton?.addEventListener('click', () => { void togglePrimaryPlayback(); });
+  els.localPreviousButton?.addEventListener('click', () => { void localPlayer.previous().catch(() => {}); });
+  els.localNextButton?.addEventListener('click', () => { void localPlayer.next().catch(() => {}); });
+  els.localSeek?.addEventListener('input', () => localPlayer.seek(els.localSeek.value));
+  els.localChangeFiles?.addEventListener('click', chooseLocalFiles);
+  els.localClearQueue?.addEventListener('click', () => { void localPlayer.clear(); });
+  els.localDisconnect?.addEventListener('click', () => { void disconnectAudioSource({ closePicker: false }); });
+  els.localQueueDetails?.addEventListener('toggle', () => {
+    if (els.localQueueDetails.open) showUi('local-queue-open');
+    else scheduleUiHide();
+  });
   els.audioPicker.addEventListener('click', event => {
     if (event.target === els.audioPicker) closeAudioPicker();
   });
@@ -3114,6 +3329,10 @@ function wireEvents() {
   });
   els.fullscreenButton.addEventListener('click', toggleFullscreen);
   els.infoButton.addEventListener('click', () => openDrawer(els.aboutDrawer));
+  els.reopenFirstSession?.addEventListener('click', () => {
+    closeDrawers({ restoreFocus: false });
+    firstSessionView?.reopen({ focus: true });
+  });
   els.diagnosticsButton?.addEventListener('click', async () => {
     await renderDiagnostics();
     openDrawer(els.diagnosticsDrawer);
@@ -3183,7 +3402,7 @@ function wireEvents() {
   }, { capture: true });
   document.addEventListener('focusout', () => queueMicrotask(scheduleUiHide), { capture: true });
   const blockerObserver = new MutationObserver(scheduleUiHide);
-  document.querySelectorAll('.drawer, dialog, #costConfirmBackdrop, #audioPicker').forEach(element => {
+  document.querySelectorAll('.drawer, dialog, #costConfirmBackdrop, #audioPicker, #firstSessionStory, #localQueueDetails').forEach(element => {
     blockerObserver.observe(element, { attributes: true, attributeFilter: ['class', 'hidden', 'open'] });
   });
   document.addEventListener('keydown', event => {
@@ -3271,9 +3490,13 @@ function wireEvents() {
     announceReasoningSelection(selection);
     showToast('That reasoning level is no longer supported. Future Dreams will use the model\'s native Default.', 6200);
   });
+  window.addEventListener('pagehide', () => { void localPlayer.dispose('page-hidden'); }, { once: true });
 }
 
 async function initialize() {
+  if (firstSessionController.freshVisit() && globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    playbackController.pause();
+  }
   devMode = devModeFromLocation();
   setDevMode(devMode);
   installDevApi();
@@ -3309,6 +3532,7 @@ async function initialize() {
   renderFavoriteControl();
   wireEvents();
   updateConnectionUi();
+  renderLocalPlayer();
 
   let startupFeatured = featuredDreams.find(item => item.startup);
   currentHtml = startupFeatured?.html || DEFAULT_VISUALIZER_HTML;
@@ -3338,6 +3562,16 @@ async function initialize() {
   activeSlot.sandbox.setPresentation('active');
   activeSlot.sandbox.enterPassiveMode();
   standbySlot.sandbox.setPresentation('standby');
+  firstSessionView = mountFirstSession({
+    controller: firstSessionController,
+    onConnectAudio: openAudioPicker,
+    onExploreFeatured: () => dreamSwitcher?.open({ group: 'featured' }),
+    onVisibilityChange: visible => {
+      if (visible) showUi('first-session-open');
+      else scheduleUiHide();
+    },
+    fallbackFocus: els.infoButton,
+  });
 
   try {
     const callback = await consumeOpenRouterCallback();

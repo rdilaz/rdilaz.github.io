@@ -96,6 +96,8 @@ class FakeAudioContext {
     this.sampleRate = 48000;
     this.state = 'suspended';
     this.source = new FakeNode();
+    this.destination = new FakeNode();
+    this.mediaSources = [];
     this.splitters = [];
     this.analysers = [];
     this.resumeCount = 0;
@@ -104,6 +106,13 @@ class FakeAudioContext {
   }
 
   createMediaStreamSource() { return this.source; }
+
+  createMediaElementSource(element) {
+    const source = new FakeNode();
+    source.element = element;
+    this.mediaSources.push(source);
+    return source;
+  }
 
   createAnalyser() {
     const analyser = new FakeAnalyser(this.analysers.length);
@@ -247,7 +256,59 @@ test('microphone connection requests only safe supported music preferences and n
   assert.equal(Object.hasOwn(calls.microphone[0].audio, 'voiceIsolation'), false);
   assert.equal(Object.hasOwn(calls.microphone[0].audio, 'sampleRate'), false);
   assert.equal(Object.hasOwn(calls.microphone[0].audio, 'latency'), false);
+  const context = FakeAudioContext.instances[0];
+  assert.ok(context.analysers.every(analyser => analyser.connections.every(connection => connection.target !== context.destination)));
   await engine.stop();
+});
+
+test('trusted local media element has one audible route and reuses one analysis graph until disposal', async () => {
+  installBrowser({ mediaDevices: {} });
+  const element = {
+    paused: true,
+    pauseCount: 0,
+    async play() { this.paused = false; },
+    pause() { this.paused = true; this.pauseCount += 1; },
+  };
+  const states = [];
+  const engine = new AudioEngine(state => states.push(state));
+  await engine.connectMediaElement(element);
+  const context = FakeAudioContext.instances[0];
+  assert.equal(context.state, 'suspended');
+  assert.equal(context.mediaSources.length, 1);
+  assert.equal(context.mediaSources[0].connections.length, 2);
+  assert.equal(context.analysers[0].connections.filter(connection => connection.target === context.destination).length, 1);
+  assert.equal(context.analysers[1].connections.filter(connection => connection.target === context.destination).length, 0);
+  assert.deepEqual(engine.diagnostics(), {
+    sourceKind: 'local',
+    effectiveChannelCount: null,
+    effectiveSampleRate: 48000,
+    requestedProcessing: {},
+    effectiveProcessing: {},
+    connectionReason: 'connected',
+    connected: true,
+  });
+  assert.deepEqual(states.map(state => state.sourceKind), ['local']);
+
+  await engine.resumeMediaElement(element);
+  assert.equal(context.state, 'running');
+  assert.equal(context.resumeCount, 1);
+  assert.equal(context.mediaSources.length, 1);
+  assert.equal(await engine.stopMediaElement({}), false);
+  assert.equal(engine.connected, true);
+  assert.equal(await engine.stopMediaElement(element), true);
+  assert.equal(context.closeCount, 1);
+  assert.equal(element.pauseCount, 1);
+  assert.ok([context.mediaSources[0], ...context.analysers].every(node => node.disconnectCount === 1));
+});
+
+test('local media element fails safely when Web Audio is unavailable', async () => {
+  installBrowser({ mediaDevices: {}, AudioContextClass: null });
+  const element = { play() {}, pause() {} };
+  const engine = new AudioEngine();
+  await assert.rejects(engine.connectMediaElement(element), /Web Audio is not available/i);
+  assert.equal(engine.connected, false);
+  assert.equal(engine.diagnostics().sourceKind, 'local');
+  assert.equal(engine.diagnostics().connectionReason, 'audio-context-unavailable');
 });
 
 test('unsupported microphone preferences are omitted instead of becoming fatal requirements', () => {
@@ -465,6 +526,35 @@ test('track ending during AudioContext resume cannot publish a stale connection'
   assert.equal(engine.connected, false);
   assert.deepEqual(states, []);
   assert.equal(FakeAudioContext.instances[0].closeCount, 1);
+});
+
+test('rapid capture requests allow only the newest source to take ownership', async () => {
+  const firstFixture = mediaFixture();
+  const secondFixture = mediaFixture();
+  const pending = [];
+  installBrowser({
+    mediaDevices: {
+      getSupportedConstraints: () => ({}),
+      getUserMedia: () => new Promise(resolve => pending.push(resolve)),
+    },
+  });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(state));
+  const first = engine.connectMicrophone();
+  await new Promise(resolve => setImmediate(resolve));
+  const second = engine.connectMicrophone();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+  pending[1](secondFixture.stream);
+  await second;
+  pending[0](firstFixture.stream);
+  await assert.rejects(first, /newer audio source/i);
+  assert.equal(firstFixture.audioTrack.stopCount, 1);
+  assert.equal(secondFixture.audioTrack.stopCount, 0);
+  assert.equal(engine.connected, true);
+  assert.equal(states.filter(state => state.connected).length, 1);
+  await engine.stop();
+  assert.equal(secondFixture.audioTrack.stopCount, 1);
 });
 
 test('stop releases tracks, nodes, listeners and AudioContext idempotently', async () => {

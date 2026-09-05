@@ -1,4 +1,5 @@
 import { dreamDisplayTitle, dreamPromptLabel } from './dream-metadata.js';
+import { featuredDreamGuide } from './featured-dream-guide.js';
 
 export const DREAM_SWITCHER_SCHEMA = 'visualizer-dream-switcher-v1';
 export const RECENT_DREAM_LIMIT = 8;
@@ -58,6 +59,7 @@ export function buildDreamSwitcherGroups({
       favorite: false,
       active: (item.key || `featured:${item.id}`) === activeKey,
       state: (item.key || `featured:${item.id}`) === activeKey ? 'LIVE' : 'Featured',
+      guide: featuredDreamGuide(item.id),
       featured: item,
     }))
     .sort((a, b) => Number(a.featured.order) - Number(b.featured.order) || a.id.localeCompare(b.id));
@@ -159,6 +161,27 @@ export function mountDreamSwitcher({
         favorite.addEventListener('click', () => onFavorite(item));
         row.appendChild(favorite);
       }
+      if (item.guide) {
+        const guide = document.createElement('details');
+        guide.className = 'dream-switcher__guide';
+        guide.dataset.dreamGuide = item.id;
+        const summary = document.createElement('summary');
+        summary.textContent = 'About this Dream';
+        const description = document.createElement('p');
+        description.textContent = item.guide.description;
+        guide.append(summary, description);
+        if (item.guide.interactionHint) {
+          const hint = document.createElement('p');
+          hint.className = 'dream-switcher__guide-hint';
+          hint.textContent = item.guide.interactionHint;
+          guide.appendChild(hint);
+        }
+        const explanation = document.createElement('p');
+        explanation.className = 'dream-switcher__guide-detail';
+        explanation.textContent = item.guide.explanation;
+        guide.appendChild(explanation);
+        row.appendChild(guide);
+      }
       list.appendChild(row);
     }
     section.append(heading, list);
@@ -202,7 +225,16 @@ export function mountDreamSwitcher({
   return Object.freeze({
     render,
     isOpen,
-    open: () => setOpen(true),
+    open: ({ group = '' } = {}) => {
+      setOpen(true);
+      if (group) {
+        queueMicrotask(() => {
+          const target = groupsRoot?.querySelector(`[data-switcher-group="${group}"] [data-switcher-choose]`);
+          target?.focus({ preventScroll: true });
+          target?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+        });
+      }
+    },
     close: options => setOpen(false, options),
     toggle: () => setOpen(!open),
   });

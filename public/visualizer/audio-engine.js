@@ -104,6 +104,63 @@ function emptyDiagnostics() {
   };
 }
 
+function createAnalysisGraph(context, source, { trueStereo = false, audible = false } = {}) {
+  const nodes = [source];
+  try {
+    const analyser = context.createAnalyser();
+    const detailAnalyser = context.createAnalyser();
+    nodes.push(analyser, detailAnalyser);
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = .08;
+    analyser.minDecibels = -96;
+    analyser.maxDecibels = -18;
+    detailAnalyser.fftSize = 2048;
+    detailAnalyser.smoothingTimeConstant = .12;
+    detailAnalyser.minDecibels = -96;
+    detailAnalyser.maxDecibels = -18;
+    source.connect(analyser);
+    source.connect(detailAnalyser);
+
+    // Media elements are the only source the host owns and may monitor audibly.
+    // Routing the primary analyser to the destination creates one output path.
+    if (audible) analyser.connect(context.destination);
+
+    let splitter = null;
+    let leftAnalyser = null;
+    let rightAnalyser = null;
+    if (trueStereo) {
+      splitter = context.createChannelSplitter(2);
+      leftAnalyser = context.createAnalyser();
+      rightAnalyser = context.createAnalyser();
+      nodes.push(splitter, leftAnalyser, rightAnalyser);
+      leftAnalyser.fftSize = rightAnalyser.fftSize = 256;
+      leftAnalyser.smoothingTimeConstant = rightAnalyser.smoothingTimeConstant = 0;
+      source.connect(splitter);
+      splitter.connect(leftAnalyser, 0);
+      splitter.connect(rightAnalyser, 1);
+    }
+
+    return {
+      nodes,
+      analyser,
+      detailAnalyser,
+      splitter,
+      leftAnalyser,
+      rightAnalyser,
+      frequency: new Uint8Array(analyser.frequencyBinCount),
+      detailFrequency: new Uint8Array(detailAnalyser.frequencyBinCount),
+      waveform: new Float32Array(analyser.fftSize),
+      leftWave: leftAnalyser ? new Float32Array(leftAnalyser.fftSize) : null,
+      rightWave: rightAnalyser ? new Float32Array(rightAnalyser.fftSize) : null,
+    };
+  } catch (error) {
+    for (const node of nodes) {
+      try { node?.disconnect(); } catch { /* Continue releasing the partial graph. */ }
+    }
+    throw error;
+  }
+}
+
 class AdaptiveSignal {
   constructor({ floor = 0, ceiling = .12, floorRise = .0005, ceilingFall = .996 } = {}) {
     this.floor = floor;
@@ -139,6 +196,7 @@ export class AudioEngine {
     this.rightWave = null;
     this.track = null;
     this.trackEndedHandler = null;
+    this.mediaElement = null;
     this.connected = false;
     this.trueStereo = false;
     this.connectionRevision = 0;
@@ -208,6 +266,7 @@ export class AudioEngine {
     const support = AudioEngine.capabilities().display;
     if (!support.supported) throw new Error(support.reason);
     await this.stop('source-change');
+    const requestRevision = ++this.connectionRevision;
     const preferred = {
       video: { displaySurface: 'browser', frameRate: { ideal: 1, max: 2 }, cursor: 'never' },
       audio: { suppressLocalAudioPlayback: false },
@@ -228,14 +287,19 @@ export class AudioEngine {
         audio: { suppressLocalAudioPlayback: false },
       });
     }
+    if (requestRevision !== this.connectionRevision) {
+      stopStream(stream);
+      throw new Error('A newer audio source was chosen before sharing completed.');
+    }
     stream.getVideoTracks().forEach(track => { track.enabled = false; });
-    return this.attachStream(stream, 'display', {});
+    return this.attachStream(stream, 'display', {}, requestRevision);
   }
 
   async connectMicrophone() {
     const support = AudioEngine.capabilities().microphone;
     if (!support.supported) throw new Error(support.reason);
     await this.stop('source-change');
+    const requestRevision = ++this.connectionRevision;
     const requestedProcessing = AudioEngine.microphoneConstraints();
     let stream;
     try {
@@ -249,10 +313,18 @@ export class AudioEngine {
       };
       throw microphoneError(error);
     }
-    return this.attachStream(stream, 'microphone', requestedProcessing);
+    if (requestRevision !== this.connectionRevision) {
+      stopStream(stream);
+      throw new Error('A newer audio source was chosen before microphone access completed.');
+    }
+    return this.attachStream(stream, 'microphone', requestedProcessing, requestRevision);
   }
 
-  async attachStream(stream, sourceKind, requestedProcessing) {
+  async attachStream(stream, sourceKind, requestedProcessing, expectedRevision = this.connectionRevision) {
+    if (expectedRevision !== this.connectionRevision) {
+      stopStream(stream);
+      throw new Error('A newer audio source was chosen before analysis could start.');
+    }
     const [audioTrack] = stream?.getAudioTracks?.() || [];
     if (!audioTrack) {
       stopStream(stream);
@@ -307,15 +379,15 @@ export class AudioEngine {
       }
     }
 
-    const localNodes = [];
+    let localNodes = [];
     let trackInfo;
     let trueStereo;
     let source;
     let analyser;
     let detailAnalyser;
-    let splitter = null;
-    let leftAnalyser = null;
-    let rightAnalyser = null;
+    let splitter;
+    let leftAnalyser;
+    let rightAnalyser;
     let frequency;
     let detailFrequency;
     let waveform;
@@ -325,41 +397,20 @@ export class AudioEngine {
       trackInfo = safeTrackInfo(audioTrack, context);
       trueStereo = Number(trackInfo.effectiveChannelCount) > 1;
       source = context.createMediaStreamSource(stream);
-      localNodes.push(source);
-      analyser = context.createAnalyser();
-      localNodes.push(analyser);
-      detailAnalyser = context.createAnalyser();
-      localNodes.push(detailAnalyser);
-      analyser.fftSize = 1024;
-      analyser.smoothingTimeConstant = .08;
-      analyser.minDecibels = -96;
-      analyser.maxDecibels = -18;
-      detailAnalyser.fftSize = 2048;
-      detailAnalyser.smoothingTimeConstant = .12;
-      detailAnalyser.minDecibels = -96;
-      detailAnalyser.maxDecibels = -18;
-      source.connect(analyser);
-      source.connect(detailAnalyser);
-
-      if (trueStereo) {
-        splitter = context.createChannelSplitter(2);
-        localNodes.push(splitter);
-        leftAnalyser = context.createAnalyser();
-        localNodes.push(leftAnalyser);
-        rightAnalyser = context.createAnalyser();
-        localNodes.push(rightAnalyser);
-        leftAnalyser.fftSize = rightAnalyser.fftSize = 256;
-        leftAnalyser.smoothingTimeConstant = rightAnalyser.smoothingTimeConstant = 0;
-        source.connect(splitter);
-        splitter.connect(leftAnalyser, 0);
-        splitter.connect(rightAnalyser, 1);
-      }
-
-      frequency = new Uint8Array(analyser.frequencyBinCount);
-      detailFrequency = new Uint8Array(detailAnalyser.frequencyBinCount);
-      waveform = new Float32Array(analyser.fftSize);
-      leftWave = leftAnalyser ? new Float32Array(leftAnalyser.fftSize) : null;
-      rightWave = rightAnalyser ? new Float32Array(rightAnalyser.fftSize) : null;
+      const graph = createAnalysisGraph(context, source, { trueStereo });
+      localNodes = graph.nodes;
+      ({
+        analyser,
+        detailAnalyser,
+        splitter,
+        leftAnalyser,
+        rightAnalyser,
+        frequency,
+        detailFrequency,
+        waveform,
+        leftWave,
+        rightWave,
+      } = graph);
     } catch {
       await cleanupLocalAudio(stream, context, localNodes);
       this.connected = false;
@@ -386,6 +437,7 @@ export class AudioEngine {
     this.leftWave = leftWave;
     this.rightWave = rightWave;
     this.track = audioTrack;
+    this.mediaElement = null;
     this.trueStereo = trueStereo;
     const connectionRevision = ++this.connectionRevision;
     this.audioDiagnostics = {
@@ -422,6 +474,107 @@ export class AudioEngine {
       diagnostics: this.diagnostics(),
     });
     return this.diagnostics();
+  }
+
+  async connectMediaElement(element) {
+    if (!element || typeof element.play !== 'function' || typeof element.pause !== 'function') {
+      throw new TypeError('A trusted HTML audio element is required for local playback.');
+    }
+    await this.stop('source-change');
+    const requestRevision = ++this.connectionRevision;
+    const AudioContextClass = globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
+    if (!AudioContextClass) {
+      this.audioDiagnostics = {
+        ...emptyDiagnostics(),
+        sourceKind: 'local',
+        connectionReason: 'audio-context-unavailable',
+      };
+      throw new Error('Web Audio is not available in this browser.');
+    }
+
+    let context;
+    const localNodes = [];
+    try {
+      try {
+        context = new AudioContextClass({ latencyHint: 'interactive' });
+      } catch (error) {
+        if (error?.name !== 'TypeError') throw error;
+        context = new AudioContextClass();
+      }
+      const source = context.createMediaElementSource(element);
+      const graph = createAnalysisGraph(context, source, { audible: true });
+      localNodes.push(...graph.nodes);
+      if (requestRevision !== this.connectionRevision) {
+        throw new Error('A newer audio source was chosen before local playback was ready.');
+      }
+
+      this.stream = null;
+      this.context = context;
+      this.source = source;
+      this.analyser = graph.analyser;
+      this.detailAnalyser = graph.detailAnalyser;
+      this.splitter = null;
+      this.leftAnalyser = null;
+      this.rightAnalyser = null;
+      this.frequency = graph.frequency;
+      this.detailFrequency = graph.detailFrequency;
+      this.waveform = graph.waveform;
+      this.leftWave = null;
+      this.rightWave = null;
+      this.track = null;
+      this.trackEndedHandler = null;
+      this.mediaElement = element;
+      this.trueStereo = false;
+      ++this.connectionRevision;
+      this.audioDiagnostics = {
+        ...emptyDiagnostics(),
+        sourceKind: 'local',
+        effectiveSampleRate: Number(context.sampleRate) || null,
+        connectionReason: 'connected',
+      };
+      this.resetAdaptiveState();
+      this.connected = true;
+      this.onState({
+        connected: true,
+        sourceKind: 'local',
+        label: 'Local files selected',
+        diagnostics: this.diagnostics(),
+      });
+      return this.diagnostics();
+    } catch (error) {
+      if (this.context !== context) await cleanupLocalAudio(null, context, localNodes);
+      this.connected = false;
+      this.audioDiagnostics = {
+        ...emptyDiagnostics(),
+        sourceKind: 'local',
+        connectionReason: error?.message?.includes('newer audio source') ? 'source-superseded' : 'audio-graph-failed',
+      };
+      if (error?.message?.includes('newer audio source')) throw error;
+      throw new Error('Local audio analysis could not start. Try another browser or reconnect the source.', { cause: error });
+    }
+  }
+
+  async resumeMediaElement(element) {
+    if (!this.connected || this.mediaElement !== element || this.audioDiagnostics.sourceKind !== 'local' || !this.context) {
+      throw new Error('That local audio source is no longer connected.');
+    }
+    const context = this.context;
+    const revision = this.connectionRevision;
+    try {
+      if (context.state !== 'running') await context.resume();
+    } catch (error) {
+      throw new Error('Local audio analysis could not resume.', { cause: error });
+    }
+    if (revision !== this.connectionRevision || context !== this.context || element !== this.mediaElement) {
+      throw new Error('That local audio source was replaced before playback began.');
+    }
+    return true;
+  }
+
+  async stopMediaElement(element, reason = 'user-disconnect') {
+    if (this.mediaElement !== element) return false;
+    await this.stop(reason);
+    return true;
   }
 
   band(minHz, maxHz, { detail = false } = {}) {
@@ -580,6 +733,7 @@ export class AudioEngine {
     const wasConnected = this.connected;
     const sourceKind = this.audioDiagnostics.sourceKind;
     this.connected = false;
+    try { this.mediaElement?.pause?.(); } catch { /* Graph cleanup remains authoritative. */ }
     if (this.track && this.trackEndedHandler) {
       this.track.removeEventListener?.('ended', this.trackEndedHandler);
     }
@@ -594,13 +748,20 @@ export class AudioEngine {
     this.splitter = this.leftAnalyser = this.rightAnalyser = null;
     this.frequency = this.detailFrequency = this.waveform = this.leftWave = this.rightWave = null;
     this.track = this.trackEndedHandler = null;
+    this.mediaElement = null;
     this.trueStereo = false;
     this.audioDiagnostics = { ...this.audioDiagnostics, connectionReason: reason };
     if (wasConnected) {
       this.onState({
         connected: false,
         sourceKind,
-        label: reason === 'track-ended' ? 'Audio source ended.' : 'Audio disconnected.',
+        label: reason === 'source-change'
+          ? ''
+          : reason === 'track-ended'
+            ? 'Audio source ended.'
+            : sourceKind === 'local' && reason === 'queue-cleared'
+              ? 'Local queue cleared.'
+              : 'Audio disconnected.',
         diagnostics: this.diagnostics(),
       });
     }

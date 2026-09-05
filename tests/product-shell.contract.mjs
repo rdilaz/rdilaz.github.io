@@ -36,6 +36,17 @@ import {
 } from '../public/visualizer/dream-metadata.js';
 import { createDiagnosticDetailsState } from '../public/visualizer/diagnostic-details-state.js';
 import { GenerationStore } from '../public/visualizer/storage.js';
+import {
+  FIRST_SESSION_COMPLETE_VALUE,
+  FIRST_SESSION_SCHEMA,
+  FIRST_SESSION_STORAGE_KEY,
+  createFirstSessionController,
+} from '../public/visualizer/first-session.js';
+import {
+  FEATURED_DREAM_GUIDE_SCHEMA,
+  featuredDreamGuide,
+  listFeaturedDreamGuides,
+} from '../public/visualizer/featured-dream-guide.js';
 
 const MODEL = Object.freeze({ id: 'moonshotai/kimi-k3', name: 'Kimi K3', provider: 'moonshotai' });
 const PROMPT = Object.freeze({ id: 'neutral-v1', name: 'Neutral blank canvas', creativeBrief: 'Create what you think music looks like.' });
@@ -70,6 +81,53 @@ test('playback starts playing and idempotent pause/resume publishes only real ch
 test('external capture pause copy never claims external music was paused', () => {
   assert.equal(EXTERNAL_CAPTURE_PAUSE_COPY, 'Visual paused · music source still controlled externally');
   assert.doesNotMatch(EXTERNAL_CAPTURE_PAUSE_COPY, /music (?:is |was )?paused/i);
+});
+
+test('first-session preference is versioned, dismissible, reopenable, and storage-denial safe', () => {
+  const values = new Map();
+  const storage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+  const controller = createFirstSessionController({ storage });
+  assert.equal(controller.version, FIRST_SESSION_SCHEMA);
+  assert.equal(controller.freshVisit(), true);
+  assert.equal(controller.snapshot().visible, true);
+  controller.dismiss();
+  assert.equal(controller.snapshot().visible, false);
+  assert.equal(values.get(FIRST_SESSION_STORAGE_KEY), FIRST_SESSION_COMPLETE_VALUE);
+  controller.reopen();
+  assert.equal(controller.snapshot().visible, true);
+
+  const returning = createFirstSessionController({ storage });
+  assert.equal(returning.freshVisit(), false);
+  assert.equal(returning.snapshot().visible, false);
+
+  const denied = createFirstSessionController({
+    storage: {
+      getItem() { throw new DOMException('denied', 'SecurityError'); },
+      setItem() { throw new DOMException('denied', 'SecurityError'); },
+    },
+  });
+  assert.equal(denied.snapshot().visible, true);
+  assert.doesNotThrow(() => denied.complete());
+  assert.equal(denied.snapshot().visible, false);
+});
+
+test('Featured guide metadata is editorial, artifact-specific, and absent for unknown Dreams', () => {
+  const guides = listFeaturedDreamGuides();
+  assert.deepEqual(guides.map(guide => guide.id), ['klangfiguren', 'nexus-beam', 'calibration-bloom']);
+  assert.ok(guides.every(guide => guide.schema === FEATURED_DREAM_GUIDE_SCHEMA));
+  const klangGuide = featuredDreamGuide('klangfiguren');
+  assert.match(`${klangGuide.description} ${klangGuide.explanation}`, /artistic.*not.*scientifically exact.*pitch detector/i);
+  assert.match(featuredDreamGuide('nexus-beam').explanation, /Kinetic Harmonic Astrolabe/);
+  assert.match(featuredDreamGuide('calibration-bloom').explanation, /host-created, not AI-generated/i);
+  assert.equal(featuredDreamGuide('unknown-local-dream'), null);
+  assert.match(featuredHtml.klangfiguren, /pointerdown[\s\S]*S\.strike[\s\S]*S\.bassS/);
+  assert.match(featuredHtml.klangfiguren, /S\.centroidS[\s\S]*pickMode/);
+  assert.match(featuredHtml['nexus-beam'], /drawSpectralRing[\s\S]*drawWaveformRibbon[\s\S]*drawHarmonicCore/);
+  assert.match(featuredHtml['nexus-beam'], /isDragging[\s\S]*targetRotY/);
+  assert.match(featuredHtml['calibration-bloom'], /a\.waveform[\s\S]*a\.transient[\s\S]*bass \* \.12/);
 });
 
 test('Dream job snapshots exact inputs and cannot create a second executing job', () => {
@@ -156,6 +214,7 @@ test('switcher groups Featured, Favorites and bounded newest-first Recent determ
   assert.deepEqual(groups.featured.map(item => item.id), ['klangfiguren', 'nexus-beam', 'calibration-bloom']);
   assert.equal(groups.featured.find(item => item.id === 'nexus-beam').title, 'Nexus Beam');
   assert.equal(groups.featured.find(item => item.id === 'nexus-beam').promptLabel, 'Neutral Crisp V1');
+  assert.equal(groups.featured.find(item => item.id === 'nexus-beam').guide.id, 'nexus-beam');
   assert.deepEqual(groups.favorites.map(item => item.id), ['middle', 'old']);
   assert.deepEqual(groups.recent.map(item => item.id), ['new', 'middle']);
   assert.equal(groups.recent.some(item => item.id === 'broken'), false);
@@ -209,7 +268,9 @@ test('Featured launch manifest preserves exact order, provenance, content and on
     assert.match(html, /<\/html>\s*$/i);
     assert.match(html, /\bVIZ\.(?:frame|onFrame)\b/);
     assert.doesNotMatch(html, /https?:\/\/|openrouter|authorization|api[_-]?key|<script[^>]+src=|<link[^>]+href=/i);
-    const digest = createHash('sha256').update(html.replace(/\r\n/g, '\n')).digest('hex');
+    const canonicalHtml = html.replace(/\r\n/g, '\n');
+    assert.doesNotMatch(canonicalHtml, /\r/, 'Featured HTML may use LF or checkout-filtered CRLF, never bare CR bytes.');
+    const digest = createHash('sha256').update(canonicalHtml).digest('hex');
     assert.equal(digest, entry.contentDigest);
     if (!entry.provenance.generatedByModel) continue;
     const truth = expected[entry.id];
@@ -220,8 +281,8 @@ test('Featured launch manifest preserves exact order, provenance, content and on
     assert.equal(entry.provenance.localGenerationId, truth.localGenerationId);
     assert.equal(entry.provenance.generationTraceId, truth.traceId);
     assert.equal(entry.contentDigest, truth.digest);
-    assert.equal(Buffer.byteLength(html, 'utf8'), truth.bytes);
-    assert.equal(html.endsWith('\n'), false);
+    assert.equal(Buffer.byteLength(canonicalHtml, 'utf8'), truth.bytes);
+    assert.equal(canonicalHtml.endsWith('\n'), false);
     assert.ok(html.includes(`<title>${truth.htmlTitle}</title>`));
     assert.equal(entry.promptProfileId, truth.promptProfileId);
     assert.equal(entry.promptProfileName, truth.promptProfileName);
