@@ -1069,6 +1069,17 @@ body.has-dream-job.switcher-open .dream-switcher {
   display: none;
 }
 
+body.has-local-player .dream-job-pill {
+  bottom: max(158px, calc(env(safe-area-inset-bottom) + 158px));
+}
+
+body.has-local-player.local-queue-open .dream-job-pill {
+  bottom: max(
+    calc(170px + min(48dvh, 390px)),
+    calc(env(safe-area-inset-bottom) + 170px + min(48dvh, 390px))
+  );
+}
+
 .dream-job-pill,
 .dream-job-panel,
 #favoriteOpeningStatus,
@@ -1132,6 +1143,10 @@ body.pseudo-fullscreen .app {
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 15px;
+}
+
+.dream-job-panel__actions button {
+  min-height: 44px;
 }
 
 .job-action {
@@ -1306,6 +1321,26 @@ body.pseudo-fullscreen .app {
     width: calc(100vw - 16px);
     max-height: 50dvh;
     overflow: auto;
+  }
+
+  body.has-local-player .dream-job-pill {
+    bottom: max(280px, calc(env(safe-area-inset-bottom) + 280px));
+  }
+
+  body.has-local-player .dream-job-panel {
+    bottom: max(336px, calc(env(safe-area-inset-bottom) + 336px));
+    max-height: min(38dvh, 270px);
+  }
+
+  body.has-local-player.local-queue-open .local-queue__panel {
+    max-height: min(40dvh, 320px);
+  }
+
+  body.has-local-player.local-queue-open .dream-job-pill {
+    bottom: max(
+      calc(290px + min(40dvh, 320px)),
+      calc(env(safe-area-inset-bottom) + 290px + min(40dvh, 320px))
+    );
   }
 
   .reasoning-control {

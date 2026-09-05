@@ -155,6 +155,8 @@ const [
   localPlayerBrowser,
   firstSessionBrowser,
   syntheticAudioFixture,
+  product,
+  roadmap,
 ] = await Promise.all([
   read('public/visualizer/local-player.js'),
   read('public/visualizer/first-session.js'),
@@ -163,6 +165,8 @@ const [
   read('tests/local-player.spec.mjs'),
   read('tests/first-session.spec.mjs'),
   read('tests/helpers/synthetic-audio.mjs'),
+  read('docs/visualizer/PRODUCT.md'),
+  read('docs/visualizer/ROADMAP.md'),
 ]);
 
 const failures = [];
@@ -203,6 +207,27 @@ expect(
     && !audio.includes('captureStream'),
   'Local playback must use a media-element source with one explicit output route and no captureStream dependency.',
 );
+const displayConnectStart = audio.indexOf('async connectDisplayAudio()');
+const displayConnectEnd = audio.indexOf('async connectMicrophone()', displayConnectStart);
+const displayConnectFlow = displayConnectStart >= 0 && displayConnectEnd > displayConnectStart
+  ? audio.slice(displayConnectStart, displayConnectEnd)
+  : '';
+expect(
+  audio.includes('async releaseCurrent(reason, revision)')
+    && audio.includes('async supersedePendingRequest()')
+    && displayConnectFlow.indexOf('requestRevision !== this.connectionRevision') < displayConnectFlow.indexOf("error?.name !== 'TypeError'")
+    && displayConnectFlow.indexOf("error?.name !== 'TypeError'") < displayConnectFlow.lastIndexOf('getDisplayMedia({'),
+  'Source ownership must be checked before an obsolete display fallback and teardown must release references before awaited close.',
+);
+const pagehideStart = app.indexOf("window.addEventListener('pagehide'");
+const pagehideFlow = pagehideStart >= 0 ? app.slice(pagehideStart, pagehideStart + 260) : '';
+expect(
+  pagehideFlow.includes("localPlayer.dispose('page-hidden')")
+    && pagehideFlow.includes('audio.supersedePendingRequest()')
+    && !pagehideFlow.includes('once: true')
+    && app.includes('audioSourceOperationRevision'),
+  'Every pagehide must dispose the current local source while stale app source operations lose UI ownership.',
+);
 expect(
   localPlayer.includes('MAX_LOCAL_QUEUE_FILES = 24')
     && localPlayer.includes('MAX_LOCAL_FILE_BYTES = 512 * 1024 * 1024')
@@ -220,12 +245,25 @@ expect(
   'First-session and local transport entry points must remain in the trusted host shell.',
 );
 expect(
+  index.includes('The model never receives your song or its live audio analysis.')
+    && index.includes('the host feeds that instrument the same normalized local visualizer signals used for every Dream.')
+    && !/every (?:other )?model receives/i.test(index)
+    && !/(?:the )?(?:model|provider) receives (?:your |the )?(?:song|audio|signals)/i.test(index),
+  'Privacy copy must never imply that a model or provider receives music or live audio signals.',
+);
+expect(
   firstSession.includes("FIRST_SESSION_STORAGE_KEY = 'ai-visualizer.first-session.v1'")
     && firstSession.includes("FIRST_SESSION_COMPLETE_VALUE = 'complete'")
     && featuredDreamGuide.includes("'nexus-beam'")
     && featuredDreamGuide.includes('Kinetic Harmonic Astrolabe')
     && featuredDreamGuide.includes('host-created, not AI-generated'),
   'Versioned onboarding and truthful host-owned Featured guidance must remain present.',
+);
+expect(
+  [product, roadmap, development].every(document => document.toLowerCase().includes('implemented and ci-verified in pr #36'))
+    && !/first session[^\n]*(?:on|in) (?:the |its )?feature branch/i.test(`${product}\n${roadmap}\n${development}`)
+    && !/central review, merge, production acceptance/i.test(`${product}\n${roadmap}\n${development}`),
+  'First Session landing status must remain durable while production desktop and real-iPhone acceptance stay pending.',
 );
 const composeHostFrameStart = app.indexOf('function composeHostFrame');
 const composeHostFrameEnd = app.indexOf('function hostLoop', composeHostFrameStart);

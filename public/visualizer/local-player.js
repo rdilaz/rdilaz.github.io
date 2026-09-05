@@ -307,6 +307,7 @@ export class LocalPlayer {
       entries[0].duration = await this.probeEntry(entries[0]);
     } catch (error) {
       this.revokeEntries(entries);
+      if (revision !== this.operationRevision) return false;
       throw this.reportError(new Error(`${entries[0].name} could not be opened as browser-decodable audio.`, { cause: error }));
     }
     if (revision !== this.operationRevision) {
@@ -328,6 +329,7 @@ export class LocalPlayer {
       } catch (error) {
         cleanupElement(element);
         this.revokeEntries(entries);
+        if (revision !== this.operationRevision || error?.code === 'AUDIO_SOURCE_SUPERSEDED') return false;
         this.discardCurrent();
         this.publish();
         throw this.reportError(error);
@@ -439,6 +441,7 @@ export class LocalPlayer {
         this.playIntent = false;
         this.setPlaying(false, 'track-load-failed', { force: true });
       }
+      if (element !== this.element || revision !== this.trackRevision) return false;
       throw this.reportError(new Error(`${entry.name} could not be opened as browser-decodable audio.`, { cause: error }));
     }
   }

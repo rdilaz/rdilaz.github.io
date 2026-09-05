@@ -51,6 +51,7 @@ import {
 const MODEL = Object.freeze({ id: 'moonshotai/kimi-k3', name: 'Kimi K3', provider: 'moonshotai' });
 const PROMPT = Object.freeze({ id: 'neutral-v1', name: 'Neutral blank canvas', creativeBrief: 'Create what you think music looks like.' });
 const HTML = '<!doctype html><html><body><canvas></canvas><script>VIZ.onFrame(()=>{});</script></body></html>';
+const indexHtml = await readFile(new URL('../public/visualizer/index.html', import.meta.url), 'utf8');
 const featuredHtml = Object.fromEntries(await Promise.all(FEATURED_DREAM_MANIFEST.map(async entry => [
   entry.id,
   await readFile(new URL(`../public/visualizer/${entry.htmlPath.replace(/^\.\//, '')}`, import.meta.url), 'utf8'),
@@ -112,6 +113,14 @@ test('first-session preference is versioned, dismissible, reopenable, and storag
   assert.equal(denied.snapshot().visible, true);
   assert.doesNotThrow(() => denied.complete());
   assert.equal(denied.snapshot().visible, false);
+});
+
+test('host privacy copy says only the generated browser instrument receives normalized local signals', () => {
+  assert.match(indexHtml, /AI creates the visual instrument\. Your music stays on this device\./);
+  assert.match(indexHtml, /The model never receives your song or its live audio analysis\./);
+  assert.match(indexHtml, /once it runs in your browser, the host feeds that instrument the same normalized local visualizer signals used for every Dream\./);
+  assert.doesNotMatch(indexHtml, /every (?:other )?model receives/i);
+  assert.doesNotMatch(indexHtml, /(?:the )?(?:model|provider) receives (?:your |the )?(?:song|audio|signals)/i);
 });
 
 test('Featured guide metadata is editorial, artifact-specific, and absent for unknown Dreams', () => {

@@ -42,8 +42,10 @@ async function blockProvider(page) {
   return state;
 }
 
-async function routeMockProvider(page, { delayMs = 0 } = {}) {
-  const state = { completionBodies: [] };
+async function routeMockProvider(page, { delayMs = 0, controlled = false } = {}) {
+  let releaseCompletion = () => {};
+  const completionGate = controlled ? new Promise(resolve => { releaseCompletion = resolve; }) : null;
+  const state = { completionBodies: [], release: releaseCompletion };
   await page.route('https://openrouter.ai/**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/v1/models') {
@@ -56,6 +58,7 @@ async function routeMockProvider(page, { delayMs = 0 } = {}) {
     }
     if (url.pathname === '/api/v1/chat/completions') {
       state.completionBodies.push(route.request().postData() || '');
+      if (completionGate) await completionGate;
       if (delayMs) await new Promise(resolve => setTimeout(resolve, delayMs));
       const payload = {
         id: 'first-session-fixture-generation',
@@ -119,6 +122,42 @@ async function chooseLocalFiles(page, files) {
   await page.locator('#audioLocalOption').click();
   const chooser = await chooserPromise;
   await chooser.setFiles(files);
+}
+
+function rectanglesOverlap(a, b) {
+  if (!a || !b) return false;
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+async function coexistenceEvidence(page) {
+  return page.evaluate(() => {
+    const bounds = id => {
+      const element = document.getElementById(id);
+      if (!element || element.hidden || getComputedStyle(element).display === 'none') return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+    };
+    const control = id => {
+      const element = document.getElementById(id);
+      const rect = element?.getBoundingClientRect();
+      return {
+        id,
+        disabled: Boolean(element?.disabled),
+        visible: Boolean(rect?.width && rect?.height && getComputedStyle(element).visibility !== 'hidden'),
+        height: rect?.height || 0,
+      };
+    };
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      local: bounds('localTransport'),
+      pill: bounds('dreamJobPill'),
+      panel: bounds('dreamJobPanel'),
+      queuePanel: document.getElementById('localQueueDetails')?.open ? document.querySelector('.local-queue__panel')?.getBoundingClientRect().toJSON() : null,
+      controls: ['localPlayButton', 'localSeek', 'localQueueSummary', 'dreamJobPillButton', 'dreamJobCollapse'].map(control),
+      localElementCurrent: document.querySelector('[data-local-audio]') === window.__coexistenceAudioElement,
+      currentTime: document.querySelector('[data-local-audio]')?.currentTime || 0,
+    };
+  });
 }
 
 test('real local WAV decoding drives normalized analysis and complete compact transport controls', async ({ page }) => {
@@ -273,6 +312,125 @@ test('unavailable Web Audio rejects a valid local file without changing LIVE', a
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
   expect(provider.completions).toBe(0);
 });
+
+test('every pagehide disposes the current local queue across BFCache-style returns', async ({ page }) => {
+  await seedReturningVisit(page, { auditUrls: true });
+  const provider = await blockProvider(page);
+  await openVisualizer(page);
+  await chooseLocalFiles(page, [audioFile('pagehide-queue-a.wav', { durationSeconds: 5 })]);
+  await expect(page.locator('#localTransport')).toBeVisible();
+  await page.evaluate(() => { window.__pagehideElementA = document.querySelector('[data-local-audio]'); });
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await expect(page.locator('#localTransport')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.__localUrlAudit.revoked.length)).toBe(1);
+  expect(await page.evaluate(() => window.VIZ_DEV.state().audioConnected)).toBe(false);
+
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  await page.locator('#localFileInput').setInputFiles(audioFile('pagehide-queue-b.wav', { durationSeconds: 5 }));
+  await expect(page.locator('#localTransport')).toBeVisible();
+  await page.evaluate(() => { window.__pagehideElementB = document.querySelector('[data-local-audio]'); });
+  expect(await page.evaluate(() => window.__pagehideElementB !== window.__pagehideElementA)).toBe(true);
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await expect(page.locator('#localTransport')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => window.__localUrlAudit.revoked.length)).toBe(2);
+
+  const evidence = await page.evaluate(() => {
+    window.__pagehideElementA.dispatchEvent(new Event('playing'));
+    window.__pagehideElementB.dispatchEvent(new Event('playing'));
+    return {
+      created: [...window.__localUrlAudit.created],
+      revoked: [...window.__localUrlAudit.revoked],
+      connected: window.VIZ_DEV.state().audioConnected,
+      localElementPresent: Boolean(document.querySelector('[data-local-audio]')),
+    };
+  });
+  expect(evidence.revoked.sort()).toEqual(evidence.created.sort());
+  expect(new Set(evidence.revoked).size).toBe(2);
+  expect(evidence.connected).toBe(false);
+  expect(evidence.localElementPresent).toBe(false);
+  expect(provider.completions).toBe(0);
+});
+
+for (const viewport of [
+  { label: 'desktop-1024x768', width: 1024, height: 768 },
+  { label: 'mobile-390x844', width: 390, height: 844 },
+  { label: 'minimum-320x700', width: 320, height: 700 },
+]) {
+  test(`local transport and Dream job coexist without overlap at ${viewport.label}`, async ({ page }) => {
+    test.setTimeout(90000);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await seedReturningVisit(page, { connectedModel: true });
+    const provider = await routeMockProvider(page, { controlled: true });
+    await openVisualizer(page);
+    await expect(page.locator('#selectedModelName')).toHaveText(MODEL_NAME);
+    await chooseLocalFiles(page, [
+      audioFile(`${viewport.label}-a.wav`, { durationSeconds: 60, frequency: 247 }),
+      audioFile(`${viewport.label}-b.wav`, { durationSeconds: 60, frequency: 494 }),
+    ]);
+    await page.locator('#localPlayButton').click();
+    await expect.poll(() => page.evaluate(() => document.querySelector('[data-local-audio]').currentTime)).toBeGreaterThan(.1);
+    await page.evaluate(() => { window.__coexistenceAudioElement = document.querySelector('[data-local-audio]'); });
+    const timeBeforeJob = await page.evaluate(() => window.__coexistenceAudioElement.currentTime);
+
+    await page.locator('#dreamButton').click();
+    await expect.poll(() => provider.completionBodies.length).toBe(1);
+    await expect(page.locator('#dreamJobPanel')).toBeVisible();
+    await expect(page.locator('body')).toHaveClass(/dream-job-expanded/);
+    const expanded = await coexistenceEvidence(page);
+    expect(rectanglesOverlap(expanded.local, expanded.pill)).toBe(false);
+    expect(rectanglesOverlap(expanded.local, expanded.panel)).toBe(false);
+    expect(rectanglesOverlap(expanded.pill, expanded.panel)).toBe(false);
+    for (const id of ['localPlayButton', 'localSeek', 'localQueueSummary', 'dreamJobPillButton', 'dreamJobCollapse']) {
+      const control = expanded.controls.find(item => item.id === id);
+      expect(control.visible, `${id} visible at ${viewport.label}`).toBe(true);
+      expect(control.disabled, `${id} enabled at ${viewport.label}`).toBe(false);
+      expect(control.height, `${id} touch height at ${viewport.label}`).toBeGreaterThanOrEqual(44);
+    }
+
+    await page.locator('#dreamJobCollapse').click();
+    await expect(page.locator('#dreamJobPanel')).toBeHidden();
+    const collapsed = await coexistenceEvidence(page);
+    expect(rectanglesOverlap(collapsed.local, collapsed.pill)).toBe(false);
+    expect(collapsed.localElementCurrent).toBe(true);
+
+    await page.locator('#localQueueSummary').click();
+    await expect(page.locator('#localQueueDetails')).toHaveAttribute('open', '');
+    await expect(page.locator('.local-queue__item').first().getByRole('button', { name: /Remove/ })).toBeVisible();
+    const queueOpen = await coexistenceEvidence(page);
+    expect(rectanglesOverlap(queueOpen.queuePanel, queueOpen.pill)).toBe(false);
+    const removeReachable = await page.locator('.local-queue__item').first().getByRole('button', { name: /Remove/ }).evaluate(button => {
+      const rect = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        reachable: hit === button || button.contains(hit),
+        hitId: hit?.id || '',
+        hitClass: String(hit?.className || ''),
+        button: rect.toJSON(),
+      };
+    });
+    expect(removeReachable.reachable, JSON.stringify({ queueOpen, removeReachable })).toBe(true);
+    await page.locator('#localQueueSummary').click();
+
+    await page.locator('#dreamJobPillButton').click();
+    await expect(page.locator('#dreamJobPanel')).toBeVisible();
+    provider.release();
+    await expect(page.locator('#dreamJobPillPhase')).toHaveText('Dream ready', { timeout: 30000 });
+    await page.locator('#dreamJobCollapse').click();
+    const ready = await coexistenceEvidence(page);
+    expect(rectanglesOverlap(ready.local, ready.pill)).toBe(false);
+    expect(ready.localElementCurrent).toBe(true);
+    expect(ready.currentTime).toBeGreaterThan(timeBeforeJob);
+    expect(await page.evaluate(() => window.__coexistenceAudioElement.paused)).toBe(false);
+
+    if (viewport.label === 'desktop-1024x768') {
+      await page.evaluate(() => document.body.classList.add('pseudo-fullscreen'));
+      const pseudoFullscreen = await coexistenceEvidence(page);
+      expect(rectanglesOverlap(pseudoFullscreen.local, pseudoFullscreen.pill)).toBe(false);
+      await page.evaluate(() => document.body.classList.remove('pseudo-fullscreen'));
+    }
+    console.log(`COEXISTENCE ${viewport.label} ${JSON.stringify({ expanded, collapsed, queueOpen, ready })}`);
+  });
+}
 
 test('Featured switching and mocked background Dream/Open never restart local music or leak its filename', async ({ page }) => {
   test.setTimeout(120000);

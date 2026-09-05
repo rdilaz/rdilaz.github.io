@@ -104,6 +104,7 @@ class FakeAudioEngine {
   constructor() {
     this.current = null;
     this.connected = false;
+    this.sourceKind = null;
     this.connects = [];
     this.resumes = [];
     this.stops = [];
@@ -113,6 +114,7 @@ class FakeAudioEngine {
     this.current?.pause();
     this.current = element;
     this.connected = true;
+    this.sourceKind = 'local';
     this.connects.push(element);
   }
 
@@ -126,6 +128,7 @@ class FakeAudioEngine {
     this.stops.push({ element, reason });
     this.current = null;
     this.connected = false;
+    this.sourceKind = null;
     return true;
   }
 
@@ -133,10 +136,11 @@ class FakeAudioEngine {
     this.stops.push({ element: this.current, reason });
     this.current = null;
     this.connected = false;
+    this.sourceKind = null;
   }
 
   diagnostics() {
-    return { sourceKind: this.connected ? 'local' : null };
+    return { sourceKind: this.sourceKind };
   }
 }
 
@@ -294,17 +298,35 @@ test('queued corruption and rejected play pause safely without silently choosing
   await player.disconnect();
 });
 
-test('page disposal revokes URLs and detaches stale listeners synchronously', async () => {
+test('repeated page disposal revokes each queue, detaches stale listeners, and ignores external capture', async () => {
   const { player, engine, created, revoked, playback } = fixture();
-  await player.selectFiles([file('page-exit.wav')]);
-  const element = engine.current;
+  await player.selectFiles([file('page-exit-a.wav')]);
+  const elementA = engine.current;
   await player.play();
-  const stopping = player.dispose();
+  const stoppingA = player.dispose();
   assert.equal(player.snapshot().selected, false);
+  await stoppingA;
+  await player.selectFiles([file('page-exit-b.wav')]);
+  const elementB = engine.current;
+  await player.play();
+  const stoppingB = player.dispose();
+  assert.equal(player.snapshot().selected, false);
+  await stoppingB;
   assert.deepEqual(revoked, created);
+  assert.equal(new Set(revoked).size, 2);
   const eventCount = playback.length;
-  element.dispatch('playing');
+  elementA.dispatch('playing');
+  elementB.dispatch('playing');
   assert.equal(playback.length, eventCount);
-  await stopping;
   assert.equal(engine.current, null);
+
+  const external = { kind: 'microphone' };
+  engine.current = external;
+  engine.connected = true;
+  engine.sourceKind = 'microphone';
+  const stopCount = engine.stops.length;
+  await player.dispose();
+  assert.equal(engine.current, external);
+  assert.equal(engine.connected, true);
+  assert.equal(engine.stops.length, stopCount);
 });

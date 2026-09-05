@@ -93,6 +93,12 @@ function microphoneFailureReason(error) {
   return 'capture-failed';
 }
 
+function sourceSupersededError(message = 'A newer audio source is now authoritative.') {
+  const error = new Error(message);
+  error.code = 'AUDIO_SOURCE_SUPERSEDED';
+  return error;
+}
+
 function emptyDiagnostics() {
   return {
     sourceKind: null,
@@ -265,8 +271,9 @@ export class AudioEngine {
   async connectDisplayAudio() {
     const support = AudioEngine.capabilities().display;
     if (!support.supported) throw new Error(support.reason);
-    await this.stop('source-change');
     const requestRevision = ++this.connectionRevision;
+    await this.releaseCurrent('source-change', requestRevision);
+    if (requestRevision !== this.connectionRevision) throw sourceSupersededError();
     const preferred = {
       video: { displaySurface: 'browser', frameRate: { ideal: 1, max: 2 }, cursor: 'never' },
       audio: { suppressLocalAudioPlayback: false },
@@ -281,15 +288,21 @@ export class AudioEngine {
     try {
       stream = await navigator.mediaDevices.getDisplayMedia(preferred);
     } catch (error) {
+      if (requestRevision !== this.connectionRevision) throw sourceSupersededError('A newer audio source was chosen before sharing completed.');
       if (error?.name !== 'TypeError') throw error;
-      stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: { suppressLocalAudioPlayback: false },
-      });
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: { suppressLocalAudioPlayback: false },
+        });
+      } catch (fallbackError) {
+        if (requestRevision !== this.connectionRevision) throw sourceSupersededError('A newer audio source was chosen before sharing completed.');
+        throw fallbackError;
+      }
     }
     if (requestRevision !== this.connectionRevision) {
       stopStream(stream);
-      throw new Error('A newer audio source was chosen before sharing completed.');
+      throw sourceSupersededError('A newer audio source was chosen before sharing completed.');
     }
     stream.getVideoTracks().forEach(track => { track.enabled = false; });
     return this.attachStream(stream, 'display', {}, requestRevision);
@@ -298,13 +311,15 @@ export class AudioEngine {
   async connectMicrophone() {
     const support = AudioEngine.capabilities().microphone;
     if (!support.supported) throw new Error(support.reason);
-    await this.stop('source-change');
     const requestRevision = ++this.connectionRevision;
+    await this.releaseCurrent('source-change', requestRevision);
+    if (requestRevision !== this.connectionRevision) throw sourceSupersededError();
     const requestedProcessing = AudioEngine.microphoneConstraints();
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: requestedProcessing });
     } catch (error) {
+      if (requestRevision !== this.connectionRevision) throw sourceSupersededError('A newer audio source was chosen before microphone access completed.');
       this.audioDiagnostics = {
         ...emptyDiagnostics(),
         sourceKind: 'microphone',
@@ -315,7 +330,7 @@ export class AudioEngine {
     }
     if (requestRevision !== this.connectionRevision) {
       stopStream(stream);
-      throw new Error('A newer audio source was chosen before microphone access completed.');
+      throw sourceSupersededError('A newer audio source was chosen before microphone access completed.');
     }
     return this.attachStream(stream, 'microphone', requestedProcessing, requestRevision);
   }
@@ -413,6 +428,7 @@ export class AudioEngine {
       } = graph);
     } catch {
       await cleanupLocalAudio(stream, context, localNodes);
+      if (expectedRevision !== this.connectionRevision) throw sourceSupersededError();
       this.connected = false;
       this.audioDiagnostics = {
         ...emptyDiagnostics(),
@@ -421,6 +437,11 @@ export class AudioEngine {
         connectionReason: 'audio-graph-failed',
       };
       throw new Error('Audio analysis could not start. Try reconnecting.');
+    }
+
+    if (expectedRevision !== this.connectionRevision) {
+      await cleanupLocalAudio(stream, context, localNodes);
+      throw sourceSupersededError();
     }
 
     this.stream = stream;
@@ -439,33 +460,36 @@ export class AudioEngine {
     this.track = audioTrack;
     this.mediaElement = null;
     this.trueStereo = trueStereo;
-    const connectionRevision = ++this.connectionRevision;
     this.audioDiagnostics = {
       sourceKind,
       ...trackInfo,
       requestedProcessing: { ...requestedProcessing },
-      connectionReason: 'connected',
+      connectionReason: 'connecting',
     };
     try {
       this.trackEndedHandler = () => { void this.stop('track-ended'); };
       audioTrack.addEventListener('ended', this.trackEndedHandler, { once: true });
       this.resetAdaptiveState();
     } catch {
-      await this.stop('audio-graph-failed');
+      if (expectedRevision === this.connectionRevision && this.stream === stream) await this.stop('audio-graph-failed');
       throw new Error('Audio analysis could not start. Try reconnecting.');
     }
 
     try {
       await context.resume();
     } catch {
+      if (expectedRevision !== this.connectionRevision || this.stream !== stream) {
+        throw sourceSupersededError('The audio source ended before analysis could start or was replaced by a newer source.');
+      }
       await this.stop('audio-context-resume-failed');
       throw new Error('Audio analysis could not start. Try reconnecting.');
     }
 
-    if (connectionRevision !== this.connectionRevision || this.stream !== stream) {
-      throw new Error('The audio source ended before analysis could start.');
+    if (expectedRevision !== this.connectionRevision || this.stream !== stream) {
+      throw sourceSupersededError('The audio source ended before analysis could start or was replaced by a newer source.');
     }
 
+    this.audioDiagnostics = { ...this.audioDiagnostics, connectionReason: 'connected' };
     this.connected = true;
     this.onState({
       connected: true,
@@ -480,8 +504,9 @@ export class AudioEngine {
     if (!element || typeof element.play !== 'function' || typeof element.pause !== 'function') {
       throw new TypeError('A trusted HTML audio element is required for local playback.');
     }
-    await this.stop('source-change');
     const requestRevision = ++this.connectionRevision;
+    await this.releaseCurrent('source-change', requestRevision);
+    if (requestRevision !== this.connectionRevision) throw sourceSupersededError();
     const AudioContextClass = globalThis.window?.AudioContext || globalThis.window?.webkitAudioContext;
     if (!AudioContextClass) {
       this.audioDiagnostics = {
@@ -525,7 +550,6 @@ export class AudioEngine {
       this.trackEndedHandler = null;
       this.mediaElement = element;
       this.trueStereo = false;
-      ++this.connectionRevision;
       this.audioDiagnostics = {
         ...emptyDiagnostics(),
         sourceKind: 'local',
@@ -543,13 +567,17 @@ export class AudioEngine {
       return this.diagnostics();
     } catch (error) {
       if (this.context !== context) await cleanupLocalAudio(null, context, localNodes);
-      this.connected = false;
-      this.audioDiagnostics = {
-        ...emptyDiagnostics(),
-        sourceKind: 'local',
-        connectionReason: error?.message?.includes('newer audio source') ? 'source-superseded' : 'audio-graph-failed',
-      };
-      if (error?.message?.includes('newer audio source')) throw error;
+      if (requestRevision !== this.connectionRevision) throw sourceSupersededError();
+      if (this.context === context && this.mediaElement === element) await this.stop('audio-graph-failed');
+      else {
+        this.connected = false;
+        this.audioDiagnostics = {
+          ...emptyDiagnostics(),
+          sourceKind: 'local',
+          connectionReason: 'audio-graph-failed',
+        };
+      }
+      if (error?.code === 'AUDIO_SOURCE_SUPERSEDED') throw error;
       throw new Error('Local audio analysis could not start. Try another browser or reconnect the source.', { cause: error });
     }
   }
@@ -575,6 +603,14 @@ export class AudioEngine {
     if (this.mediaElement !== element) return false;
     await this.stop(reason);
     return true;
+  }
+
+  async supersedePendingRequest() {
+    const revision = ++this.connectionRevision;
+    if (!this.connected && (this.stream || this.context || this.mediaElement)) {
+      await this.releaseCurrent('source-superseded', revision);
+    }
+    return this.diagnostics();
   }
 
   band(minHz, maxHz, { detail = false } = {}) {
@@ -728,22 +764,17 @@ export class AudioEngine {
     return { balance, width };
   }
 
-  async stop(reason = 'user-disconnect') {
-    this.connectionRevision += 1;
+  async releaseCurrent(reason, revision) {
+    if (revision !== this.connectionRevision) return false;
     const wasConnected = this.connected;
     const sourceKind = this.audioDiagnostics.sourceKind;
+    const context = this.context;
+    const stream = this.stream;
+    const mediaElement = this.mediaElement;
+    const track = this.track;
+    const trackEndedHandler = this.trackEndedHandler;
+    const nodes = [this.source, this.splitter, this.analyser, this.detailAnalyser, this.leftAnalyser, this.rightAnalyser];
     this.connected = false;
-    try { this.mediaElement?.pause?.(); } catch { /* Graph cleanup remains authoritative. */ }
-    if (this.track && this.trackEndedHandler) {
-      this.track.removeEventListener?.('ended', this.trackEndedHandler);
-    }
-    stopStream(this.stream);
-    for (const node of [this.source, this.splitter, this.analyser, this.detailAnalyser, this.leftAnalyser, this.rightAnalyser]) {
-      try { node?.disconnect(); } catch { /* A partially-created graph may already be disconnected. */ }
-    }
-    if (this.context && this.context.state !== 'closed') {
-      try { await this.context.close(); } catch { /* Release every remaining graph reference below. */ }
-    }
     this.stream = this.context = this.source = this.analyser = this.detailAnalyser = null;
     this.splitter = this.leftAnalyser = this.rightAnalyser = null;
     this.frequency = this.detailFrequency = this.waveform = this.leftWave = this.rightWave = null;
@@ -751,6 +782,15 @@ export class AudioEngine {
     this.mediaElement = null;
     this.trueStereo = false;
     this.audioDiagnostics = { ...this.audioDiagnostics, connectionReason: reason };
+
+    try { mediaElement?.pause?.(); } catch { /* Graph cleanup remains authoritative. */ }
+    if (track && trackEndedHandler) {
+      track.removeEventListener?.('ended', trackEndedHandler);
+    }
+    stopStream(stream);
+    for (const node of nodes) {
+      try { node?.disconnect(); } catch { /* A partially-created graph may already be disconnected. */ }
+    }
     if (wasConnected) {
       this.onState({
         connected: false,
@@ -765,5 +805,14 @@ export class AudioEngine {
         diagnostics: this.diagnostics(),
       });
     }
+    if (context && context.state !== 'closed') {
+      try { await context.close(); } catch { /* All authoritative references were already released. */ }
+    }
+    return revision === this.connectionRevision;
+  }
+
+  async stop(reason = 'user-disconnect') {
+    const revision = ++this.connectionRevision;
+    return this.releaseCurrent(reason, revision);
   }
 }

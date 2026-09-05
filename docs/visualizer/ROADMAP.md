@@ -47,7 +47,7 @@ Everything else is progressive disclosure.
 
 # Stage 1 — Product Shell / Core UX v1
 
-The accepted shell is on `main`. Featured Dreams, streaming transport, immersive playback, microphone fallback, and local render quality have completed their Stage 1 implementation milestones. First Session v1 is implemented and locally tested on its feature branch; central review, merge, production acceptance, and device acceptance remain pending.
+The accepted shell is on `main`. Featured Dreams, streaming transport, immersive playback, microphone fallback, and local render quality have completed their Stage 1 implementation milestones. First Session v1 is implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending.
 
 Goal: make the working system feel like a product rather than a lab.
 
@@ -214,7 +214,7 @@ Prompt presets are creative choices, not hidden quality tiers.
 
 Goal: offer a clean music-player experience when the Visualizer actually owns playback.
 
-**Status:** Local Player v1 is implemented and locally tested on the First Session feature branch; central review, merge, production acceptance, and real-device acceptance remain pending.
+**Status:** Local Player v1 is implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending.
 
 ## Local-first web player
 

@@ -118,13 +118,14 @@ The export package intentionally stores only the eight-character local artifact 
 
 ## First Session v1 implementation
 
-Status on this feature branch: implemented and locally tested; central review, merge, production acceptance, desktop dogfood, and real-iPhone testing remain pending. WebKit is not configured by the repository and is therefore untested for this milestone.
+Status: implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending. WebKit is not configured by the repository and is therefore untested for this milestone.
 
 - `ai-visualizer.first-session.v1=complete` is the only onboarding preference. A denied `localStorage` read/write leaves an in-memory dismissal for the page session and does not block startup.
 - Fresh reduced-motion visits call the existing `playbackController.pause()` before the startup sandbox load. A returning visit is not automatically paused by this policy, and explicit Play uses the existing trusted resume path.
 - Featured guide statements are backed by exact artifact code but live only in `featured-dream-guide.js`. Guide disclosure never invokes Open, reloads the iframe, or changes LIVE/NEXT.
 - Local selection accepts at most 24 files, 512 MiB per file, and 2 GiB in one session queue. MIME and filename values are not trusted as validation; the browser performs a metadata-only media probe before a source replacement commits.
-- A queue owns fresh object URLs and one fresh trusted audio element. Track changes reuse its single MediaElementAudioSourceNode; source replacement creates a new element because browsers permit only one media-element source registration per element. Removal, clear, replacement, disconnect, and page exit revoke discarded URLs and detach listeners.
+- A queue owns fresh object URLs and one fresh trusted audio element. Track changes reuse its single MediaElementAudioSourceNode; source replacement creates a new element because browsers permit only one media-element source registration per element. Removal, clear, replacement, disconnect, and every pagehide revoke discarded URLs and detach listeners, including after a BFCache-style return.
+- Audio source requests and host source UI use explicit monotonic operation ownership. Teardown drops authoritative references before awaiting context close, so stale request errors, compatibility fallbacks, close completions, and UI handlers cannot replace or clear a newer source.
 - The local graph is `media element → primary analyser → AudioContext destination` plus analysis-only branches. This is the sole host-created audible path. Display and microphone graphs have no destination connection.
 - File selection leaves media and visuals paused; actual `playing`, `pause`, `ended`, and rejected `play()` results drive host state. A started queue may advance, paused previous/next stays paused, and the final queue end pauses visuals without reloading the Dream.
 - `tests/helpers/synthetic-audio.mjs` generates deterministic test-only mono PCM sine-wave WAV buffers. Chromium tests feed those bytes through native media decoding and the real Web Audio analysis path; media state is mocked only for focused lifecycle contracts.

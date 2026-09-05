@@ -557,6 +557,117 @@ test('rapid capture requests allow only the newest source to take ownership', as
   assert.equal(secondFixture.audioTrack.stopCount, 1);
 });
 
+test('rejected stale microphone request cannot overwrite newer source diagnostics or state', async () => {
+  const newerFixture = mediaFixture();
+  const pending = [];
+  installBrowser({
+    mediaDevices: {
+      getSupportedConstraints: () => ({}),
+      getUserMedia: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    },
+  });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(structuredClone(state)));
+  const staleRequest = engine.connectMicrophone();
+  await new Promise(resolve => setImmediate(resolve));
+  const newerRequest = engine.connectMicrophone();
+  await new Promise(resolve => setImmediate(resolve));
+  pending[1].resolve(newerFixture.stream);
+  await newerRequest;
+  const authoritativeDiagnostics = engine.diagnostics();
+  const stateCount = states.length;
+
+  pending[0].reject(new DOMException('stale test-only denial', 'NotAllowedError'));
+  await assert.rejects(staleRequest, error => error?.code === 'AUDIO_SOURCE_SUPERSEDED');
+  assert.deepEqual(engine.diagnostics(), authoritativeDiagnostics);
+  assert.equal(engine.connected, true);
+  assert.equal(engine.stream, newerFixture.stream);
+  assert.equal(newerFixture.audioTrack.stopCount, 0);
+  assert.equal(states.length, stateCount);
+  assert.doesNotMatch(JSON.stringify(engine.diagnostics()), /stale test-only denial|permission-denied/);
+  await engine.stop();
+});
+
+test('superseded display TypeError never issues its obsolete compatibility fallback', async () => {
+  const newerFixture = mediaFixture();
+  let rejectDisplay;
+  let displayCalls = 0;
+  installBrowser({
+    mediaDevices: {
+      getDisplayMedia: () => {
+        displayCalls += 1;
+        return new Promise((resolve, reject) => { rejectDisplay = reject; });
+      },
+      getSupportedConstraints: () => ({}),
+      getUserMedia: async () => newerFixture.stream,
+    },
+  });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(structuredClone(state)));
+  const staleDisplay = engine.connectDisplayAudio();
+  await new Promise(resolve => setImmediate(resolve));
+  await engine.connectMicrophone();
+  const authoritativeDiagnostics = engine.diagnostics();
+  const stateCount = states.length;
+
+  rejectDisplay(new DOMException('unsupported delayed hint', 'TypeError'));
+  await assert.rejects(staleDisplay, error => error?.code === 'AUDIO_SOURCE_SUPERSEDED');
+  assert.equal(displayCalls, 1);
+  assert.equal(engine.stream, newerFixture.stream);
+  assert.equal(newerFixture.audioTrack.stopCount, 0);
+  assert.deepEqual(engine.diagnostics(), authoritativeDiagnostics);
+  assert.equal(states.length, stateCount);
+  await engine.stop();
+});
+
+test('delayed old context close cannot clear a newer media-element source', async () => {
+  let releaseFirstClose;
+  const firstClose = new Promise(resolve => { releaseFirstClose = resolve; });
+  class DeferredFirstCloseContext extends FakeAudioContext {
+    async close() {
+      this.closeCount += 1;
+      if (this === FakeAudioContext.instances[0]) await firstClose;
+      this.state = 'closed';
+    }
+  }
+  installBrowser({ mediaDevices: {}, AudioContextClass: DeferredFirstCloseContext });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(structuredClone(state)));
+  const elementA = { paused: true, async play() {}, pause() { this.paused = true; } };
+  const elementB = { paused: true, async play() {}, pause() { this.paused = true; } };
+  await engine.connectMediaElement(elementA);
+  const stoppingA = engine.stopMediaElement(elementA, 'page-hidden');
+  await new Promise(resolve => setImmediate(resolve));
+  await engine.connectMediaElement(elementB);
+  const diagnosticsB = engine.diagnostics();
+  const stateCount = states.length;
+  releaseFirstClose();
+  await stoppingA;
+
+  assert.equal(engine.connected, true);
+  assert.equal(engine.mediaElement, elementB);
+  assert.deepEqual(engine.diagnostics(), diagnosticsB);
+  assert.equal(FakeAudioContext.instances[1].closeCount, 0);
+  assert.equal(states.length, stateCount);
+  await engine.stopMediaElement(elementB);
+});
+
+test('superseding pending work never stops an authoritative external capture', async () => {
+  const fixture = mediaFixture();
+  installBrowser({ mediaDevices: { getUserMedia: async () => fixture.stream, getSupportedConstraints: () => ({}) } });
+  const states = [];
+  const engine = new AudioEngine(state => states.push(structuredClone(state)));
+  await engine.connectMicrophone();
+  const diagnostics = engine.diagnostics();
+  await engine.supersedePendingRequest();
+  assert.equal(engine.connected, true);
+  assert.equal(engine.stream, fixture.stream);
+  assert.equal(fixture.audioTrack.stopCount, 0);
+  assert.deepEqual(engine.diagnostics(), diagnostics);
+  assert.equal(states.length, 1);
+  await engine.stop();
+});
+
 test('stop releases tracks, nodes, listeners and AudioContext idempotently', async () => {
   const fixture = mediaFixture({ channels: 2 });
   installBrowser({ mediaDevices: { getDisplayMedia: async () => fixture.stream } });

@@ -285,8 +285,10 @@ let selectedReasoningSelection = null;
 let sensitivityHudTimer = 0;
 let openingStatusTimer = 0;
 let openingStatusRevision = 0;
+let audioSourceOperationRevision = 0;
 let sensitivityPercent = sensitivityController.snapshot().sensitivityPercent;
 let renderQuality = resolveRenderQuality(renderQualityController.snapshot().mode, devicePixelRatio || 1);
+let renderedLocalQueueSignature = '';
 const localPlayer = new LocalPlayer({
   audioEngine: audio,
   mount: els.localAudioMount,
@@ -548,7 +550,11 @@ function renderLocalPlayer(snapshot = localPlayer.snapshot()) {
   const restoreFocus = !snapshot.selected && els.localTransport.contains(document.activeElement);
   els.localTransport.hidden = !snapshot.selected;
   els.localTransport.setAttribute('aria-busy', String(snapshot.loading));
-  if (!snapshot.selected && els.localQueueDetails) els.localQueueDetails.open = false;
+  document.body.classList.toggle('has-local-player', snapshot.selected);
+  if (!snapshot.selected) {
+    document.body.classList.remove('local-queue-open');
+    if (els.localQueueDetails) els.localQueueDetails.open = false;
+  }
   const current = snapshot.queue[snapshot.currentIndex] || null;
   if (els.localTrackName) els.localTrackName.textContent = current?.name || 'No local file selected';
   if (els.localPreviousButton) els.localPreviousButton.disabled = snapshot.loading || snapshot.currentIndex <= 0;
@@ -567,7 +573,9 @@ function renderLocalPlayer(snapshot = localPlayer.snapshot()) {
   }
   if (els.localTime) els.localTime.textContent = `${formatMediaTime(snapshot.currentTime)} / ${formatMediaTime(snapshot.duration)}`;
   if (els.localQueueSummary) els.localQueueSummary.textContent = `Queue (${snapshot.queue.length})`;
-  if (els.localQueueList) {
+  const queueSignature = snapshot.queue.map(track => `${track.id}:${track.current ? 1 : 0}`).join('|');
+  if (els.localQueueList && queueSignature !== renderedLocalQueueSignature) {
+    renderedLocalQueueSignature = queueSignature;
     const fragment = document.createDocumentFragment();
     for (const track of snapshot.queue) {
       const row = document.createElement('div');
@@ -2307,6 +2315,7 @@ function setAudioChooserBusy(busy) {
 }
 
 async function connectAudioSource(sourceKind) {
+  const operationRevision = ++audioSourceOperationRevision;
   setAudioChooserBusy(true);
   showCenter(
     sourceKind === 'microphone' ? 'Listening for microphone permission.' : 'Choose what to share.',
@@ -2316,19 +2325,24 @@ async function connectAudioSource(sourceKind) {
   );
   try {
     await localPlayer.disconnect('source-change');
+    if (operationRevision !== audioSourceOperationRevision) return false;
     if (sourceKind === 'microphone') await audio.connectMicrophone();
     else await audio.connectDisplayAudio();
+    if (operationRevision !== audioSourceOperationRevision) return false;
     closeAudioPicker();
     hideCenter();
     showToast(sourceKind === 'microphone'
       ? 'Microphone connected. Audio stays on this device.'
       : 'Audio connected. The visualizer can see the music now.');
+    return true;
   } catch (error) {
+    if (operationRevision !== audioSourceOperationRevision || error?.code === 'AUDIO_SOURCE_SUPERSEDED') return false;
     closeAudioPicker();
     hideCenter();
     showToast(error?.message || 'Audio could not be connected.', 6500);
+    return false;
   } finally {
-    setAudioChooserBusy(false);
+    if (operationRevision === audioSourceOperationRevision) setAudioChooserBusy(false);
   }
 }
 
@@ -2339,28 +2353,39 @@ function chooseLocalFiles() {
 async function selectLocalFiles(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return false;
+  const operationRevision = ++audioSourceOperationRevision;
   setAudioChooserBusy(true);
   showCenter('Checking local audio.', 'The current source keeps running until a browser-decodable selection is ready.');
   try {
+    await audio.supersedePendingRequest();
+    if (operationRevision !== audioSourceOperationRevision) return false;
     const selected = await localPlayer.selectFiles(files);
-    if (!selected) return false;
+    if (operationRevision !== audioSourceOperationRevision) return false;
+    if (!selected) {
+      hideCenter();
+      return false;
+    }
     closeAudioPicker();
     hideCenter();
     showToast(`${selected.queue.length} local ${selected.queue.length === 1 ? 'file' : 'files'} ready. Press Play when you want to listen.`);
     return true;
   } catch {
+    if (operationRevision !== audioSourceOperationRevision) return false;
     hideCenter();
     return false;
   } finally {
-    setAudioChooserBusy(false);
+    if (operationRevision === audioSourceOperationRevision) setAudioChooserBusy(false);
   }
 }
 
 async function disconnectAudioSource({ closePicker = true } = {}) {
+  const operationRevision = ++audioSourceOperationRevision;
   if (localPlayer.hasSelection()) await localPlayer.disconnect('user-disconnect');
   else await audio.stop('user-disconnect');
+  if (operationRevision !== audioSourceOperationRevision) return false;
   renderAudioSourceUi();
   if (closePicker) closeAudioPicker();
+  return true;
 }
 
 async function togglePrimaryPlayback() {
@@ -3296,8 +3321,12 @@ function wireEvents() {
   els.localClearQueue?.addEventListener('click', () => { void localPlayer.clear(); });
   els.localDisconnect?.addEventListener('click', () => { void disconnectAudioSource({ closePicker: false }); });
   els.localQueueDetails?.addEventListener('toggle', () => {
-    if (els.localQueueDetails.open) showUi('local-queue-open');
-    else scheduleUiHide();
+    const open = Boolean(els.localQueueDetails.open && localPlayer.hasSelection());
+    document.body.classList.toggle('local-queue-open', open);
+    if (open) {
+      if (dreamJobController.snapshot().expanded) dreamJobController.collapse();
+      showUi('local-queue-open');
+    } else scheduleUiHide();
   });
   els.audioPicker.addEventListener('click', event => {
     if (event.target === els.audioPicker) closeAudioPicker();
@@ -3490,7 +3519,11 @@ function wireEvents() {
     announceReasoningSelection(selection);
     showToast('That reasoning level is no longer supported. Future Dreams will use the model\'s native Default.', 6200);
   });
-  window.addEventListener('pagehide', () => { void localPlayer.dispose('page-hidden'); }, { once: true });
+  window.addEventListener('pagehide', () => {
+    audioSourceOperationRevision += 1;
+    void audio.supersedePendingRequest();
+    void localPlayer.dispose('page-hidden');
+  });
 }
 
 async function initialize() {

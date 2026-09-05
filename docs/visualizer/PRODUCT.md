@@ -93,7 +93,7 @@ Dream presentation metadata is separate from artifact identity. Featured titles 
 
 ## First Session v1
 
-**Implementation status:** implemented and covered by local deterministic contracts plus the configured Chromium path on the feature branch; central review, merge, production acceptance, desktop dogfood, and real-iPhone acceptance remain pending.
+**Implementation status:** Implemented and CI-verified in PR #36; production desktop and real-iPhone acceptance remain pending.
 
 The bounded first-session journey is:
 
