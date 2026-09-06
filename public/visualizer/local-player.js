@@ -88,6 +88,7 @@ export class LocalPlayer {
     this.elementListeners = null;
     this.playing = false;
     this.playIntent = false;
+    this.transportIntentRevision = 0;
     this.playbackSessionStarted = false;
     this.loading = false;
     this.currentTime = 0;
@@ -355,15 +356,17 @@ export class LocalPlayer {
     });
   }
 
-  async play() {
+  async play({ intentRevision = null } = {}) {
     const element = this.element;
     if (!element || !this.queue.length) throw this.reportError(new Error('Choose local audio before pressing Play.'));
+    const revision = intentRevision == null ? ++this.transportIntentRevision : intentRevision;
+    if (revision !== this.transportIntentRevision) return false;
     this.playIntent = true;
     try {
       await this.audioEngine.resumeMediaElement(element);
-      if (element !== this.element || !this.playIntent) return false;
+      if (element !== this.element || revision !== this.transportIntentRevision || !this.playIntent) return false;
       await element.play();
-      if (element !== this.element || !this.playIntent) {
+      if (element !== this.element || revision !== this.transportIntentRevision || !this.playIntent) {
         try { element.pause(); } catch { /* A stale completion cannot reclaim playback. */ }
         return false;
       }
@@ -373,6 +376,7 @@ export class LocalPlayer {
       }
       return this.playing;
     } catch (error) {
+      if (element !== this.element || revision !== this.transportIntentRevision) return false;
       if (element === this.element) {
         this.playIntent = false;
         this.setPlaying(false, 'play-rejected', { force: true });
@@ -382,6 +386,7 @@ export class LocalPlayer {
   }
 
   pause() {
+    this.transportIntentRevision += 1;
     this.playIntent = false;
     try { this.element?.pause?.(); } catch { /* State below remains truthful. */ }
     this.setPlaying(false, 'user-pause');
@@ -406,6 +411,7 @@ export class LocalPlayer {
     const target = Math.max(0, Math.min(this.queue.length - 1, Number(index)));
     if (!this.element || !this.queue[target] || target === this.currentIndex) return false;
     const revision = ++this.trackRevision;
+    const continuationIntentRevision = this.transportIntentRevision;
     const element = this.element;
     const entry = this.queue[target];
     this.switchingTrack = true;
@@ -430,7 +436,8 @@ export class LocalPlayer {
       this.loading = false;
       this.switchingTrack = false;
       this.publish();
-      if (continuePlayback) return this.play();
+      if (continuationIntentRevision !== this.transportIntentRevision) return true;
+      if (continuePlayback && this.playIntent) return this.play({ intentRevision: continuationIntentRevision });
       this.playIntent = false;
       this.setPlaying(false, 'track-change-paused');
       return true;

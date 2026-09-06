@@ -237,6 +237,14 @@ expect(
   'Local queue bounds and object-URL ownership must remain explicit.',
 );
 expect(
+  localPlayer.includes('transportIntentRevision')
+    && localPlayer.includes('continuationIntentRevision !== this.transportIntentRevision')
+    && localPlayerContract.includes('Next then Pause during delayed metadata stays paused')
+    && localPlayerContract.includes('uninterrupted delayed automatic advancement still plays exactly once')
+    && localPlayerBrowser.includes('main Pause during a controlled track metadata boundary prevents unsolicited restart'),
+  'The latest explicit Play/Pause intent must win across delayed track metadata without breaking uninterrupted advancement.',
+);
+expect(
   index.includes('id="localFileInput"')
     && index.includes('type="file"')
     && index.includes('multiple hidden')

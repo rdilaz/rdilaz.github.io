@@ -254,6 +254,77 @@ test('a started queue advances once, then pauses local music and visuals at its 
   expect(await page.evaluate(() => window.VIZ_DEV.state().activeSessionId)).toBe(sessionBefore);
 });
 
+test('main Pause during a controlled track metadata boundary prevents unsolicited restart', async ({ page }) => {
+  await seedReturningVisit(page);
+  const provider = await blockProvider(page);
+  await openVisualizer(page);
+  await chooseLocalFiles(page, [
+    audioFile('pause-boundary-a.wav', { durationSeconds: 4, frequency: 300 }),
+    audioFile('pause-boundary-b.wav', { durationSeconds: 4, frequency: 600 }),
+  ]);
+  await page.locator('#localPlayButton').click();
+  await expect.poll(() => page.evaluate(() => document.querySelector('[data-local-audio]').currentTime)).toBeGreaterThan(.1);
+  await page.evaluate(() => {
+    const element = document.querySelector('[data-local-audio]');
+    const nativeAdd = element.addEventListener.bind(element);
+    const nativeRemove = element.removeEventListener.bind(element);
+    const nativePlay = element.play.bind(element);
+    let heldMetadataListener = null;
+    window.__pauseBoundaryPlayAttempts = 0;
+    element.play = () => {
+      window.__pauseBoundaryPlayAttempts += 1;
+      return nativePlay();
+    };
+    element.addEventListener = (type, listener, options) => {
+      if (type === 'loadedmetadata' && !heldMetadataListener) {
+        heldMetadataListener = listener;
+        return;
+      }
+      nativeAdd(type, listener, options);
+    };
+    element.removeEventListener = (type, listener, options) => {
+      if (type === 'loadedmetadata' && heldMetadataListener === listener) return;
+      nativeRemove(type, listener, options);
+    };
+    window.__releasePauseBoundaryMetadata = () => {
+      const listener = heldMetadataListener;
+      heldMetadataListener = null;
+      listener?.call(element, new Event('loadedmetadata'));
+    };
+    window.__pauseBoundaryElement = element;
+  });
+
+  await page.locator('#localNextButton').click();
+  await expect(page.locator('#localTransport')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Pause local music and visual');
+  await page.locator('#playbackButton').click();
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Play local music and visual');
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => ({
+    mediaPaused: window.__pauseBoundaryElement.paused,
+    visualPaused: window.VIZ_DEV.playback().paused,
+    playAttempts: window.__pauseBoundaryPlayAttempts,
+  }))).toEqual({ mediaPaused: true, visualPaused: true, playAttempts: 0 });
+
+  await page.evaluate(() => window.__releasePauseBoundaryMetadata());
+  await expect(page.locator('#localTransport')).toHaveAttribute('aria-busy', 'false');
+  await page.waitForTimeout(80);
+  expect(await page.evaluate(() => ({
+    mediaPaused: window.__pauseBoundaryElement.paused,
+    visualPaused: window.VIZ_DEV.playback().paused,
+    playAttempts: window.__pauseBoundaryPlayAttempts,
+  }))).toEqual({ mediaPaused: true, visualPaused: true, playAttempts: 0 });
+
+  await page.locator('#playbackButton').click();
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Pause local music and visual');
+  await expect.poll(() => page.evaluate(() => window.__pauseBoundaryElement.paused)).toBe(false);
+  expect(await page.evaluate(() => ({
+    visualPaused: window.VIZ_DEV.playback().paused,
+    playAttempts: window.__pauseBoundaryPlayAttempts,
+  }))).toEqual({ visualPaused: false, playAttempts: 1 });
+  expect(provider.completions).toBe(0);
+});
+
 test('picker cancellation and corrupt replacement preserve current playback; malicious names stay inert and play rejection is truthful', async ({ page }) => {
   await seedReturningVisit(page, { auditUrls: true });
   const provider = await blockProvider(page);

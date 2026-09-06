@@ -63,7 +63,7 @@ class FakeAudio {
     const source = this._src;
     if (!source) return;
     const behavior = this.behaviors.get(source) || {};
-    setTimeout(() => {
+    const completeMetadata = () => {
       if (revision !== this.loadRevision || source !== this._src) return;
       if (behavior.metadataError) {
         this.dispatch('error');
@@ -73,7 +73,12 @@ class FakeAudio {
       this.readyState = 1;
       this.dispatch('loadedmetadata');
       this.dispatch('durationchange');
-    }, Number(behavior.delay) || 0);
+    };
+    if (behavior.holdMetadata) {
+      behavior.releaseMetadata = completeMetadata;
+      return;
+    }
+    setTimeout(completeMetadata, Number(behavior.delay) || 0);
   }
 
   async play() {
@@ -152,6 +157,7 @@ function file(name, options = {}) {
     delay: options.delay ?? 0,
     metadataError: Boolean(options.metadataError),
     playReject: Boolean(options.playReject),
+    holdMetadata: Boolean(options.holdMetadata),
   };
 }
 
@@ -329,4 +335,75 @@ test('repeated page disposal revokes each queue, detaches stale listeners, and i
   assert.equal(engine.current, external);
   assert.equal(engine.connected, true);
   assert.equal(engine.stops.length, stopCount);
+});
+
+test('Next then Pause during delayed metadata stays paused and later explicit Play works', async () => {
+  const { player, engine, playback } = fixture();
+  const delayed = file('next-delayed.wav', { holdMetadata: true });
+  await player.selectFiles([file('next-current.wav'), delayed]);
+  await player.play();
+  const transition = player.next();
+  assert.equal(player.snapshot().loading, true);
+  player.pause();
+  delayed.releaseMetadata();
+  await transition;
+  assert.equal(player.snapshot().loading, false);
+  assert.equal(player.snapshot().playing, false);
+  assert.equal(engine.current.paused, true);
+  assert.equal(engine.current.playCalls, 1);
+  assert.ok(playback.some(event => event.reason === 'user-pause' && event.playing === false));
+
+  await player.play();
+  assert.equal(player.snapshot().playing, true);
+  assert.equal(engine.current.paused, false);
+  assert.equal(engine.current.playCalls, 2);
+  await player.disconnect();
+});
+
+test('automatic advancement then Pause during delayed metadata stays paused', async () => {
+  const { player, engine } = fixture();
+  const delayed = file('automatic-delayed.wav', { holdMetadata: true });
+  await player.selectFiles([file('automatic-current.wav'), delayed]);
+  await player.play();
+  engine.current.finish();
+  await waitFor(() => player.snapshot().currentIndex === 1 && player.snapshot().loading);
+  player.pause();
+  delayed.releaseMetadata();
+  await waitFor(() => !player.snapshot().loading);
+  assert.equal(player.snapshot().playing, false);
+  assert.equal(engine.current.paused, true);
+  assert.equal(engine.current.playCalls, 1);
+  await player.disconnect();
+});
+
+test('removing the current track then Pause during delayed metadata stays paused', async () => {
+  const { player, engine } = fixture();
+  const delayed = file('remove-delayed.wav', { holdMetadata: true });
+  await player.selectFiles([file('remove-current.wav'), delayed]);
+  await player.play();
+  const currentId = player.snapshot().queue[0].id;
+  const removal = player.remove(currentId);
+  assert.equal(player.snapshot().loading, true);
+  player.pause();
+  delayed.releaseMetadata();
+  await removal;
+  assert.equal(player.snapshot().loading, false);
+  assert.equal(player.snapshot().playing, false);
+  assert.equal(engine.current.paused, true);
+  assert.equal(engine.current.playCalls, 1);
+  await player.disconnect();
+});
+
+test('uninterrupted delayed automatic advancement still plays exactly once', async () => {
+  const { player, engine } = fixture();
+  const delayed = file('control-delayed.wav', { holdMetadata: true });
+  await player.selectFiles([file('control-current.wav'), delayed]);
+  await player.play();
+  engine.current.finish();
+  await waitFor(() => player.snapshot().currentIndex === 1 && player.snapshot().loading);
+  delayed.releaseMetadata();
+  await waitFor(() => !player.snapshot().loading && player.snapshot().playing);
+  assert.equal(engine.current.paused, false);
+  assert.equal(engine.current.playCalls, 2);
+  await player.disconnect();
 });
