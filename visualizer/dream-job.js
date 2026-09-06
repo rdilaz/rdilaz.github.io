@@ -296,6 +296,7 @@ export function mountDreamJobView({
       els.pill.dataset.jobPhase = snapshot.phase;
     }
     document.body.classList.toggle('has-dream-job', !idle && snapshot.visible);
+    document.body.classList.toggle('dream-job-expanded', !idle && snapshot.visible && snapshot.expanded);
     els.pillButton?.setAttribute('aria-expanded', String(!idle && snapshot.visible && snapshot.expanded));
     if (els.phase) els.phase.textContent = label;
     if (els.pillPhase) els.pillPhase.textContent = label;
