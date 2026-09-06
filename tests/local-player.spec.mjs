@@ -325,6 +325,65 @@ test('main Pause during a controlled track metadata boundary prevents unsolicite
   expect(provider.completions).toBe(0);
 });
 
+test('newer main Play survives an older controlled native Play completion', async ({ page }) => {
+  await seedReturningVisit(page);
+  const provider = await blockProvider(page);
+  await openVisualizer(page);
+  await chooseLocalFiles(page, [audioFile('pending-main-play.wav', { durationSeconds: 5, frequency: 420 })]);
+  await expect(page.locator('#localTransport')).toBeVisible();
+  await page.evaluate(() => {
+    const element = document.querySelector('[data-local-audio]');
+    const nativePlay = element.play.bind(element);
+    const nativePause = element.pause.bind(element);
+    const pending = [];
+    window.__pendingMainPlayPauseCalls = 0;
+    window.__pendingMainPlayElement = element;
+    window.__pendingMainPlays = pending;
+    element.pause = () => {
+      window.__pendingMainPlayPauseCalls += 1;
+      return nativePause();
+    };
+    element.play = () => new Promise((resolve, reject) => pending.push({
+      release: async () => {
+        try {
+          await nativePlay();
+          resolve();
+          await Promise.resolve();
+        } catch (error) {
+          reject(error);
+        }
+      },
+      reject,
+    }));
+  });
+
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Play local music and visual');
+  await page.locator('#playbackButton').click();
+  await expect.poll(() => page.evaluate(() => window.__pendingMainPlays.length)).toBe(1);
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Play local music and visual');
+  await page.locator('#playbackButton').click();
+  await expect.poll(() => page.evaluate(() => window.__pendingMainPlays.length)).toBe(2);
+
+  await page.evaluate(() => window.__pendingMainPlays[1].release());
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Pause local music and visual');
+  await expect.poll(() => page.evaluate(() => window.VIZ_DEV.audioAnalysis()?.volume || 0)).toBeGreaterThan(0);
+  await page.evaluate(() => window.__pendingMainPlays[0].release());
+  expect(await page.evaluate(() => ({
+    mediaPaused: window.__pendingMainPlayElement.paused,
+    visualPaused: window.VIZ_DEV.playback().paused,
+    pauseCalls: window.__pendingMainPlayPauseCalls,
+  }))).toEqual({ mediaPaused: false, visualPaused: false, pauseCalls: 0 });
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-pressed', 'false');
+
+  await page.locator('#playbackButton').click();
+  expect(await page.evaluate(() => ({
+    mediaPaused: window.__pendingMainPlayElement.paused,
+    visualPaused: window.VIZ_DEV.playback().paused,
+    pauseCalls: window.__pendingMainPlayPauseCalls,
+  }))).toEqual({ mediaPaused: true, visualPaused: true, pauseCalls: 1 });
+  expect(provider.completions).toBe(0);
+});
+
 test('picker cancellation and corrupt replacement preserve current playback; malicious names stay inert and play rejection is truthful', async ({ page }) => {
   await seedReturningVisit(page, { auditUrls: true });
   const provider = await blockProvider(page);

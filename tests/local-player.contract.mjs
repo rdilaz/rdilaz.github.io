@@ -85,6 +85,10 @@ class FakeAudio {
     this.playCalls += 1;
     const behavior = this.behaviors.get(this._src) || {};
     if (behavior.playReject) throw new DOMException('test-only rejection', 'NotAllowedError');
+    if (behavior.holdPlay) {
+      behavior.pendingPlays ||= [];
+      await new Promise((resolve, reject) => behavior.pendingPlays.push({ resolve, reject }));
+    }
     this.paused = false;
     this.ended = false;
     this.dispatch('playing');
@@ -158,6 +162,7 @@ function file(name, options = {}) {
     metadataError: Boolean(options.metadataError),
     playReject: Boolean(options.playReject),
     holdMetadata: Boolean(options.holdMetadata),
+    holdPlay: Boolean(options.holdPlay),
   };
 }
 
@@ -405,5 +410,103 @@ test('uninterrupted delayed automatic advancement still plays exactly once', asy
   await waitFor(() => !player.snapshot().loading && player.snapshot().playing);
   assert.equal(engine.current.paused, false);
   assert.equal(engine.current.playCalls, 2);
+  await player.disconnect();
+});
+
+test('one pending Play completes normally', async () => {
+  const { player, engine } = fixture();
+  const source = file('single-pending-play.wav', { holdPlay: true });
+  await player.selectFiles([source]);
+  const playing = player.play();
+  await waitFor(() => source.pendingPlays?.length === 1);
+  source.pendingPlays[0].resolve();
+  await playing;
+  assert.equal(player.snapshot().playing, true);
+  assert.equal(engine.current.paused, false);
+  assert.equal(engine.current.playCalls, 1);
+  await player.disconnect();
+});
+
+test('older pending Play completion does not pause while newer Play is still pending', async () => {
+  const { player, engine } = fixture();
+  const source = file('older-first-pending-play.wav', { holdPlay: true });
+  await player.selectFiles([source]);
+  const olderPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 1);
+  const newerPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 2);
+  source.pendingPlays[0].resolve();
+  await olderPlay;
+  const afterOlder = { playing: player.snapshot().playing, paused: engine.current.paused };
+  source.pendingPlays[1].resolve();
+  await newerPlay;
+  await player.disconnect();
+  assert.deepEqual(afterOlder, { playing: true, paused: false });
+});
+
+test('newer Play remains authoritative when an older native Play resolves last', async () => {
+  const { player, engine } = fixture();
+  const source = file('newer-first-pending-play.wav', { holdPlay: true });
+  await player.selectFiles([source]);
+  const olderPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 1);
+  const newerPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 2);
+  source.pendingPlays[1].resolve();
+  await newerPlay;
+  source.pendingPlays[0].resolve();
+  await olderPlay;
+  const finalState = { playing: player.snapshot().playing, paused: engine.current.paused, playCalls: engine.current.playCalls };
+  await player.disconnect();
+  assert.deepEqual(finalState, { playing: true, paused: false, playCalls: 2 });
+});
+
+test('Pause remains authoritative over a pending native Play completion', async () => {
+  const { player, engine, errors } = fixture();
+  const source = file('pause-pending-play.wav', { holdPlay: true });
+  await player.selectFiles([source]);
+  const pendingPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 1);
+  player.pause();
+  source.pendingPlays[0].resolve();
+  await pendingPlay;
+  assert.equal(player.snapshot().playing, false);
+  assert.equal(engine.current.paused, true);
+  assert.deepEqual(errors, []);
+  await player.disconnect();
+});
+
+test('stale pending Play rejection cannot publish over a newer successful Play', async () => {
+  const { player, engine, errors } = fixture();
+  const source = file('stale-rejection-pending-play.wav', { holdPlay: true });
+  await player.selectFiles([source]);
+  const olderPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 1);
+  const newerPlay = player.play();
+  await waitFor(() => source.pendingPlays?.length === 2);
+  source.pendingPlays[1].resolve();
+  await newerPlay;
+  source.pendingPlays[0].reject(new DOMException('obsolete test-only rejection', 'AbortError'));
+  await olderPlay;
+  assert.equal(player.snapshot().playing, true);
+  assert.equal(engine.current.paused, false);
+  assert.deepEqual(errors, []);
+  await player.disconnect();
+});
+
+test('pending Play completion on a replaced element stops only the retired element', async () => {
+  const { player, engine } = fixture();
+  const retiredSource = file('retired-pending-play.wav', { holdPlay: true });
+  await player.selectFiles([retiredSource]);
+  const retiredElement = engine.current;
+  const retiredPlay = player.play();
+  await waitFor(() => retiredSource.pendingPlays?.length === 1);
+  await player.selectFiles([file('authoritative-replacement.wav')]);
+  const authoritativeElement = engine.current;
+  retiredSource.pendingPlays[0].resolve();
+  await retiredPlay;
+  assert.equal(retiredElement.paused, true);
+  assert.equal(authoritativeElement.paused, true);
+  assert.equal(player.snapshot().queue[0].name, 'authoritative-replacement.wav');
   await player.disconnect();
 });

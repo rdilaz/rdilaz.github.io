@@ -241,7 +241,8 @@ expect(
     && localPlayer.includes('continuationIntentRevision !== this.transportIntentRevision')
     && localPlayerContract.includes('Next then Pause during delayed metadata stays paused')
     && localPlayerContract.includes('uninterrupted delayed automatic advancement still plays exactly once')
-    && localPlayerBrowser.includes('main Pause during a controlled track metadata boundary prevents unsolicited restart'),
+    && localPlayerBrowser.includes('main Pause during a controlled track metadata boundary prevents unsolicited restart')
+    && localPlayerBrowser.includes('newer main Play survives an older controlled native Play completion'),
   'The latest explicit Play/Pause intent must win across delayed track metadata without breaking uninterrupted advancement.',
 );
 expect(

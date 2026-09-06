@@ -367,7 +367,9 @@ export class LocalPlayer {
       if (element !== this.element || revision !== this.transportIntentRevision || !this.playIntent) return false;
       await element.play();
       if (element !== this.element || revision !== this.transportIntentRevision || !this.playIntent) {
-        try { element.pause(); } catch { /* A stale completion cannot reclaim playback. */ }
+        if (element !== this.element || !this.playIntent) {
+          try { element.pause(); } catch { /* A stale completion cannot reclaim playback. */ }
+        }
         return false;
       }
       if (!element.paused) {
