@@ -15,6 +15,7 @@ async function installAudioFixture(page, {
   channels = 1,
   permissionError = '',
   noAudio = false,
+  deferMicrophone = false,
 } = {}) {
   await page.addInitScript(config => {
     class FakeNode {
@@ -111,6 +112,7 @@ async function installAudioFixture(page, {
       latestAudioTrack: null,
       permissionError: config.permissionError,
       noAudio: config.noAudio,
+      pendingMicrophones: [],
     };
     window.__audioFixture = state;
     const makeStream = sourceKind => {
@@ -144,6 +146,12 @@ async function installAudioFixture(page, {
       mediaDevices.getUserMedia = async constraints => {
         state.userMediaCalls.push(structuredClone(constraints));
         if (state.permissionError) throw new DOMException('fixture denied', state.permissionError);
+        if (config.deferMicrophone) {
+          return new Promise((resolve, reject) => state.pendingMicrophones.push({
+            resolve: () => resolve(makeStream('microphone')),
+            reject,
+          }));
+        }
         return makeStream('microphone');
       };
     }
@@ -155,7 +163,7 @@ async function installAudioFixture(page, {
     }
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: mediaDevices });
     Object.defineProperty(window, 'AudioContext', { configurable: true, value: FakeAudioContext });
-  }, { display, microphone, channels, permissionError, noAudio });
+  }, { display, microphone, channels, permissionError, noAudio, deferMicrophone });
 }
 
 async function openVisualizer(page) {
@@ -245,6 +253,7 @@ test('microphone choice is local, music-friendly, mono-safe, diagnostic-safe, an
     expect(evidence.identity.displayName).toBe('Calibration Bloom');
     expect(JSON.stringify(evidence.audio)).not.toMatch(/deviceId|groupId|waveform|spectrum|private-/i);
     await page.locator('#audioButton').click();
+    await page.locator('#audioDisconnectButton').click();
     await expect(page.locator('#audioButtonLabel')).toHaveText('Connect audio');
   }
   const cleanup = await page.evaluate(() => ({
@@ -330,6 +339,7 @@ test('mono microphone VIZ remains viable when Klangfiguren opens', async ({ page
   await page.mouse.move(340, 260);
   await expect(page.locator('body')).not.toHaveClass(/ui-hidden/);
   await page.locator('#audioButton').click();
+  await page.locator('#audioDisconnectButton').click();
   await expect(page.locator('#audioButtonLabel')).toHaveText('Connect audio');
   expect(provider.completions).toBe(0);
 });
@@ -341,7 +351,7 @@ test('desktop direct share stays first, preserves preferred call shape, and neve
   await page.locator('#audioButton').click();
   await expect(page.locator('#audioDisplayOption')).toBeFocused();
   await page.locator('#audioDisplayOption').click();
-  await expect(page.locator('#audioButtonLabel')).toHaveText('Audio connected');
+  await expect(page.locator('#audioButtonLabel')).toHaveText('Shared audio');
   const evidence = await page.evaluate(() => ({
     displayCalls: window.__audioFixture.displayMediaCalls,
     microphoneCalls: window.__audioFixture.userMediaCalls.length,
@@ -358,6 +368,10 @@ test('desktop direct share stays first, preserves preferred call shape, and neve
   expect(evidence.microphoneCalls).toBe(0);
   expect(evidence.videoEnabled).toBe(false);
   expect(evidence.audio).toMatchObject({ sourceKind: 'display', effectiveChannelCount: 2 });
+  await expect(page.locator('#playbackButton')).toHaveAttribute('aria-label', 'Pause visual only; external music keeps playing');
+  await page.locator('#playbackButton').click();
+  await expect(page.locator('#pauseMessage')).toHaveText('Visual paused · music source still controlled externally');
+  await page.locator('#playbackButton').click();
   expect(provider.completions).toBe(0);
 });
 
@@ -395,6 +409,55 @@ test('track-ended and unavailable capability states remain truthful with zero pr
   await expect(page.locator('#audioButtonLabel')).toHaveText('Connect audio');
   await expect(page.locator('#toast')).toContainText('Audio source ended');
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
+  expect(provider.completions).toBe(0);
+});
+
+test('stale microphone rejection cannot close or relabel a newer shared-audio operation', async ({ page }) => {
+  const provider = await blockProviderCompletions(page);
+  await installAudioFixture(page, { display: true, microphone: true, deferMicrophone: true });
+  await openVisualizer(page);
+  await page.locator('#audioButton').click();
+  await page.locator('#audioMicrophoneOption').click();
+  await expect.poll(() => page.evaluate(() => window.__audioFixture.pendingMicrophones.length)).toBe(1);
+
+  await page.evaluate(() => {
+    document.getElementById('audioDisplayOption').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await expect(page.locator('#audioButtonLabel')).toHaveText('Shared audio');
+  await expect(page.locator('#audioPicker')).toBeHidden();
+  const authoritative = await page.evaluate(() => window.VIZ_DEV.state().audio);
+  await page.evaluate(() => {
+    window.__audioFixture.pendingMicrophones[0].reject(new DOMException('stale test-only denial', 'NotAllowedError'));
+  });
+  await page.waitForTimeout(50);
+  expect(await page.evaluate(() => window.VIZ_DEV.state().audio)).toEqual(authoritative);
+  await expect(page.locator('#audioButtonLabel')).toHaveText('Shared audio');
+  await expect(page.locator('#audioPicker')).toBeHidden();
+  await expect(page.locator('#toast')).not.toContainText('permission was not granted');
+  expect(await page.evaluate(() => window.__audioFixture.displayMediaCalls.length)).toBe(1);
+  expect(provider.completions).toBe(0);
+});
+
+test('repeated pagehide never stops an authoritative microphone capture', async ({ page }) => {
+  const provider = await blockProviderCompletions(page);
+  await installAudioFixture(page, { display: false, microphone: true });
+  await openVisualizer(page);
+  await page.locator('#audioButton').click();
+  await page.locator('#audioMicrophoneOption').click();
+  await expect(page.locator('#audioButtonLabel')).toHaveText('Microphone connected');
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await page.waitForTimeout(50);
+  const evidence = await page.evaluate(() => ({
+    stopCount: window.__audioFixture.latestAudioTrack.stopCount,
+    audio: window.VIZ_DEV.state().audio,
+  }));
+  expect(evidence.stopCount).toBe(0);
+  expect(evidence.audio).toMatchObject({ connected: true, sourceKind: 'microphone', connectionReason: 'connected' });
+  await page.locator('#audioButton').click();
+  await page.locator('#audioDisconnectButton').click();
+  expect(await page.evaluate(() => window.__audioFixture.latestAudioTrack.stopCount)).toBe(1);
   expect(provider.completions).toBe(0);
 });
 

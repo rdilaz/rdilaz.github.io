@@ -11,7 +11,10 @@ const crispHtmlBlobHashes = new Set(await Promise.all([
   'gemini-neutral-crisp-2.html',
 ].map(async name => {
   const content = await readFile(new URL(`./fixtures/${name}`, import.meta.url));
-  return createHash('sha1').update(`blob ${content.byteLength}\0`).update(content).digest('hex');
+  const canonicalText = content.toString('utf8').replace(/\r\n/g, '\n');
+  if (/\r/.test(canonicalText)) throw new Error(`${name} contains a non-canonical bare CR byte.`);
+  const canonicalContent = Buffer.from(canonicalText, 'utf8');
+  return createHash('sha1').update(`blob ${canonicalContent.byteLength}\0`).update(canonicalContent).digest('hex');
 })));
 
 async function run(page, html, method = 'runReliabilityFixture') {
