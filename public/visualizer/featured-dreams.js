@@ -1,6 +1,7 @@
 import { DEFAULT_VISUALIZER_HTML } from './default-visualizer.js';
 import { FEATURED_DREAM_MANIFEST, FEATURED_MANIFEST_SCHEMA } from './featured/manifest.js';
 import { RELIABILITY_SCHEMA } from './reliability.js';
+import { AUDIO_API_V2, isKnownAudioApiVersion } from './audio-contract.js';
 
 const SUPPORTED_RELIABILITY_CONTRACTS = new Set(['dream-reliability-v1', 'dream-reliability-v2', RELIABILITY_SCHEMA]);
 
@@ -21,11 +22,15 @@ export function validateFeaturedEntry(entry) {
     if (!String(entry?.[field] || '').trim()) throw new TypeError(`Featured Dream ${field} is required.`);
   }
   if (entry.schema !== FEATURED_MANIFEST_SCHEMA) throw new TypeError(`Featured Dream ${entry.id} has an unsupported schema.`);
+  if (!isKnownAudioApiVersion(entry.audioApiVersion)) throw new TypeError(`Featured Dream ${entry.id} has an unsupported audio contract.`);
   if (!Number.isInteger(entry.order) || entry.order < 1) throw new TypeError(`Featured Dream ${entry.id} requires a positive integer order.`);
   if (!/^\.\/featured\/[a-z0-9-]+\.html$/i.test(entry.htmlPath)) throw new TypeError(`Featured Dream ${entry.id} must use a repository-local HTML path.`);
   if (!/^[a-f0-9]{64}$/i.test(entry.contentDigest)) throw new TypeError(`Featured Dream ${entry.id} requires a SHA-256 content digest.`);
   if (entry.reliability?.status !== 'verified-in-ci' || !SUPPORTED_RELIABILITY_CONTRACTS.has(entry.reliability?.contract)) {
     throw new TypeError(`Featured Dream ${entry.id} requires verified reliability evidence.`);
+  }
+  if (entry.audioApiVersion === AUDIO_API_V2 && entry.reliability.contract !== RELIABILITY_SCHEMA) {
+    throw new TypeError(`Featured Dream ${entry.id} requires V2-capable reliability evidence.`);
   }
   if (!entry.provenance?.operatorApprovalRecord || !['existing-shipped-built-in', 'operator-approved'].includes(entry.provenance?.curationStatus)) {
     throw new TypeError(`Featured Dream ${entry.id} requires an accepted curation record.`);
@@ -129,7 +134,10 @@ function slug(value) {
 export async function createFeaturedExportPackage(generation, { title = '' } = {}) {
   const required = ['id', 'html', 'modelId', 'resolvedModel', 'promptProfileId', 'promptVersion', 'audioApiVersion', 'traceId'];
   const hasProviderIdentity = Boolean(String(generation?.providerGenerationId || generation?.requestId || '').trim());
-  if (required.some(field => !String(generation?.[field] || '').trim()) || !hasProviderIdentity || !generation?.preflightEvidence?.passed || !['ready', 'verified'].includes(generation?.healthStatus)) {
+  const exactAudioEvidence = isKnownAudioApiVersion(generation?.audioApiVersion)
+    && generation?.preflightEvidence?.schema === RELIABILITY_SCHEMA
+    && generation.preflightEvidence.audioApiVersion === generation.audioApiVersion;
+  if (required.some(field => !String(generation?.[field] || '').trim()) || !hasProviderIdentity || !generation?.preflightEvidence?.passed || !exactAudioEvidence || !['ready', 'verified'].includes(generation?.healthStatus)) {
     throw new TypeError('A ready local Dream with exact model, request, prompt, trace, and preflight evidence is required for Featured export.');
   }
   const id = `${slug(title || generation.modelName)}-${String(generation.id).replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase()}`;

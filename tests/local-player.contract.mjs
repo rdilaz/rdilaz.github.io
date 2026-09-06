@@ -117,6 +117,7 @@ class FakeAudioEngine {
     this.connects = [];
     this.resumes = [];
     this.stops = [];
+    this.expressiveResets = [];
   }
 
   async connectMediaElement(element) {
@@ -146,6 +147,10 @@ class FakeAudioEngine {
     this.current = null;
     this.connected = false;
     this.sourceKind = null;
+  }
+
+  resetExpressiveState(reason) {
+    this.expressiveResets.push(reason);
   }
 
   diagnostics() {
@@ -252,6 +257,8 @@ test('selection never autoplays and queue transport preserves pause, seek, advan
   await waitFor(() => !player.snapshot().playing);
   assert.equal(player.snapshot().currentIndex, 1);
   assert.ok(playback.some(event => event.reason === 'queue-ended' && event.playing === false));
+  assert.ok(engine.expressiveResets.includes('seek'));
+  assert.ok(engine.expressiveResets.filter(reason => reason === 'source-replacement').length >= 3);
 
   const betaId = player.snapshot().queue[1].id;
   await player.remove(betaId);

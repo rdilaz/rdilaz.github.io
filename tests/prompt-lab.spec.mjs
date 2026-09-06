@@ -3,6 +3,7 @@ import {
   FIXED_RUNTIME_CONTRACT,
   LEGACY_CANONICAL_VISUALIZER_PROMPT,
   NEUTRAL_CLEAN_CREATIVE_BRIEF,
+  PULSE_SPICE_CREATIVE_BRIEF,
   PROMPT_VERSION,
   buildGenerationMessages,
   buildRepairMessages,
@@ -53,8 +54,8 @@ async function routeOpenRouter(page, onCompletion = null) {
   });
 }
 
-test('neutral default removes spectacle and renderer priming while preserving the exact old baseline', async () => {
-  expect(PROMPT_VERSION).toBe('visualizer-prompt-v2');
+test('neutral remains default while prompt v3 separates optional creative direction from audio v2', async () => {
+  expect(PROMPT_VERSION).toBe('visualizer-prompt-v3');
   const neutral = promptPreset('neutral-v1');
   const neutralMessages = buildGenerationMessages(neutral);
   const neutralText = neutralMessages.map(message => message.content).join('\n');
@@ -77,6 +78,8 @@ test('neutral default removes spectacle and renderer priming while preserving th
   expect(neutralText).toContain('any browser-native capability available inside the sandbox');
   expect(neutralText).toContain('The host does not prefer or recommend any particular implementation or visual approach.');
   expect(FIXED_RUNTIME_CONTRACT).toContain('window.VIZ');
+  expect(FIXED_RUNTIME_CONTRACT).toContain('visualizer-audio-v2');
+  expect(FIXED_RUNTIME_CONTRACT).toContain('visualizer-expressive-audio-v1');
 
   const clean = promptPreset('neutral-clean-v1');
   expect(clean).toMatchObject({ id: 'neutral-clean-v1', name: 'Neutral Clean v1', legacy: false });
@@ -88,11 +91,18 @@ test('neutral default removes spectacle and renderer priming while preserving th
   }
   expect(promptPreset().id).toBe('neutral-v1');
 
+  const pulse = promptPreset('pulse-spice-v1');
+  expect(pulse).toMatchObject({ id: 'pulse-spice-v1', name: 'Pulse + Spice', legacy: false });
+  expect(pulse.creativeBrief).toBe(PULSE_SPICE_CREATIVE_BRIEF);
+  expect(buildGenerationMessages(pulse)[1].content).toBe(`${PULSE_SPICE_CREATIVE_BRIEF}\n\n${FIXED_RUNTIME_CONTRACT}`);
+
   const baseline = promptPreset('baseline-v1');
   const baselineMessages = buildGenerationMessages(baseline);
-  expect(baselineMessages[1].content).toBe(LEGACY_CANONICAL_VISUALIZER_PROMPT);
+  expect(baselineMessages[1].content).toBe(`${baseline.creativeBrief}\n\n${FIXED_RUNTIME_CONTRACT}`);
   expect(baselineMessages[1].content).toContain('wow factor');
-  expect(baselineMessages[1].content).toContain('WebGL/WebGL2');
+  expect(baselineMessages[1].content).not.toContain('WebGL/WebGL2');
+  expect(LEGACY_CANONICAL_VISUALIZER_PROMPT).toContain('visualizer-audio-v1');
+  expect(LEGACY_CANONICAL_VISUALIZER_PROMPT).toContain('WebGL/WebGL2');
 });
 
 test('custom prompts are appended to a fixed runtime contract and reused by repair', async () => {
@@ -123,6 +133,9 @@ test('Prompt Lab edits and persists the creative brief without exposing the fixe
 
   await page.getByRole('button', { name: 'Neutral Clean v1' }).click();
   await expect(editor).toHaveValue(NEUTRAL_CLEAN_CREATIVE_BRIEF);
+
+  await page.getByRole('button', { name: 'Pulse + Spice' }).click();
+  await expect(editor).toHaveValue(PULSE_SPICE_CREATIVE_BRIEF);
 
   await page.getByRole('button', { name: 'Original baseline' }).click();
   await expect(editor).toHaveValue(/wow factor/);

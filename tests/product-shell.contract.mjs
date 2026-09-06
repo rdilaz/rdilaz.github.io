@@ -479,7 +479,11 @@ test('curation export requires complete evidence and remains unloadable before o
     traceId: 'trace-local',
     requestId: 'request-local',
     healthStatus: 'ready',
-    preflightEvidence: { passed: true },
+    preflightEvidence: {
+      passed: true,
+      schema: 'dream-reliability-v3',
+      audioApiVersion: 'visualizer-audio-v1',
+    },
     html: HTML,
   });
   assert.equal(exported.reviewStatus, 'pending-operator-review');
@@ -488,4 +492,24 @@ test('curation export requires complete evidence and remains unloadable before o
   assert.match(exported.manifestEntry.contentDigest, /^[a-f0-9]{64}$/);
   assert.throws(() => validateFeaturedEntry(exported.manifestEntry), /positive integer|accepted curation|verified reliability/i);
   assert.equal(exported.html, HTML);
+
+  const invalidV2Reliability = structuredClone(FEATURED_DREAM_MANIFEST[0]);
+  invalidV2Reliability.audioApiVersion = 'visualizer-audio-v2';
+  invalidV2Reliability.reliability.contract = 'dream-reliability-v2';
+  assert.throws(() => validateFeaturedEntry(invalidV2Reliability), /V2-capable reliability evidence/i);
+
+  await assert.rejects(createFeaturedExportPackage({
+    id: 'unknown-contract',
+    modelId: MODEL.id,
+    modelName: MODEL.name,
+    resolvedModel: `${MODEL.id}:exact`,
+    promptProfileId: PROMPT.id,
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v99',
+    traceId: 'trace-unknown',
+    requestId: 'request-unknown',
+    healthStatus: 'ready',
+    preflightEvidence: { passed: true, schema: 'dream-reliability-v3', audioApiVersion: 'visualizer-audio-v1' },
+    html: HTML,
+  }), /preflight evidence/i);
 });

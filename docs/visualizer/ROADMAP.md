@@ -20,7 +20,7 @@ These remain true through every milestone:
 - The user can analyze arbitrary physical music through explicit microphone capture or use system/tab audio where browser support permits.
 - Audio stays local unless a future source integration explicitly requires otherwise.
 - Generated visualizers remain isolated in the network-denied sandbox.
-- Models receive the same music-state API and no song/genre/reference artwork.
+- New generations receive the same current music-state API and no song/genre/reference artwork; existing artifacts retain their declared compatibility version and unknown provenance fails safely to V1.
 - The host must not prescribe an aesthetic or rendering technology.
 - A candidate never destroys the currently working visualizer before proving itself.
 - At most one same-model repair is automatic.
@@ -192,7 +192,8 @@ Current product presets:
 
 - Neutral blank canvas — minimal creative direction.
 - Neutral Clean v1 — restrained brightness, haze, and blur direction.
-- Original baseline — the preserved first-experiment prompt.
+- Pulse + Spice — optional music-causality, impact, quiet, and spectral direction.
+- Original baseline — the preserved first-experiment artistic brief paired with the current runtime contract.
 - Custom — user-written creative brief.
 
 The fixed technical runtime/VIZ contract stays separate and non-editable in normal use.
@@ -207,6 +208,18 @@ Implemented local capabilities:
 - show which prompt created a saved Dream.
 
 Prompt presets are creative choices, not hidden quality tiers.
+
+---
+
+# Stage 2.5 — Music Reactivity v2: Better Ears
+
+**Status:** Implemented with deterministic pure and Chromium evidence; production listening, generated-art A/B acceptance, and real-iPhone/WebKit evidence remain pending.
+
+The host now analyzes a sharper, bounded V2 expressive layer entirely in the trusted browser. New Dreams receive `visualizer-audio-v2`; existing Featured/saved V1 Dreams and absent or unknown provenance retain the exact V1 frame. Per-artifact routing survives generation, repair, validation, Open, retest, rollback, and restore without changing sandbox permissions or sending live analysis to a provider.
+
+V2 adds quiet-state duration, fast/slow dynamics, attack/release/crest/surge, broad and low/mid/high retained attack gestures, conservative tempo/phase confidence, and 24 logarithmic current/attack bands. These are signal descriptions, not instrument, genre, drop, emotion, key, or song-section classifiers. Analysis cadence stays independent of Full/Balanced/Saver delivery.
+
+`Pulse + Spice` is an optional creative preset; Neutral remains the default. A deterministic host-authored reference instrument and screenshot/pixel evidence are research fixtures only, never Featured candidates or automatic taste gates. Generated artistic improvement remains unaccepted until the later blinded same-model V1/V2 campaign or equivalent live evidence is reviewed.
 
 ---
 
@@ -419,7 +432,13 @@ Unless new evidence changes the priority, close and validate milestones in this 
    - clear local versus external source and Pause semantics
    - reduced-motion startup pause and 320 CSS pixel host UI
 
-5. **Acceptance and evidence**
+5. **Music Reactivity v2: Better Ears**
+   - exact V1 compatibility plus per-artifact V2 routing
+   - browser-local expressive dynamics, retained regional events, logarithmic bands, and conservative rhythm
+   - optional Pulse + Spice direction and test-only reference evidence
+   - same-model blinded V1/V2 generation campaign pending operator authorization
+
+6. **Acceptance and evidence**
    - desktop first-session dogfood
    - real-iPhone first-session acceptance; mobile Chromium emulation is not a substitute
    - separate evidence-led Full → Balanced → Saver → Full quality investigation
@@ -427,21 +446,21 @@ Unless new evidence changes the priority, close and validate milestones in this 
 
 A later deep HCDD/UX polish pass should be driven by observed first-use, model-choice, spend-confirmation, and failed-Dream behavior after the evidence campaign; it is not a substitute for current milestone verification.
 
-6. **Creator value discovery**
+7. **Creator value discovery**
    - renderer-by-renderer recording/export feasibility
    - willingness-to-pay research before building billing
 
-7. **Commercial hosting and security review**
+8. **Commercial hosting and security review**
    - treat GitHub Pages as incubation rather than the commercial SaaS host
    - isolate untrusted artifact delivery from a trusted future account origin
    - review direct artwork URL navigation plus navigation/network boundaries
    - harden credentials, headers, dependencies, and required main-branch review/CI
 
-8. **Managed generation discovery**
+9. **Managed generation discovery**
    - only with server-enforced authentication, budgets, idempotent accounting, abuse controls, and a clear failure/refund policy
    - client-only spend caps remain user protection, not site-funded billing authority
 
-9. **Cloud sharing/library and community gates**
+10. **Cloud sharing/library and community gates**
    - proceed only after separate trust, rights, moderation, and privacy review
 
 Model-authored controls remain a later experiment rather than a dependency for product launch.
