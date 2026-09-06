@@ -120,7 +120,7 @@
           <button class="control control--switcher" id="switcherButton" type="button" aria-expanded="false" aria-controls="dreamSwitcherPanel"><span class="control__hint">DREAMS</span><strong id="switcherCurrent">Calibration Bloom</strong></button>
           <button class="control control--model" id="modelButton" type="button" aria-labelledby="nextModelLabel selectedModelName"><span class="control__hint" id="nextModelLabel">NEXT</span><strong id="selectedModelName" aria-live="polite">Choose a model</strong></button>
           <button class="control control--prompt" id="promptLabButton" type="button" aria-label="Edit creative prompt"><span class="control__hint">PROMPT</span><strong>Neutral</strong></button>
-          <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model"><span class="control__icon">✦</span><span>Dream</span><small class="dream-cost" id="dreamCost"></small></button>
+          <button class="control control--primary" id="dreamButton" type="button" title="Generate a new visualizer with this model" aria-labelledby="dreamButtonLabel" aria-describedby="dreamCost"><span class="dream-action__label"><span class="control__icon" aria-hidden="true">✦</span><strong id="dreamButtonLabel">Dream</strong></span><small class="dream-cost" id="dreamCost"></small></button>
           <button class="control control--icon" id="favoriteButton" type="button" aria-label="Save current Dream to favorites" aria-pressed="false" title="Favorite">♡</button>
           <button class="control control--icon" id="fullscreenButton" type="button" aria-label="Enter fullscreen" aria-pressed="false" title="Fullscreen">⛶</button>
         </nav>

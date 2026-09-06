@@ -157,6 +157,7 @@ const [
   syntheticAudioFixture,
   product,
   roadmap,
+  dreamToolbarBrowser,
 ] = await Promise.all([
   read('public/visualizer/local-player.js'),
   read('public/visualizer/first-session.js'),
@@ -167,6 +168,7 @@ const [
   read('tests/helpers/synthetic-audio.mjs'),
   read('docs/visualizer/PRODUCT.md'),
   read('docs/visualizer/ROADMAP.md'),
+  read('tests/dream-toolbar.spec.mjs'),
 ]);
 
 const failures = [];
@@ -259,6 +261,16 @@ expect(
     && !/every (?:other )?model receives/i.test(index)
     && !/(?:the )?(?:model|provider) receives (?:your |the )?(?:song|audio|signals)/i.test(index),
   'Privacy copy must never imply that a model or provider receives music or live audio signals.',
+);
+expect(
+  index.includes('aria-labelledby="dreamButtonLabel" aria-describedby="dreamCost"')
+    && index.includes('class="dream-action__label"')
+    && productShellCss.includes('.control--primary .dream-cost')
+    && productShellCss.includes('white-space: normal')
+    && dreamToolbarBrowser.includes('Cost line')
+    && dreamToolbarBrowser.includes('toHaveAccessibleDescription')
+    && dreamToolbarBrowser.includes('toBeDisabled'),
+  'Dream label and cost must remain contained, accessible, and truthful across narrow toolbar states.',
 );
 expect(
   firstSession.includes("FIRST_SESSION_STORAGE_KEY = 'ai-visualizer.first-session.v1'")

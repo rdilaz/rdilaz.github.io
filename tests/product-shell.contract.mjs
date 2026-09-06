@@ -52,6 +52,7 @@ const MODEL = Object.freeze({ id: 'moonshotai/kimi-k3', name: 'Kimi K3', provide
 const PROMPT = Object.freeze({ id: 'neutral-v1', name: 'Neutral blank canvas', creativeBrief: 'Create what you think music looks like.' });
 const HTML = '<!doctype html><html><body><canvas></canvas><script>VIZ.onFrame(()=>{});</script></body></html>';
 const indexHtml = await readFile(new URL('../public/visualizer/index.html', import.meta.url), 'utf8');
+const productShellCss = await readFile(new URL('../public/visualizer/product-shell.css', import.meta.url), 'utf8');
 const featuredHtml = Object.fromEntries(await Promise.all(FEATURED_DREAM_MANIFEST.map(async entry => [
   entry.id,
   await readFile(new URL(`../public/visualizer/${entry.htmlPath.replace(/^\.\//, '')}`, import.meta.url), 'utf8'),
@@ -121,6 +122,13 @@ test('host privacy copy says only the generated browser instrument receives norm
   assert.match(indexHtml, /once it runs in your browser, the host feeds that instrument the same normalized local visualizer signals used for every Dream\./);
   assert.doesNotMatch(indexHtml, /every (?:other )?model receives/i);
   assert.doesNotMatch(indexHtml, /(?:the )?(?:model|provider) receives (?:your |the )?(?:song|audio|signals)/i);
+});
+
+test('Dream action gives its label priority and exposes wrapping cost as an accessible description', () => {
+  assert.match(indexHtml, /id="dreamButton"[^>]+aria-labelledby="dreamButtonLabel" aria-describedby="dreamCost"/);
+  assert.match(indexHtml, /class="dream-action__label"[\s\S]*id="dreamButtonLabel">Dream<\/strong>[\s\S]*id="dreamCost"/);
+  assert.match(productShellCss, /\.control--primary \{[\s\S]*grid-template-rows: auto auto;[\s\S]*padding: 1px 6px;/);
+  assert.match(productShellCss, /\.control--primary \.dream-cost \{[\s\S]*white-space: normal;/);
 });
 
 test('Featured guide metadata is editorial, artifact-specific, and absent for unknown Dreams', () => {

@@ -37,6 +37,18 @@
   font-size: 15px;
 }
 
+.dream-action__label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dream-action__label strong {
+  font: inherit;
+}
+
 .controls {
   width: min(1080px, calc(100vw - 30px));
   grid-template-columns: 48px minmax(126px, .8fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(104px, .72fr) auto 48px 48px;
@@ -1221,6 +1233,33 @@ body.pseudo-fullscreen .app {
   .control--primary { grid-area: dream; }
   #favoriteButton { grid-area: favorite; }
   #fullscreenButton { grid-area: fullscreen; }
+
+  .control--primary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: center;
+    justify-items: center;
+    gap: 1px;
+    padding: 1px 6px;
+  }
+
+  .control--primary .dream-action__label {
+    gap: 6px;
+    line-height: 1;
+  }
+
+  .control--primary .dream-cost {
+    width: 100%;
+    margin: 0;
+    line-height: 1.05;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .control--primary .dream-cost:empty {
+    display: none;
+  }
 
   .control--switcher,
   .control--model,
