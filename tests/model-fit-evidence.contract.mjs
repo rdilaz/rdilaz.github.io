@@ -467,6 +467,32 @@ test('78: audio, reliability, runtime, and exact prompt versions are separately 
   ]) assert.notEqual(modelFitConfigurationKey(changed), baselineKey);
 });
 
+test('V1 and V2 observations survive reload and export in separate compatibility buckets', () => {
+  const storage = memoryStorage();
+  const v1 = configuration();
+  const v2 = configuration({
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+    reliabilityVersion: 'dream-reliability-v3',
+    runtimeVersion: 'visualizer-runtime-v3',
+  });
+  const store = createModelFitEvidenceStore(storage);
+  store.recordObservation(failedObservation('audio-v1-observation', v1));
+  store.recordObservation(failedObservation('audio-v2-observation', v2));
+
+  const reloaded = createModelFitEvidenceStore(storage);
+  assert.equal(reloaded.snapshot().configurations.length, 2);
+  assert.notEqual(modelFitConfigurationKey(v1), modelFitConfigurationKey(v2));
+  assert.equal(reloaded.configuration(v1).aggregate.observationCount, 1);
+  assert.equal(reloaded.configuration(v2).aggregate.observationCount, 1);
+  const matrix = createModelFitMatrixExport(reloaded, { currentVersions: v2, capturedAt: 2000 });
+  assert.equal(matrix.configurations.length, 2);
+  assert.deepEqual(new Set(matrix.configurations.map(entry => entry.identity.audioApiVersion)), new Set([
+    'visualizer-audio-v1',
+    'visualizer-audio-v2',
+  ]));
+});
+
 test('80: injected storage survives reload and observation IDs remain idempotent', () => {
   const storage = memoryStorage();
   const first = createModelFitEvidenceStore(storage);

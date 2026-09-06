@@ -128,6 +128,8 @@ async function openFeatured(page, id, title) {
   const probe = await page.evaluate(label => window.VIZ_DEV.probeActive(label), `featured-open-${id}`);
   expect(probe.visual.visibleProof).toBe(true);
   expect(probe.viz.consumed).toBe(true);
+  expect(probe.viz.latestFrame.version).toBe('visualizer-audio-v1');
+  expect(probe.viz.latestFrame.shape.expressive).toBeNull();
 }
 
 test('fresh desktop visitor sees and switches the exact launch set without inference or Library writes', async ({ page }) => {

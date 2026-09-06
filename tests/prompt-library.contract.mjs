@@ -5,6 +5,7 @@ import {
   AUDIO_API_VERSION,
   FIXED_RUNTIME_CONTRACT,
   LEGACY_CANONICAL_VISUALIZER_PROMPT,
+  PROMPT_PRESETS,
   PROMPT_STORAGE_KEY,
   PROMPT_VERSION,
   buildGenerationMessages,
@@ -54,6 +55,22 @@ function modelFitInput(profile) {
     runtimeVersion: 'visualizer-runtime-v3',
   };
 }
+
+test('prompt v3 keeps Neutral default and exposes optional Pulse + Spice on audio v2', () => {
+  assert.equal(PROMPT_VERSION, 'visualizer-prompt-v3');
+  assert.equal(AUDIO_API_VERSION, 'visualizer-audio-v2');
+  assert.equal(promptPreset().id, 'neutral-v1');
+  const pulse = promptPreset('pulse-spice-v1');
+  assert.equal(pulse.name, 'Pulse + Spice');
+  assert.match(pulse.creativeBrief, /audio state the primary cause of visible change/);
+  assert.match(pulse.creativeBrief, /complete artistic freedom/);
+  assert.equal(PROMPT_PRESETS.find(preset => preset.id === 'pulse-spice-v1')?.legacy, false);
+  for (const preset of PROMPT_PRESETS) {
+    const messages = buildGenerationMessages(promptPreset(preset.id));
+    assert.match(messages[1].content, /visualizer-audio-v2/);
+    assert.doesNotMatch(messages[1].content, /VIZ\.version -> "visualizer-audio-v1"/);
+  }
+});
 
 test('named snapshots persist and use the existing active-profile mechanism exactly', () => {
   const storage = memoryStorage();
@@ -114,7 +131,7 @@ test('rename and duplicate preserve content identity, request messages, and mode
   assert.equal(duplicate.briefHash, original.briefHash);
 });
 
-test('saved built-in starting points retain exact preset request semantics', () => {
+test('saved built-in starting points retain creative identity under the current V2 contract', () => {
   const storage = memoryStorage();
   const library = deterministicLibrary(storage);
   const baseline = promptPreset('baseline-v1');
@@ -124,11 +141,13 @@ test('saved built-in starting points retain exact preset request semantics', () 
   assert.equal(entry.profileId, baseline.id);
   assert.equal(entry.briefHash, baseline.briefHash);
   assert.deepEqual(library.profile(entry.entryId), baseline);
-  assert.equal(buildGenerationMessages(library.profile(entry.entryId))[1].content, LEGACY_CANONICAL_VISUALIZER_PROMPT);
+  assert.equal(buildGenerationMessages(library.profile(entry.entryId))[1].content, `${baseline.creativeBrief}\n\n${FIXED_RUNTIME_CONTRACT}`);
+  assert.match(LEGACY_CANONICAL_VISUALIZER_PROMPT, /visualizer-audio-v1/);
+  assert.doesNotMatch(LEGACY_CANONICAL_VISUALIZER_PROMPT, /visualizer-audio-v2/);
 
   const renamed = library.rename(entry.entryId, 'Renamed baseline reference');
   assert.equal(renamed.profileId, baseline.id);
-  assert.equal(buildGenerationMessages(library.profile(entry.entryId))[1].content, LEGACY_CANONICAL_VISUALIZER_PROMPT);
+  assert.equal(buildGenerationMessages(library.profile(entry.entryId))[1].content, `${baseline.creativeBrief}\n\n${FIXED_RUNTIME_CONTRACT}`);
 });
 
 test('editing and saving a draft creates a new identity without mutating old snapshots', () => {
@@ -161,7 +180,7 @@ test('delete removes only a library entry and built-in presets remain outside mu
   assert.deepEqual(loadPromptProfile(storage), active);
   assert.deepEqual(storage.json('fixture.dream-evidence'), { kept: true });
 
-  assert.deepEqual(library.builtIns().map(preset => preset.id), ['neutral-v1', 'neutral-clean-v1', 'baseline-v1']);
+  assert.deepEqual(library.builtIns().map(preset => preset.id), ['neutral-v1', 'neutral-clean-v1', 'pulse-spice-v1', 'baseline-v1']);
   assert.throws(() => library.rename('neutral-v1', 'Changed'), /not found/);
   assert.throws(() => library.delete('baseline-v1'), /not found/);
 });

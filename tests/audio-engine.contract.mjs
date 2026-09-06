@@ -81,8 +81,12 @@ class FakeAnalyser extends FakeNode {
     target.fill(this.index < 2 ? 96 : 0);
   }
 
+  getFloatFrequencyData(target) {
+    target.fill(this.index === 2 ? -28 : -120);
+  }
+
   getFloatTimeDomainData(target) {
-    const amplitude = this.index === 2 ? .08 : this.index === 3 ? .31 : .24;
+    const amplitude = this.index === 3 ? .08 : this.index === 4 ? .31 : .24;
     for (let index = 0; index < target.length; index += 1) {
       target[index] = Math.sin(index / 5) * amplitude;
     }
@@ -275,7 +279,7 @@ test('trusted local media element has one audible route and reuses one analysis 
   const context = FakeAudioContext.instances[0];
   assert.equal(context.state, 'suspended');
   assert.equal(context.mediaSources.length, 1);
-  assert.equal(context.mediaSources[0].connections.length, 2);
+  assert.equal(context.mediaSources[0].connections.length, 3);
   assert.equal(context.analysers[0].connections.filter(connection => connection.target === context.destination).length, 1);
   assert.equal(context.analysers[1].connections.filter(connection => connection.target === context.destination).length, 0);
   assert.deepEqual(engine.diagnostics(), {
@@ -712,10 +716,10 @@ test('synthetic true stereo preserves balance and width analysis', async () => {
   await engine.stop();
 });
 
-test('capture source never changes VIZ schema, sensitivity semantics, or generation messages', async () => {
+test('capture source never changes V2 analysis schema, sensitivity semantics, or generation messages', async () => {
   const expectedKeys = [
     'connected', 'silence', 'volume', 'peak', 'transient', 'beat', 'tempo', 'tempoConfidence',
-    'spectralFlux', 'spectralCentroid', 'bands', 'stereo', 'waveform', 'spectrum', 'time', 'deltaTime',
+    'spectralFlux', 'spectralCentroid', 'bands', 'stereo', 'waveform', 'spectrum', 'expressive', 'time', 'deltaTime',
   ];
   const messagesBefore = buildGenerationMessages();
   const fixture = mediaFixture();
@@ -726,7 +730,7 @@ test('capture source never changes VIZ schema, sensitivity semantics, or generat
   const sample = engine.sample(performance.now() + 16);
   assert.deepEqual(Object.keys(sample), expectedKeys);
   assert.deepEqual(Object.keys(applyAudioSensitivity(sample, 130)), expectedKeys);
-  assert.equal(AUDIO_API_VERSION, 'visualizer-audio-v1');
+  assert.equal(AUDIO_API_VERSION, 'visualizer-audio-v2');
   assert.deepEqual(buildGenerationMessages(), messagesBefore);
   await engine.stop();
 });

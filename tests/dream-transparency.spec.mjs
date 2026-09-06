@@ -194,6 +194,9 @@ test('developer self-test renders inert full conversations and truthful reasonin
     return window.VIZ_DEV.listTraces();
   });
   expect(tracesAfterVersionChange.map(trace => trace.id)).toEqual(expect.arrayContaining(fixture.traceIds));
+  const fixtureRetest = await page.evaluate(id => window.VIZ_DEV.retestTrace(id, 2), fixture.exposedReasoningTraceId);
+  expect(fixtureRetest.audioApiVersion).toBe('visualizer-audio-v2');
+  expect(fixtureRetest.reliability.audioApiVersion).toBe('visualizer-audio-v2');
 });
 
 test('legacy diagnostics remain readable and failed saved-Dream revalidation preserves LIVE', async ({ page }) => {
@@ -274,6 +277,10 @@ test('provider failure closes its exact attempt without changing LIVE', async ({
   await expect(page.locator('#dreamJobOpen')).toBeHidden();
   await expect(page.locator('#liveIdentityName')).toHaveText('Calibration Bloom');
   const trace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
+  expect(trace).toMatchObject({
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+  });
   expect(trace.status).toBe('failed');
   expect(trace.providerRequestCount).toBe(1);
   expect(trace.attempts).toHaveLength(1);
@@ -629,11 +636,22 @@ test('mocked repair preserves both attempts and never sends attempt three', asyn
   expect(String(requestBodies[1].messages[0].content)).toMatch(/^Repair the visualizer/);
   expect(requestBodies[1].messages[1].content).toContain('incomplete');
   const trace = await page.evaluate(() => window.VIZ_DEV.latestTrace());
+  expect(trace).toMatchObject({
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+  });
   expect(trace.attempts).toHaveLength(2);
   expect(trace.attempts[0].kind).toBe('generation');
   expect(trace.attempts[1].kind).toBe('repair');
   expect(trace.attempts[0].response.rawOutput).toContain('incomplete');
   expect(trace.attempts[1].response.rawOutput).toBe(validHtml);
+  for (const attempt of trace.attempts) {
+    expect(attempt.request.policy.prompt).toMatchObject({
+      version: 'visualizer-prompt-v3',
+      audioApiVersion: 'visualizer-audio-v2',
+    });
+    expect(attempt.request.policy.modelFitConfiguration.audioApiVersion).toBe('visualizer-audio-v2');
+  }
   expect(trace.repairUsed).toBe(true);
   expect(trace.providerRequestCount).toBe(2);
   expect(trace.totalReportedCost).toBeCloseTo(0.03, 8);

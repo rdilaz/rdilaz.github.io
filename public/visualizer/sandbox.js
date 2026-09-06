@@ -1,3 +1,10 @@
+import {
+  AUDIO_API_V1,
+  createInitialVisualizerFrame,
+  projectVisualizerFrame,
+  resolveAudioApiVersion,
+} from './audio-contract.js';
+
 const SANDBOX_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline' 'wasm-unsafe-eval'",
@@ -16,12 +23,13 @@ const SANDBOX_CSP = [
 
 const BRIDGE_INIT_CHANNEL = 'visualizer-private-bridge-v1';
 
-function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
+function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused, initialAudioApiVersion) {
   'use strict';
 
   const BRIDGE_INIT_CHANNEL_INNER = 'visualizer-private-bridge-v1';
   const MAX_EVENTS = 80;
   const MAX_TEXT = 2200;
+  const GENERATED_TEXT_OMITTED = 'Generated diagnostic text omitted.';
   const originalRAF = window.requestAnimationFrame.bind(window);
   const originalCancelRAF = window.cancelAnimationFrame.bind(window);
   const originalSetTimeout = window.setTimeout.bind(window);
@@ -32,6 +40,9 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     warn: console.warn.bind(console),
     log: console.log.bind(console),
   };
+  const audioApiVersion = initialAudioApiVersion === 'visualizer-audio-v2'
+    ? 'visualizer-audio-v2'
+    : 'visualizer-audio-v1';
   let nativeDevicePixelRatio = Number(window.devicePixelRatio) > 0 ? Number(window.devicePixelRatio) : 1;
   function normalizeRenderQuality(value) {
     const suppliedNativeDpr = Number(value?.nativeDpr);
@@ -118,7 +129,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   let animationFrameSequence = 0;
   let hostAnimationOperation = false;
   let currentFrame = {
-    version: 'visualizer-audio-v1',
+    version: audioApiVersion,
     time: 0,
     deltaTime: 0,
     audio: {
@@ -140,6 +151,30 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     pointer: { x: 0.5, y: 0.5, active: false, down: false },
     viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
   };
+  if (audioApiVersion === 'visualizer-audio-v2') {
+    const emptyEvent = () => ({ pulse: 0, strength: 0, ageSeconds: 30 });
+    currentFrame.audio.expressive = {
+      version: 'visualizer-expressive-audio-v1',
+      dynamics: {
+        fast: 0,
+        slow: 0,
+        attack: 0,
+        release: 0,
+        quietness: 1,
+        silenceSeconds: 0,
+        crest: 0,
+        surge: 0,
+      },
+      events: {
+        onset: emptyEvent(),
+        lowImpact: emptyEvent(),
+        midHit: emptyEvent(),
+        highSpark: emptyEvent(),
+      },
+      rhythm: { pulse: 0, phase: 0, tempo: 0, confidence: 0 },
+      frequency: { logBands: Array(24).fill(0), bandAttack: Array(24).fill(0) },
+    };
+  }
   let lastDeliveredFrameTime = null;
   let viewport = currentFrame.viewport;
   let nextGeneratedFrameAt = 0;
@@ -229,23 +264,17 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
     }
   }
 
-  function compactText(value) {
+  function safeGeneratedText(value, fallback = GENERATED_TEXT_OMITTED) {
+    if (state.hostFrames > 0) return fallback;
     try {
-      if (value instanceof Error) return String(value.stack || value.message || value);
-      if (typeof value === 'string') return value;
-      if (typeof value === 'number' || typeof value === 'boolean' || value == null) return String(value);
-      return JSON.stringify(value, (_key, nested) => {
-        if (nested instanceof Error) return String(nested.stack || nested.message || nested);
-        if (typeof nested === 'bigint') return String(nested);
-        return nested;
-      });
+      if (value instanceof Error) return String(value.stack || value.message || value).slice(0, MAX_TEXT);
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return String(value).slice(0, MAX_TEXT);
+      }
     } catch {
-      try { return String(value); } catch { return '[unprintable]'; }
+      // Generated accessors and coercion cannot escape the fixed fallback.
     }
-  }
-
-  function argsText(args) {
-    return args.map(compactText).join(' ').slice(0, MAX_TEXT);
+    return fallback;
   }
 
   function recordList(list, value, limit = 24) {
@@ -296,14 +325,18 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   }
 
   replaceFunction(console, 'error', original => function (...args) {
-    const message = argsText(args);
+    const message = state.hostFrames > 0
+      ? 'Generated code called console.error after audio delivery; arguments omitted.'
+      : args.map(value => safeGeneratedText(value)).join(' ').slice(0, MAX_TEXT);
     recordList(state.consoleErrors, message);
     recordEvent('error', 'CONSOLE_ERROR', message);
     return Reflect.apply(original, console, args);
   });
 
   replaceFunction(console, 'warn', original => function (...args) {
-    const message = argsText(args);
+    const message = state.hostFrames > 0
+      ? 'Generated code called console.warn after audio delivery; arguments omitted.'
+      : args.map(value => safeGeneratedText(value)).join(' ').slice(0, MAX_TEXT);
     recordList(state.consoleWarnings, message);
     return Reflect.apply(original, console, args);
   });
@@ -533,6 +566,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       }
       record = {
         id: `canvas-${contextRecords.length + 1}`,
+        elementId: state.hostFrames === 0 ? String(canvas.id || '').slice(0, 120) : '',
         type,
         canvas,
         context,
@@ -556,13 +590,13 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       contextByCanvas.set(canvas, record);
       contextByObject.set(context, record);
       canvas.addEventListener('webglcontextlost', event => {
+        if (!event.isTrusted) return;
         const item = {
           canvasId: record.id,
-          statusMessage: String(event.statusMessage || ''),
           restored: false,
         };
         recordList(state.contextLosses, item);
-        recordEvent('error', 'WEBGL_CONTEXT_LOST', `WebGL context lost${item.statusMessage ? `: ${item.statusMessage}` : '.'}`, item);
+        recordEvent('error', 'WEBGL_CONTEXT_LOST', 'WebGL context lost.', item);
         originalSetTimeout(() => {
           if (!item.restored) recordEvent('fatal', 'WEBGL_CONTEXT_LOST', 'WebGL context did not recover after being lost.', item);
         }, 500);
@@ -630,8 +664,8 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
         informative: buckets.size > 1 || nonBlack > 0 || variance > 0.25,
         error: '',
       };
-    } catch (error) {
-      pixel.error = compactText(error).slice(0, 500);
+    } catch {
+      pixel.error = 'Canvas pixel sampling failed.';
     }
     return pixel;
   }
@@ -657,9 +691,12 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       try {
         context = Reflect.apply(originalGetContext, this, [type, ...args]);
       } catch (error) {
-        const item = { type: String(type), message: compactText(error) };
+        const normalizedType = ['2d', 'webgl', 'experimental-webgl', 'webgl2', 'webgpu'].includes(String(type).toLowerCase())
+          ? String(type).toLowerCase()
+          : 'unknown';
+        const item = { type: normalizedType, message: safeGeneratedText(error) };
         recordList(state.contextFailures, item);
-        recordEvent('error', 'RENDER_CONTEXT_FAILED', `Canvas context ${type} threw during creation.`, item);
+        recordEvent('error', 'RENDER_CONTEXT_FAILED', `Canvas context ${normalizedType} threw during creation.`, item);
         throw error;
       }
       if (context) contextRecord(this, String(type).toLowerCase(), context);
@@ -726,7 +763,10 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
         } else {
           const item = {
             canvasId: record?.id || null,
-            log: String(this.getShaderInfoLog(shader) || 'Unknown shader compilation error').slice(0, MAX_TEXT),
+            log: safeGeneratedText(
+              this.getShaderInfoLog(shader) || 'Unknown shader compilation error',
+              'Shader compilation failed after audio delivery; compiler text omitted.',
+            ),
           };
           recordList(state.shaderFailures, item);
           recordEvent('error', 'SHADER_COMPILE_FAILED', item.log, item);
@@ -747,7 +787,10 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
         } else {
           const item = {
             canvasId: record?.id || null,
-            log: String(this.getProgramInfoLog(program) || 'Unknown program link error').slice(0, MAX_TEXT),
+            log: safeGeneratedText(
+              this.getProgramInfoLog(program) || 'Unknown program link error',
+              'Program linking failed after audio delivery; linker text omitted.',
+            ),
           };
           recordList(state.programFailures, item);
           recordEvent('error', 'PROGRAM_LINK_FAILED', item.log, item);
@@ -903,7 +946,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
 
     return {
       id: record?.id || null,
-      elementId: canvas.id || '',
+      elementId: record?.elementId || '',
       width: Math.round(visible.rect.width),
       height: Math.round(visible.rect.height),
       left: Math.round(visible.rect.left),
@@ -1113,6 +1156,30 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
           version: String(currentFrame?.version || ''),
           time: Number(currentFrame?.time) || 0,
           deltaTime: Number(currentFrame?.deltaTime) || 0,
+          shape: {
+            frame: Object.keys(currentFrame || {}),
+            audio: Object.keys(currentFrame?.audio || {}),
+            bands: Object.keys(currentFrame?.audio?.bands || {}),
+            stereo: Object.keys(currentFrame?.audio?.stereo || {}),
+            waveformLength: Array.isArray(currentFrame?.audio?.waveform) ? currentFrame.audio.waveform.length : -1,
+            spectrumLength: Array.isArray(currentFrame?.audio?.spectrum) ? currentFrame.audio.spectrum.length : -1,
+            pointer: Object.keys(currentFrame?.pointer || {}),
+            viewport: Object.keys(currentFrame?.viewport || {}),
+            expressive: currentFrame?.audio?.expressive ? {
+              root: Object.keys(currentFrame.audio.expressive),
+              dynamics: Object.keys(currentFrame.audio.expressive.dynamics || {}),
+              events: Object.keys(currentFrame.audio.expressive.events || {}),
+              event: Object.keys(currentFrame.audio.expressive.events?.onset || {}),
+              rhythm: Object.keys(currentFrame.audio.expressive.rhythm || {}),
+              frequency: Object.keys(currentFrame.audio.expressive.frequency || {}),
+              logBandsLength: Array.isArray(currentFrame.audio.expressive.frequency?.logBands)
+                ? currentFrame.audio.expressive.frequency.logBands.length
+                : -1,
+              bandAttackLength: Array.isArray(currentFrame.audio.expressive.frequency?.bandAttack)
+                ? currentFrame.audio.expressive.frequency.bandAttack.length
+                : -1,
+            } : null,
+          },
         },
         frameReads: state.frameReads,
         listenerRegistrations: state.listenerRegistrations,
@@ -1187,7 +1254,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   }
 
   const api = {
-    version: 'visualizer-audio-v1',
+    version: audioApiVersion,
     get frame() {
       state.frameReads += 1;
       return currentFrame;
@@ -1258,8 +1325,8 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
         try {
           state.listenerCallbacks += 1;
           listener(currentFrame);
-        } catch (error) {
-          const text = compactText(error);
+        } catch {
+          const text = 'Generated VIZ callback failed; error text omitted.';
           recordList(state.runtimeErrors, text);
           recordEvent('fatal', 'VIZ_CALLBACK_ERROR', text);
         }
@@ -1286,28 +1353,36 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   });
 
   addEventListener('error', event => {
-    const text = String(event.error?.stack || event.message || 'Visualizer runtime error').slice(0, MAX_TEXT);
+    if (!event.isTrusted) return;
+    const text = safeGeneratedText(
+      event.error || event.message || 'Visualizer runtime error',
+      'Generated code raised an uncaught runtime error after audio delivery; text omitted.',
+    );
     recordList(state.runtimeErrors, text);
     recordEvent('fatal', 'RUNTIME_ERROR', text, {
-      filename: String(event.filename || ''),
       line: event.lineno || 0,
       column: event.colno || 0,
     });
   });
 
   addEventListener('unhandledrejection', event => {
-    const text = compactText(event.reason || 'Unhandled promise rejection').slice(0, MAX_TEXT);
+    if (!event.isTrusted) return;
+    const text = safeGeneratedText(
+      event.reason || 'Unhandled promise rejection',
+      'Generated code raised an unhandled rejection after audio delivery; text omitted.',
+    );
     recordList(state.runtimeErrors, text);
     recordEvent('fatal', 'UNHANDLED_REJECTION', text);
   });
 
   addEventListener('securitypolicyviolation', event => {
+    if (!event.isTrusted) return;
     const item = {
-      directive: event.violatedDirective,
-      blockedURI: String(event.blockedURI || '').slice(0, 500),
+      directive: String(event.violatedDirective || '').slice(0, 120),
+      blocked: true,
     };
     recordList(state.securityViolations, item);
-    recordEvent('warning', 'CSP_BLOCKED_RESOURCE', `${item.directive} blocked ${item.blockedURI || 'a resource'}.`, item);
+    recordEvent('warning', 'CSP_BLOCKED_RESOURCE', `${item.directive || 'CSP'} blocked a resource.`, item);
   });
 
   let lastTrustedPointerMoveAt = 0;
@@ -1376,6 +1451,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
       ready: {
         atMs: Math.round(state.readyAt - state.startedAt),
         viewport: { width: innerWidth, height: innerHeight, dpr: renderQuality.effectiveDpr },
+        audioApiVersion,
       },
     });
   });
@@ -1384,7 +1460,7 @@ function sandboxBootstrap(sessionId, initialRenderQuality, initialPaused) {
   void originalConsole;
 }
 
-function injectRuntime(html, sessionId, renderQuality, paused) {
+function injectRuntime(html, sessionId, renderQuality, paused, audioApiVersion) {
   const parser = new DOMParser();
   const document = parser.parseFromString(String(html || ''), 'text/html');
   document.querySelectorAll('base').forEach(element => element.remove());
@@ -1400,7 +1476,7 @@ function injectRuntime(html, sessionId, renderQuality, paused) {
   baseStyle.textContent = 'html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}*{box-sizing:border-box}canvas[data-visualizer-host-viewport-canvas]{width:100vw!important;height:100vh!important}';
   const bridge = document.createElement('script');
   bridge.dataset.visualizerHostBridge = '';
-  bridge.textContent = `;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)},${JSON.stringify(renderQuality)},${JSON.stringify(Boolean(paused))});`.replace(/<\/script/gi, '<\\/script');
+  bridge.textContent = `;(${sandboxBootstrap.toString()})(${JSON.stringify(sessionId)},${JSON.stringify(renderQuality)},${JSON.stringify(Boolean(paused))},${JSON.stringify(audioApiVersion)});`.replace(/<\/script/gi, '<\\/script');
   document.head.prepend(meta, baseStyle, bridge);
   return `<!doctype html>\n${document.documentElement.outerHTML}`;
 }
@@ -1473,6 +1549,8 @@ export class VisualizerSandbox {
     this.renderQuality = sandboxRenderQuality();
     this.renderQualityRevision = 0;
     this.appliedRenderQuality = null;
+    this.audioApiVersion = AUDIO_API_V1;
+    this.lastProjectedFrame = createInitialVisualizerFrame(AUDIO_API_V1);
     this.resetFrameDelivery();
     this.bridgeMessageHandler = event => {
       const message = event.data;
@@ -1664,6 +1742,14 @@ export class VisualizerSandbox {
     const safeHeight = Math.max(1, Math.round(height || 1));
     this.iframe.style.setProperty('--candidate-width', `${safeWidth}px`);
     this.iframe.style.setProperty('--candidate-height', `${safeHeight}px`);
+    this.lastProjectedFrame = projectVisualizerFrame({
+      ...this.lastProjectedFrame,
+      viewport: {
+        width: safeWidth,
+        height: safeHeight,
+        dpr: this.renderQuality.effectiveDpr,
+      },
+    }, this.audioApiVersion);
   }
 
   setRenderQuality(value) {
@@ -1673,6 +1759,13 @@ export class VisualizerSandbox {
       || this.renderQuality.maxFps !== next.maxFps
       || this.renderQuality.effectiveDpr !== next.effectiveDpr;
     this.renderQuality = next;
+    this.lastProjectedFrame = projectVisualizerFrame({
+      ...this.lastProjectedFrame,
+      viewport: {
+        ...this.lastProjectedFrame.viewport,
+        dpr: next.effectiveDpr,
+      },
+    }, this.audioApiVersion);
     if (!changed) return false;
     if (this.frameDelivery?.pending) {
       this.frameDelivery.lastSettledSequence = Math.max(
@@ -1695,10 +1788,12 @@ export class VisualizerSandbox {
     viewport = { width: 640, height: 360 },
     readyTimeoutMs = 3500,
     signal,
+    audioApiVersion = AUDIO_API_V1,
   } = {}) {
     if (signal?.aborted) throw abortError();
     this.closeBridge();
     this.sessionId = crypto.randomUUID();
+    this.audioApiVersion = resolveAudioApiVersion(audioApiVersion);
     this.ready = false;
     this.readyDetail = null;
     this.events = [];
@@ -1709,8 +1804,19 @@ export class VisualizerSandbox {
     this.lastHeartbeat = null;
     for (const pending of this.pendingProbes.values()) pending.reject(new Error('Sandbox was reloaded.'));
     this.pendingProbes.clear();
+    this.lastProjectedFrame = createInitialVisualizerFrame(this.audioApiVersion, {
+      width: viewport.width,
+      height: viewport.height,
+      dpr: this.renderQuality.effectiveDpr,
+    });
     this.setViewport(viewport);
-    this.iframe.srcdoc = injectRuntime(html, this.sessionId, this.renderQuality, this.desiredPaused);
+    this.iframe.srcdoc = injectRuntime(
+      html,
+      this.sessionId,
+      this.renderQuality,
+      this.desiredPaused,
+      this.audioApiVersion,
+    );
 
     const started = performance.now();
     while (!this.ready && performance.now() - started < readyTimeoutMs) {
@@ -1725,6 +1831,7 @@ export class VisualizerSandbox {
       events: [...this.events],
       fatalEvents: this.fatalEvents(),
       durationMs: Math.round(performance.now() - started),
+      audioApiVersion: this.audioApiVersion,
     };
   }
 
@@ -1734,7 +1841,15 @@ export class VisualizerSandbox {
     delivery.receivedFrames += 1;
     delivery.nextSequence += 1;
     if (delivery.pending) delivery.coalescedFrames += 1;
-    delivery.pending = { sequence: delivery.nextSequence, frame };
+    const source = frame && typeof frame === 'object' ? frame : {};
+    this.lastProjectedFrame = projectVisualizerFrame({
+      ...this.lastProjectedFrame,
+      ...source,
+      audio: source.audio ?? this.lastProjectedFrame.audio,
+      pointer: source.pointer ?? this.lastProjectedFrame.pointer,
+      viewport: source.viewport ?? this.lastProjectedFrame.viewport,
+    }, this.audioApiVersion);
+    delivery.pending = { sequence: delivery.nextSequence, frame: this.lastProjectedFrame };
     this.flushPendingFrame();
     return true;
   }
@@ -1833,6 +1948,8 @@ export class VisualizerSandbox {
     this.paused = false;
     this.reportedPaused = false;
     this.playbackDetail = null;
+    this.audioApiVersion = AUDIO_API_V1;
+    this.lastProjectedFrame = createInitialVisualizerFrame(AUDIO_API_V1);
     this.iframe.srcdoc = '<!doctype html><html><body style="margin:0;background:#050506"></body></html>';
   }
 
