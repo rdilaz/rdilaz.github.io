@@ -11,11 +11,10 @@ It is live at **https://ryo-nd.com/dev/** (Vite copies `public/dev/` verbatim in
 | File | What it does |
 | --- | --- |
 | `index.html` | Page shell, SVG icon sprite, dialogs (command palette, project sheet) |
-| `dev.css` | Design tokens (Ryo design system), layout, mini-demo styles |
+| `dev.css` | Design tokens (the AI Visualizer look), layout, mini-demo styles |
 | `dev.js` | ES module: grid, filters, palette, sheet, deep links, progress, hero field |
 | `projects.js` | **The data.** Projects, filter chips, hero stats, "now building", build log |
 | `demos.js` | Mini-demo renderers (one per project, DOM/CSS or a small canvas) |
-| `fonts/` | Self-hosted Geist, Geist Mono, Instrument Serif (OFL-1.1, licenses included) |
 | `favicon.svg` | Tab icon |
 
 ## Editing content
@@ -34,6 +33,15 @@ element and returns `{ play, pause, destroy }` (the `stepper()` and `canvasLoop(
 helpers cover most cases), then add its styles under "Mini-demos" in `dev.css`.
 Demos only animate while on screen and never under `prefers-reduced-motion`; the
 initial frame should make sense on its own.
+
+## Look
+
+The page shares the AI Visualizer's look: near-black `#050506`, frosted glass chrome,
+white at different opacities, white pill primary buttons, tiny wide-tracked uppercase
+labels and the system font stack (no web fonts). The only colours are the Visualizer's
+live green (`--live`, for things that are literally live or running) and one pastel
+warm tone (`--attn`, for "needs you" and alerts). Status is always a word plus a glyph
+shape, never colour alone. The `accent` field in `projects.js` is not used by this theme.
 
 ## Deep links
 

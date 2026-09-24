@@ -84,37 +84,22 @@ function canvasLoop(host, draw, init) {
   };
 }
 
-const lerpColor = (a, b, t) => a.map((v, k) => Math.round(v + (b[k] - v) * t));
-const EMBER = [255, 122, 69];
-const ROSE = [255, 77, 141];
-const VIOLET = [139, 92, 246];
-const gradAt = (t) => (t < 0.5 ? lerpColor(EMBER, ROSE, t * 2) : lerpColor(ROSE, VIOLET, (t - 0.5) * 2));
-
 const renderers = {
   visualizer(host) {
     host.innerHTML = '<span class="d-chip"><i></i>120 BPM · demo signal</span>';
+    // Monochrome, like the Visualizer's stage: white bars whose brightness follows their length.
     const N = 64;
     const bars = new Float32Array(N).fill(0.3);
-    const colors = Array.from({ length: N }, (_, i) => {
-      const c = gradAt(Math.abs(i / N - 0.5) * 2);
-      return `rgb(${c[0]},${c[1]},${c[2]})`;
-    });
     return canvasLoop(host, (ctx, { w, h }, t) => {
       const phase = (t % 500) / 500;
       const beat = Math.exp(-phase * 5);
       const m = Math.min(w, h);
       const cx = w / 2;
       const cy = h / 2 - (h > 200 ? 6 : 0);
-      const r0 = m * 0.2 * (1 + beat * 0.07);
+      const r0 = m * 0.2 * (1 + beat * 0.05);
       ctx.clearRect(0, 0, w, h);
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r0 * 2.6);
-      g.addColorStop(0, `rgba(255,77,141,${0.22 + beat * 0.25})`);
-      g.addColorStop(0.5, `rgba(139,92,246,${0.1 + beat * 0.08})`);
-      g.addColorStop(1, 'rgba(139,92,246,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, w, h);
       ctx.lineCap = 'round';
-      ctx.lineWidth = Math.max(2, ((Math.PI * 2 * r0) / N) * 0.52);
+      ctx.lineWidth = Math.max(1.5, ((Math.PI * 2 * r0) / N) * 0.4);
       for (let i = 0; i < N; i += 1) {
         const k = i < N / 2 ? i : N - i;
         const f = k / (N / 2);
@@ -128,17 +113,17 @@ const renderers = {
         const len = bars[i] * m * 0.28;
         const cos = Math.cos(a);
         const sin = Math.sin(a);
-        ctx.strokeStyle = colors[i];
+        ctx.strokeStyle = `rgba(255,255,255,${Math.min(0.9, 0.14 + bars[i] * 0.9).toFixed(3)})`;
         ctx.beginPath();
         ctx.moveTo(cx + cos * r0, cy + sin * r0);
         ctx.lineTo(cx + cos * (r0 + len), cy + sin * (r0 + len));
         ctx.stroke();
       }
-      ctx.fillStyle = 'rgba(7,7,10,0.9)';
       ctx.beginPath();
       ctx.arc(cx, cy, r0 * 0.78, 0, Math.PI * 2);
+      ctx.fillStyle = '#050506';
       ctx.fill();
-      ctx.strokeStyle = `rgba(255,255,255,${0.12 + beat * 0.3})`;
+      ctx.strokeStyle = `rgba(255,255,255,${0.12 + beat * 0.26})`;
       ctx.lineWidth = 1;
       ctx.stroke();
     });
@@ -313,13 +298,8 @@ const renderers = {
   },
 
   dreamfield(host) {
-    const P = [
-      [155, 190, 255],
-      [214, 178, 255],
-      [104, 226, 209],
-      [255, 190, 122],
-      [236, 238, 255],
-    ];
+    // White dust at a few brightnesses (the real DreamField keeps its colours).
+    const INK = [0.9, 0.62, 0.4, 0.26];
     let parts = [];
     return canvasLoop(
       host,
@@ -340,21 +320,24 @@ const renderers = {
           ctx.fillRect(x, y, p.z, p.z);
         }
         ctx.globalCompositeOperation = 'source-over';
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, m * 0.16);
-        g.addColorStop(0, 'rgba(236,238,255,0.5)');
-        g.addColorStop(1, 'rgba(155,190,255,0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(cx - m * 0.2, cy - m * 0.2, m * 0.4, m * 0.4);
+        ctx.fillStyle = 'rgba(255,255,255,0.018)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, m * 0.07, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, Math.max(1.5, m * 0.012), 0, Math.PI * 2);
+        ctx.fill();
       },
       () => {
         parts = Array.from({ length: 110 }, (_, i) => {
-          const c = P[i % P.length];
+          const a = INK[i % INK.length];
           return {
             a: Math.random() * Math.PI * 2,
             r: 0.08 + Math.random() ** 0.8 * 0.4,
             s: (0.6 + Math.random()) * (Math.random() < 0.85 ? 1 : -1),
             z: Math.random() < 0.2 ? 2 : 1.3,
-            c: `rgba(${c[0]},${c[1]},${c[2]},0.8)`,
+            c: `rgba(255,255,255,${a})`,
           };
         });
       },

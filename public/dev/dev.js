@@ -18,8 +18,8 @@ const isExternal = (href) => {
 const byId = new Map(projects.map((p) => [p.id, p]));
 const TOTAL = projects.length;
 const reducedMQ = matchMedia('(prefers-reduced-motion: reduce)');
-const fineMQ = matchMedia('(hover: hover) and (pointer: fine)');
 let reduced = reducedMQ.matches;
+const EASE = 'cubic-bezier(.22,.8,.22,1)';
 
 /* ---------- Local progress (optional; page works without storage) ---------- */
 const KEY = 'ryo-dev-center:v1';
@@ -180,13 +180,13 @@ function applyFilter(id) {
     const a = before.get(c);
     const b = c.getBoundingClientRect();
     if (!a) {
-      c.animate([{ opacity: 0, transform: 'scale(0.96)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.16,1,.3,1)' });
+      c.animate([{ opacity: 0, transform: 'scale(0.98)' }, { opacity: 1, transform: 'none' }], { duration: 280, easing: EASE });
       return;
     }
     const dx = a.left - b.left;
     const dy = a.top - b.top;
     if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-      c.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 560, easing: 'cubic-bezier(.16,1,.3,1)' });
+      c.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 280, easing: EASE });
     }
   });
 }
@@ -256,7 +256,7 @@ function renderProgress() {
   if (done) {
     title.innerHTML = 'You’ve seen <em>everything</em>.';
     text.textContent = `All ${TOTAL} builds, explored. Thanks for looking around. The code lives on GitHub, and new things land here first.`;
-    actions.innerHTML = `<a class="btn btn-primary magnetic" href="${esc(profile.github)}" rel="noopener">${icon('gh')}Follow along on GitHub</a>
+    actions.innerHTML = `<a class="btn btn-primary" href="${esc(profile.github)}" rel="noopener">${icon('gh')}Follow along on GitHub</a>
       <a class="btn btn-ghost" href="${esc(profile.home)}">Back to ryo-nd.com ${icon('arrow')}</a>
       <button type="button" class="text-btn" data-reset>Start over</button>`;
   } else {
@@ -265,7 +265,7 @@ function renderProgress() {
     text.textContent = n
       ? `${TOTAL - n} to go. Next up: ${nx.name}. ${nx.tagline}`
       : 'Open a project to mark it explored. Progress stays on this device only: no accounts, no cookies.';
-    actions.innerHTML = `<button type="button" class="btn btn-primary magnetic" data-open="${nx.id}" aria-haspopup="dialog">${n ? 'Open' : 'Start with'} ${esc(nx.name)} ${icon('arrow')}</button>${
+    actions.innerHTML = `<button type="button" class="btn btn-primary" data-open="${nx.id}" aria-haspopup="dialog">${n ? 'Open' : 'Start with'} ${esc(nx.name)} ${icon('arrow')}</button>${
       n ? '<button type="button" class="text-btn" data-reset>Reset progress</button>' : ''
     }`;
   }
@@ -503,7 +503,7 @@ window.addEventListener('hashchange', syncFromHash);
     if (!dragging) return;
     dragging = false;
     const v = dy / Math.max(1, performance.now() - t0);
-    panel.style.transition = 'transform 220ms cubic-bezier(.16,1,.3,1)';
+    panel.style.transition = `transform 220ms ${EASE}`;
     if (dy > 110 || (v > 0.6 && dy > 24)) {
       panel.style.transform = 'translateY(100%)';
       setTimeout(() => {
@@ -597,9 +597,8 @@ function renderPalette() {
   const opt = ({ it, hits }, i) => {
     const seenMark = it.kind === 'project' && seen.has(it.id) ? `${icon('check')}<span class="sr-only">(explored)</span>` : '';
     const ico = it.kind === 'project' ? esc(it.name[0]) : icon(it.ico);
-    const accent = it.kind === 'project' ? it.p.accent : 'violet';
     const pill = it.kind === 'project' ? `<span class="pill" data-status="${esc(it.p.status)}">${esc(it.p.status)}</span>` : '';
-    return `<div role="option" class="palette-opt" id="opt-${it.id}" data-i="${i}" data-accent="${accent}" aria-selected="${i === active}">
+    return `<div role="option" class="palette-opt" id="opt-${it.id}" data-i="${i}" aria-selected="${i === active}">
       <span class="palette-ico" aria-hidden="true">${ico}</span>
       <span class="palette-txt"><span class="palette-name"><span>${mark(it.name, hits)}</span>${seenMark}</span><span class="palette-sub">${esc(it.sub)}</span></span>${pill}</div>`;
   };
@@ -738,31 +737,6 @@ const onScroll = () => topbar.classList.toggle('is-stuck', window.scrollY > 8);
 window.addEventListener('scroll', onScroll, { passive: true });
 onScroll();
 
-/* Cursor glow on cards + magnetic CTAs (fine pointers only). */
-grid.addEventListener('pointermove', (e) => {
-  if (!fineMQ.matches) return;
-  const c = e.target.closest('.card');
-  if (!c) return;
-  const r = c.getBoundingClientRect();
-  c.style.setProperty('--mx', `${e.clientX - r.left}px`);
-  c.style.setProperty('--my', `${e.clientY - r.top}px`);
-});
-document.addEventListener('pointermove', (e) => {
-  if (!fineMQ.matches || reduced) return;
-  const m = e.target.closest?.('.magnetic');
-  if (!m) return;
-  const r = m.getBoundingClientRect();
-  const x = e.clientX - (r.left + r.width / 2);
-  const y = e.clientY - (r.top + r.height / 2);
-  m.style.transform = `translate(${x * 0.16}px, ${y * 0.3}px)`;
-  if (!m.dataset.mag) {
-    m.dataset.mag = '1';
-    m.addEventListener('pointerleave', () => {
-      m.style.transform = '';
-    });
-  }
-});
-
 /* Count-up for hero stats. */
 function countUp() {
   if (reduced) return;
@@ -772,8 +746,8 @@ function countUp() {
     if (!num) return;
     const suffix = target.replace(/[\d,]/g, '');
     const fmt = (v) => (target.includes(',') ? v.toLocaleString('en-US') : String(v)) + suffix;
-    const t0 = performance.now() + 380;
-    const dur = 1100;
+    const t0 = performance.now() + 200;
+    const dur = 900;
     const step = (now) => {
       const k = Math.min(1, Math.max(0, (now - t0) / dur));
       el.textContent = fmt(Math.round(num * (1 - (1 - k) ** 3)));
@@ -785,12 +759,12 @@ function countUp() {
   });
 }
 
-/* ---------- Hero flow field ---------- */
+/* ---------- Hero flow field (monochrome: white at three depths) ---------- */
 const hero = (() => {
   const host = $('.hero');
   const cv = $('.hero-canvas');
   const ctx = cv.getContext('2d');
-  const cols = ['255,122,69', '255,77,141', '167,139,250'];
+  const inks = ['rgba(255,255,255,0.4)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.11)'];
   let w = 0;
   let h = 0;
   let parts = [];
@@ -807,8 +781,8 @@ const hero = (() => {
     p.age = 0;
     p.max = 90 + Math.random() * 220;
     const r = Math.random();
-    p.c = r < 0.38 ? 0 : r < 0.72 ? 1 : 2;
-    p.sp = 0.45 + Math.random() * 0.85;
+    p.c = r < 0.22 ? 0 : r < 0.58 ? 1 : 2;
+    p.sp = 0.35 + Math.random() * 0.7;
     return p;
   };
   const resize = () => {
@@ -824,7 +798,7 @@ const hero = (() => {
     cv.height = Math.round(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (widthChanged || !parts.length) {
-      const n = Math.round(Math.min(480, Math.max(150, (w * h) / 2600)));
+      const n = Math.round(Math.min(380, Math.max(130, (w * h) / 3200)));
       parts = Array.from({ length: n }, () => spawn({}));
     }
   };
@@ -840,7 +814,7 @@ const hero = (() => {
     const R = Math.min(240, Math.max(120, w * 0.3));
     const R2 = R * R;
     for (let c = 0; c < 3; c += 1) {
-      ctx.strokeStyle = `rgba(${cols[c]},0.42)`;
+      ctx.strokeStyle = inks[c];
       ctx.beginPath();
       for (const p of parts) {
         if (p.c !== c) continue;
