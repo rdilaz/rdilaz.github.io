@@ -1,111 +1,120 @@
+/* Ryo design system: tokens, fonts and base styles for ryo-nd.com.
+   Shared with the Dev Center (public/dev/dev.css). Dark-first. */
+
+@font-face { font-family: "Geist"; src: url("./assets/fonts/geist-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("./assets/fonts/geist-mono-latin-wght-normal.woff2") format("woff2"); font-weight: 100 900; font-style: normal; font-display: swap; }
+@font-face { font-family: "Instrument Serif"; src: url("./assets/fonts/instrument-serif-latin-400-italic.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: swap; }
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  color-scheme: dark;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --ink-0: #07070a;
+  --ink-1: #0e0e13;
+  --ink-2: #15151c;
+  --ink-3: #1d1d26;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --text: #f4f1ea;
+  --text-2: #b9b6c3;
+  --text-3: #8d8a99;
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  --ember: #ff7a45;
+  --rose: #ff4d8d;
+  --violet: #8b5cf6;
+  --violet-text: #a78bfa;
+  --grad: linear-gradient(120deg, var(--ember) 0%, var(--rose) 48%, var(--violet) 100%);
+  --grad-soft: radial-gradient(60% 60% at 20% 20%, rgba(255, 122, 69, 0.28), transparent 70%),
+               radial-gradient(50% 50% at 80% 30%, rgba(255, 77, 141, 0.22), transparent 70%),
+               radial-gradient(60% 60% at 50% 90%, rgba(139, 92, 246, 0.24), transparent 70%);
+
+  --live: #3ddc97;
+  --wait: #ffb547;
+  --block: #ff6161;
+  --info: #6cc8ff;
+  --idle: #8d8a99;
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
+  --display-xl: clamp(3.25rem, 11vw, 9.5rem);
+  --display-l: clamp(2.25rem, 6vw, 4.5rem);
+  --display-m: clamp(1.5rem, 3.2vw, 2.25rem);
+  --tracking-display: -0.045em;
+  --tracking-label: 0.08em;
+
+  --radius-s: 10px;
+  --radius-m: 16px;
+  --radius-l: 24px;
+  --radius-xl: 32px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 160ms;
+  --dur: 320ms;
+  --dur-slow: 700ms;
+
+  --gutter: clamp(16px, 4vw, 40px);
+  --max: 1240px;
+
+  /* Aliases consumed by DreamField.css (kept so the experiment renders unchanged). */
+  --text-h: var(--text);
+  --border: var(--line-strong);
+  --social-bg: var(--ink-2);
+  --accent: var(--violet-text);
+  --accent-bg: rgba(139, 92, 246, 0.14);
+  --accent-border: rgba(167, 139, 250, 0.5);
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
+*, *::before, *::after { box-sizing: border-box; }
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+html {
+  scrollbar-gutter: stable;
+  scroll-behavior: smooth;
+  scroll-padding-top: 88px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background: var(--ink-0);
 }
 
 body {
   margin: 0;
+  min-height: 100vh;
+  overflow-x: clip;
+  background: var(--ink-0);
+  color: var(--text);
+  font: 400 16px/1.55 var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+body::after {
+  /* film grain */
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
+#root { min-height: 100svh; display: flex; flex-direction: column; }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
+h1, h2, h3, h4, p, ul, ol, dl, dd, figure { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+a { color: inherit; }
+button { font: inherit; color: inherit; }
+img, svg, canvas { display: block; max-width: 100%; }
+em { font-style: normal; }
+::selection { background: rgba(255, 77, 141, 0.35); color: var(--text); }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }
