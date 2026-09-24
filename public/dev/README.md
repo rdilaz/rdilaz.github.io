@@ -56,10 +56,8 @@ Pick one:
    `/dev` to `/dev/` automatically, and an inline guard in `index.html` fixes it
    otherwise.
 
-   Two project links are root-relative because they live on ryo-nd.com:
-   `/visualizer/` (AI Visualizer) and `/#experiments` (DreamField). If you copy the
-   folder to another domain, change those two `href`s in `projects.js` to
-   `https://ryo-nd.com/visualizer/` and `https://ryo-nd.com/#experiments`.
+   Project links are absolute `https://ryo-nd.com/...` URLs, so the folder works
+   unchanged on any domain.
 
 ## Privacy
 

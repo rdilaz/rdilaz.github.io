@@ -22,7 +22,7 @@ export const projects = [
     status: 'Live',
     year: 2026,
     tags: ['JavaScript', 'Web Audio', 'Canvas/WebGL', 'LLMs'],
-    links: [{ label: 'Open the Visualizer', href: '/visualizer/' }],
+    links: [{ label: 'Open the Visualizer', href: 'https://ryo-nd.com/visualizer/' }],
     facts: ['17 contract suites + Playwright e2e', 'Sandboxed iframe preflight', '60 commits in 6 days'],
     accent: 'rose',
     demo: 'visualizer',
@@ -50,7 +50,7 @@ export const projects = [
     blurb:
       'Security research: it compares your resolver’s answer against independent DoH resolvers, with CDN allowlisting and IP-range heuristics. It ships with a local spoofing lab (a fake HTTPS server plus a custom root CA) to prove it works.',
     status: 'Experiment',
-    year: 2026,
+    year: 2025,
     tags: ['Chrome MV3', 'DNS security', 'DoH', 'Python'],
     links: [{ label: 'Source on GitHub', href: 'https://github.com/rdilaz/dns_integrity_checker' }],
     facts: ['Local spoofing lab included', '/16 + /48 range heuristics'],
@@ -139,7 +139,7 @@ export const projects = [
     status: 'Experiment',
     year: 2026,
     tags: ['Canvas', 'Web Audio', 'Generative'],
-    links: [{ label: 'Enter the field', href: '/#experiments' }],
+    links: [{ label: 'Enter the field', href: 'https://ryo-nd.com/#experiments' }],
     facts: ['Drawn live, never pre-rendered', 'Optional mic response'],
     accent: 'violet',
     demo: 'dreamfield',
@@ -168,7 +168,7 @@ export const projects = [
     blurb:
       'Reads the live game state through a hook, weighs each turn with hand-written heuristics and plays its cards. No machine learning, just rules.',
     status: 'Private',
-    year: 2026,
+    year: 2025,
     tags: ['Python', 'Game AI', 'IPC'],
     links: [],
     facts: ['Rule-based heuristics', 'Live game hook'],
@@ -228,7 +228,7 @@ export const buildLog = [
   { month: 'Aug 2026', items: [{ id: 'riff' }, { id: 'agent-station' }] },
   { month: 'Jul 2026', items: [{ id: 'mcb', text: 'Refreshed' }] },
   { month: 'Jun 2026', items: [{ id: 'spamshredder' }] },
-  { month: 'May 2026', items: [{ id: 'dns' }] },
+  { month: 'May 2025', items: [{ id: 'dns' }] },
 ];
 
 export const profile = {
