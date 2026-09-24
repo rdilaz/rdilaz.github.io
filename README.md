@@ -13,8 +13,9 @@ Deployed to GitHub Pages (`gh-pages` branch) by `.github/workflows/deploy.yml` o
 | `public/SpamShredder/` | `/SpamShredder/privacy.html` | SpamShredder privacy policy |
 
 Design tokens (colors, type, motion) are shared between the home page (`src/index.css`)
-and the Dev Center (`public/dev/dev.css`). Fonts are self-hosted: Geist, Geist Mono and
-Instrument Serif, all under the SIL Open Font License (license files sit next to the fonts).
+and the Dev Center (`public/dev/dev.css`), and both follow the AI Visualizer's look
+(`public/visualizer/styles.css`): near-black, frosted glass, white at different opacities.
+No web fonts: everything uses the Visualizer's system font stack.
 
 ## Scripts
 

@@ -11,7 +11,6 @@ const SELECTED = [
     status: 'Live',
     tagline: 'Play any song, pick an AI, watch it invent a visualizer.',
     tags: ['Web Audio', 'Canvas/WebGL', 'LLMs'],
-    accent: 'rose',
   },
   {
     id: 'ryodev',
@@ -19,7 +18,6 @@ const SELECTED = [
     status: 'Beta',
     tagline: 'What needs me, where, and how fresh is that claim?',
     tags: ['PWA', 'Cloudflare Workers', 'Claude Code hooks'],
-    accent: 'live',
   },
   {
     id: 'mcb',
@@ -27,7 +25,6 @@ const SELECTED = [
     status: 'Live',
     tagline: 'Find the chess mistake you keep making, powered by Stockfish.',
     tags: ['Python', 'Stockfish', 'React'],
-    accent: 'violet',
   },
   {
     id: 'dns',
@@ -35,11 +32,10 @@ const SELECTED = [
     status: 'Experiment',
     tagline: 'A Chrome extension that catches DNS spoofing with DNS-over-HTTPS cross-checks.',
     tags: ['Chrome MV3', 'DNS security', 'DoH'],
-    accent: 'info',
   },
 ];
 
-const MARQUEE = [
+const BUILDS = [
   'AI Visualizer',
   'RyoDev',
   'DNS Integrity Checker',
@@ -54,22 +50,45 @@ const MARQUEE = [
   'Kensa',
 ];
 
-const STOPS = [
-  [255, 122, 69],
-  [255, 77, 141],
-  [139, 92, 246],
-];
-const mix = (t) => {
-  const [a, b, k] = t < 0.5 ? [STOPS[0], STOPS[1], t * 2] : [STOPS[1], STOPS[2], (t - 0.5) * 2];
-  return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(' ')})`;
-};
+// Monochrome spectrum, like the Visualizer's stage: white bars at different opacities.
 const BARS = Array.from({ length: 60 }, (_, i) => ({
   r: `${(i / 60) * 360}deg`,
-  c: mix(Math.abs(i / 60 - 0.5) * 2),
-  d: `${0.7 + ((i * 7) % 9) / 11}s`,
+  a: (0.28 + (((i * 17) % 11) / 11) * 0.62).toFixed(2),
+  d: `${1.1 + ((i * 7) % 9) / 9}s`,
   dl: `${-((i * 13) % 17) / 10}s`,
   s: 0.35 + (((i * 29) % 13) / 13) * 0.65,
 }));
+
+// Faint horizontal waves behind the hero (static), echoing the Visualizer's idle stage.
+const WAVES = Array.from({ length: 11 }, (_, i) => {
+  const y = 30 + i * 34;
+  const a = 8 + (i % 4) * 7;
+  return {
+    d: `M-20 ${y} C 200 ${y - a}, 420 ${y + a}, 620 ${y} S 1000 ${y - a}, 1220 ${y + a * 0.4}`,
+    o: (0.05 + ((i * 5) % 4) * 0.022).toFixed(3),
+  };
+});
+
+function Mark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="1" y="1" width="30" height="30" rx="9" fill="#fff" fillOpacity=".92" />
+      <path d="M9 11.5 16 7.5l7 4-7 4Z" fill="#050506" fillOpacity=".92" />
+      <path d="M9 11.5v8l7 4v-8Z" fill="#050506" fillOpacity=".64" />
+      <path d="M23 11.5v8l-7 4v-8Z" fill="#050506" fillOpacity=".4" />
+    </svg>
+  );
+}
+
+function Waves() {
+  return (
+    <svg className="hero-waves" viewBox="0 0 1200 400" preserveAspectRatio="none" aria-hidden="true">
+      {WAVES.map((w) => (
+        <path key={w.d} d={w.d} strokeOpacity={w.o} />
+      ))}
+    </svg>
+  );
+}
 
 function Arrow() {
   return (
@@ -91,7 +110,7 @@ function Spectrum() {
   return (
     <div className="spectrum" aria-hidden="true">
       {BARS.map((b) => (
-        <span key={b.r} style={{ '--r': b.r, '--c': b.c, '--d': b.d, '--dl': b.dl, '--s': b.s }}>
+        <span key={b.r} style={{ '--r': b.r, '--a': b.a, '--d': b.d, '--dl': b.dl, '--s': b.s }}>
           <i />
         </span>
       ))}
@@ -145,7 +164,7 @@ export default function Home() {
       <header className="nav">
         <div className="wrap nav-in">
           <a className="brand" href="/" aria-label="Ryo Nagaki-DiLazzaro, home">
-            <span className="brand-mark" aria-hidden="true">R</span>
+            <Mark />
             <span className="brand-text">Ryo</span>
           </a>
           <nav className="nav-links" aria-label="Primary">
@@ -160,16 +179,17 @@ export default function Home() {
 
       <main id="main">
         <section className="hero" aria-labelledby="hero-name">
-          <div className="hero-aurora" aria-hidden="true" />
+          <Waves />
           <div className="wrap hero-in">
             <p className="label rise" style={{ '--d': 0 }}>
-              <span className="live-dot" aria-hidden="true" />
               Software developer
             </p>
             <h1 className="hero-name rise" id="hero-name" style={{ '--d': 1 }} aria-label="Ryo Nagaki-DiLazzaro">
-              <span>Ryo </span>
-              <span>Nagaki-</span>
-              <em>DiLazzaro</em>
+              <span className="hero-first">Ryo </span>
+              <em>
+                <span>Nagaki-</span>
+                <span>DiLazzaro</span>
+              </em>
             </h1>
             <div className="hero-foot rise" style={{ '--d': 2 }}>
               <p className="hero-lede">AI tools, security experiments, and things that make music move.</p>
@@ -191,7 +211,7 @@ export default function Home() {
               <div className="feature-copy">
                 <p className="label">01 — Featured</p>
                 <h2 className="feature-title" id="featured-title">
-                  AI <em>Visualizer</em>
+                  AI Visualizer
                 </h2>
                 <p className="feature-tagline">Play any song, pick an AI, watch it invent a visualizer.</p>
                 <p className="feature-blurb">
@@ -224,7 +244,6 @@ export default function Home() {
         <section className="section" aria-labelledby="devcenter-title">
           <div className="wrap">
             <a className="devcta reveal" href="/dev/">
-              <span className="devcta-glow" aria-hidden="true" />
               <span className="label">02 — Dev Center</span>
               <span className="devcta-title" id="devcenter-title">
                 Everything I’m building, <em>in one room.</em>
@@ -248,12 +267,10 @@ export default function Home() {
                   </span>
                 </span>
               </span>
-              <span className="marquee" aria-hidden="true">
-                <span className="marquee-track">
-                  {[...MARQUEE, ...MARQUEE].map((name, i) => (
-                    <span key={`${name}-${i}`}>{name}</span>
-                  ))}
-                </span>
+              <span className="devcta-list" aria-hidden="true">
+                {BUILDS.map((name) => (
+                  <span key={name}>{name}</span>
+                ))}
               </span>
             </a>
           </div>
@@ -269,7 +286,7 @@ export default function Home() {
             </div>
             <ul className="work-grid">
               {SELECTED.map((p, i) => (
-                <li key={p.id} className="work-card reveal" data-accent={p.accent}>
+                <li key={p.id} className="work-card reveal">
                   <div className="work-top">
                     <span className="work-idx">{String(i + 1).padStart(2, '0')}</span>
                     <span className="pill" data-status={p.status}>
@@ -338,7 +355,7 @@ export default function Home() {
       <footer className="footer">
         <div className="wrap footer-in">
           <div className="footer-brand">
-            <span className="brand-mark" aria-hidden="true">R</span>
+            <Mark />
             <p>© 2026 Ryo Nagaki-DiLazzaro</p>
           </div>
           <nav className="footer-links" aria-label="Footer">
