@@ -1,16 +1,30 @@
-# React + Vite
+# ryo-nd.com
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Source for [ryo-nd.com](https://ryo-nd.com), Ryo Nagaki-DiLazzaro's personal site.
+Deployed to GitHub Pages (`gh-pages` branch) by `.github/workflows/deploy.yml` on every push to `main`.
 
-Currently, two official plugins are available:
+## What lives where
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+| Path | Served at | What |
+| --- | --- | --- |
+| `src/` | `/` | Home page (React 19 + Vite), including the DreamField experiment |
+| `public/dev/` | `/dev/` | Dev Center: a self-contained static project showcase (see its [README](public/dev/README.md)) |
+| `public/visualizer/` | `/visualizer/` | AI Visualizer (vanilla JS, its own docs in `docs/visualizer/`) |
+| `public/SpamShredder/` | `/SpamShredder/privacy.html` | SpamShredder privacy policy |
 
-## React Compiler
+Design tokens (colors, type, motion) are shared between the home page (`src/index.css`)
+and the Dev Center (`public/dev/dev.css`), and both follow the AI Visualizer's look
+(`public/visualizer/styles.css`): near-black, frosted glass, white at different opacities.
+No web fonts: everything uses the Visualizer's system font stack.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Scripts
 
-## Expanding the ESLint configuration
+```sh
+npm ci            # install
+npm run dev       # local dev server
+npm run build     # production build into dist/
+npm run preview   # serve dist/ (home at /, Dev Center at /dev/)
+npm run lint      # ESLint
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Visualizer contract tests and the Playwright suite run in CI (`.github/workflows/visualizer-check.yml`).
