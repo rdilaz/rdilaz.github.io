@@ -219,6 +219,7 @@
 .spectrum span { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform: rotate(var(--r)); }
 .spectrum i {
   position: absolute; left: -0.95cqi; bottom: 23cqi; width: 1.9cqi; height: 24cqi; border-radius: 2cqi;
+  background: var(--c);
   background: linear-gradient(to top, var(--c), color-mix(in srgb, var(--c) 50%, white));
   transform-origin: 50% 100%; transform: scaleY(var(--s));
   animation: eq var(--d) ease-in-out var(--dl) infinite alternate;

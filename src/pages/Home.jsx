@@ -166,7 +166,7 @@ export default function Home() {
               <span className="live-dot" aria-hidden="true" />
               Software developer
             </p>
-            <h1 className="hero-name rise" id="hero-name" style={{ '--d': 1 }}>
+            <h1 className="hero-name rise" id="hero-name" style={{ '--d': 1 }} aria-label="Ryo Nagaki-DiLazzaro">
               <span>Ryo </span>
               <span>Nagaki-</span>
               <em>DiLazzaro</em>
