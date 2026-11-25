@@ -253,6 +253,19 @@ const renderers = {
     };
   },
 
+  flowers(host) {
+    // One stem per thing finished; each bloom opens in turn, like the nightly recap.
+    const stems = [[18, 52, 0], [34, 70, 1], [50, 84, 2], [66, 66, 3], [82, 48, 4]];
+    host.innerHTML = `<div class="fw">${stems
+      .map(([x, h, i]) => `<span class="fw-s" style="--x:${x}%;--h:${h}%;--i:${i}"><i class="fw-b"></i></span>`)
+      .join('')}</div><span class="d-chip"><i></i>a flower for each thing finished</span>`;
+    return {
+      play() { host.dataset.state = 'play'; },
+      pause() { host.dataset.state = 'pause'; },
+      destroy() {},
+    };
+  },
+
   dreamfield(host) {
     // White dust at a few brightnesses (the real DreamField keeps its colours).
     const INK = [0.9, 0.62, 0.4, 0.26];

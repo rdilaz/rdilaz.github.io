@@ -110,10 +110,24 @@ export const projects = [
     status: 'Experiment',
     year: 2026,
     tags: ['React', 'TypeScript', 'PWA'],
-    links: [{ label: 'Open app', href: 'https://ryo-nd.com/sadhana-app/' }],
+    links: [{ label: 'Open app', href: 'https://ryo-nd.com/sadhana/' }],
     facts: ['4s in · ½s · 4s out · ½s', 'Installable PWA', 'One-evening build'],
     accent: 'live',
     demo: 'sadhana',
+  },
+  {
+    id: 'flowers',
+    name: 'Flowers',
+    tagline: 'A nightly recap that grows a bouquet from what you finished.',
+    blurb:
+      'The evening half of Ṛta, a daily ritual built with Claude. Each night a 3D garden grows a flower for every task finished, bows a stem for what was skipped and sends a butterfly toward tomorrow, scored to Chopin. The demo runs on made-up nights.',
+    status: 'Experiment',
+    year: 2026,
+    tags: ['three.js', 'WebGL', 'Web Audio'],
+    links: [{ label: 'Open the demo', href: 'https://ryo-nd.com/flowers/' }],
+    facts: ['Demo uses made-up nights', 'Scored to Chopin, Op. 53'],
+    accent: 'rose',
+    demo: 'flowers',
   },
   {
     id: 'dreamfield',
@@ -202,6 +216,10 @@ export const nowBuilding = [
 
 // Build log, newest first. Months only.
 export const buildLog = [
+  {
+    month: 'Nov 2026',
+    items: [{ id: 'flowers', text: 'Nightly recap garden' }],
+  },
   {
     month: 'Sep 2026',
     items: [

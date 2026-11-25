@@ -44,6 +44,7 @@ const BUILDS = [
   'Agent Station',
   'Sadhana',
   'DreamField',
+  'Flowers',
   'SpamShredder',
   'Slay the Spire bot',
   'Kensa',

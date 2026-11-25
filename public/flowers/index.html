@@ -1,0 +1,2181 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Flowers · demo</title>
+<meta name="description" content="Flowers, the evening half of Ṛta: a nightly recap that grows a bouquet from what got done. Demo with made-up nights.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<style>
+@font-face{font-family:"Bodoni Moda";font-style:normal;font-weight:500;font-display:swap;src:url(fonts/bodoni-moda-latin-500-normal.woff2) format("woff2")}
+@font-face{font-family:"Bodoni Moda";font-style:italic;font-weight:500;font-display:swap;src:url(fonts/bodoni-moda-latin-500-italic.woff2) format("woff2")}
+@font-face{font-family:"Bodoni Moda";font-style:italic;font-weight:700;font-display:swap;src:url(fonts/bodoni-moda-latin-700-italic.woff2) format("woff2")}
+@font-face{font-family:"Figtree";font-style:normal;font-weight:400;font-display:swap;src:url(fonts/figtree-latin-400-normal.woff2) format("woff2")}
+@font-face{font-family:"Figtree";font-style:normal;font-weight:500;font-display:swap;src:url(fonts/figtree-latin-500-normal.woff2) format("woff2")}
+@font-face{font-family:"Figtree";font-style:normal;font-weight:600;font-display:swap;src:url(fonts/figtree-latin-600-normal.woff2) format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:500;font-display:swap;src:url(fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2")}
+</style>
+<style>
+/* Layout: a night garden stage (WebGL bouquet + story captions told one beat at a time), then the whole day laid out plainly below. Dark first; light is dawn. */
+:root{
+  --bg:#0e0a15; --bg-2:#1c1328; --fg:#f6eff8; --muted:#ad9fbb; --line:rgba(246,239,248,.14);
+  --bloom:#ff7eaa; --gold:#ffc65c; --wilt:#7a7383; --leaf:#3e7a51; --scrim:rgba(14,10,21,.72);
+  --display:"Bodoni Moda","Didot","Bodoni 72",Georgia,serif;
+  --body:"Figtree",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --step-0:1rem; --step-1:1.25rem; --step-2:1.75rem; --step-3:clamp(2rem,6.4vw,3.4rem); --step-4:clamp(5rem,26vw,11rem);
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f8f0f3; --bg-2:#efdfe6; --fg:#24152d; --muted:#6e5b79; --line:rgba(36,21,45,.14);
+    --bloom:#d2336a; --gold:#8a5a00; --wilt:#857d8e; --leaf:#2e6a44; --scrim:rgba(248,240,243,.82);
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#f8f0f3; --bg-2:#efdfe6; --fg:#24152d; --muted:#6e5b79; --line:rgba(36,21,45,.14);
+  --bloom:#d2336a; --gold:#8a5a00; --wilt:#857d8e; --leaf:#2e6a44; --scrim:rgba(248,240,243,.82);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{background:var(--bg)}
+body{color:var(--fg);font-family:var(--body);font-size:var(--step-0);line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+button{font:inherit;color:inherit}
+html,body,button,a,.stage{touch-action:manipulation}
+a{color:inherit}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:6px}
+
+/* Stage */
+.stage{position:relative;height:min(92svh,860px);min-height:600px;overflow:hidden;
+  background:radial-gradient(120% 70% at 50% 38%, var(--bg-2) 0%, var(--bg) 70%);cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+#gl{position:absolute;inset:0;width:100%;height:100%;display:block}
+.top{position:absolute;inset:0 0 auto;z-index:3;display:flex;flex-direction:column;gap:12px;padding-block:14px 26px;background:linear-gradient(to bottom, var(--scrim), transparent);pointer-events:none}
+.top .nav{pointer-events:auto}
+.mark{font-family:var(--display);font-style:italic;font-weight:500;font-size:1.15rem;line-height:1;margin-top:-2px;opacity:0;transform:translateY(-4px);transition:opacity .7s ease,transform .7s ease;color:var(--fg)}
+.mark.on{opacity:.82;transform:none}
+.bars{display:flex;gap:4px}
+.bars i{flex:1;height:3px;border-radius:2px;background:var(--line);overflow:hidden;position:relative}
+.bars i b{position:absolute;inset:0;width:0;background:var(--fg);border-radius:2px}
+.bars i.done b{width:100%}
+.nav{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.day{display:flex;align-items:center;gap:6px;min-width:0}
+.day button{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:transparent;display:grid;place-items:center;cursor:pointer;flex:none}
+.day button:disabled{opacity:.3;cursor:default}
+.day span{font-family:var(--mono);font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.streak{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;padding:6px 10px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.streak b{color:var(--gold);font-weight:500}
+.side{display:flex;align-items:center;gap:8px}
+.snd{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:transparent;display:grid;place-items:center;cursor:pointer;flex:none}
+.snd:disabled{opacity:.3;cursor:default}
+.snd[aria-pressed="true"] .on,.snd[aria-pressed="false"] .off{display:none}
+.stage::after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(60% 45% at 50% 38%, color-mix(in srgb,var(--bloom) 38%,transparent), transparent 72%);opacity:calc(var(--pulse,0) * .6)}
+.begin{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none;padding-bottom:14%}
+.begin[hidden]{display:none}
+.begin button{pointer-events:auto;position:relative;display:inline-flex;align-items:center;gap:10px;padding:14px 22px 14px 18px;border-radius:999px;border:0;
+  background:var(--bloom);color:var(--bg);font-weight:600;font-size:1.05rem;cursor:pointer;box-shadow:0 10px 40px color-mix(in srgb,var(--bloom) 45%,transparent)}
+.begin button.loading{cursor:progress;opacity:.88}
+.begin .ring{position:absolute;inset:-6px;border-radius:inherit;border:2px solid var(--bloom);animation:ring 2.2s ease-out infinite;pointer-events:none}
+@keyframes ring{from{opacity:.8;transform:scale(1)}to{opacity:0;transform:scale(1.32)}}
+.begin small{color:var(--muted);font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;text-align:center}
+
+.cap{position:absolute;inset:auto 0 0;z-index:3;padding-block:72px 24px;pointer-events:none;background:linear-gradient(to top, var(--scrim) 45%, transparent)}
+.cap-in{max-width:40rem;display:flex;flex-direction:column;gap:10px}
+.cap h1,.cap h2{font-family:var(--display);font-weight:500;line-height:1.04;margin:0;text-wrap:balance;letter-spacing:-.01em}
+.cap h2{font-size:var(--step-3)}
+.cap p{margin:0;color:var(--muted);max-width:34rem;font-size:1.02rem}
+.cap .big{display:flex;align-items:baseline;gap:.25em;flex-wrap:wrap}
+.cap .num{font-family:var(--display);font-style:italic;font-weight:700;font-size:var(--step-4);line-height:.82;color:var(--bloom);
+  text-shadow:0 0 40px color-mix(in srgb,var(--bloom) 45%,transparent);font-variant-numeric:lining-nums;display:inline-block;transform-origin:20% 80%}
+.cap .num.slam{animation:slam .6s cubic-bezier(.2,1.7,.4,1)}
+@keyframes slam{from{transform:scale(1.45)}to{transform:scale(1)}}
+.cap .later{opacity:0;transform:translateY(10px);transition:opacity .6s ease,transform .6s ease}
+.cap .later.on{opacity:1;transform:none}
+.cap .unit{font-family:var(--display);font-style:italic;font-size:var(--step-3);line-height:1}
+.cap ul{list-style:none;margin:2px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cap li{display:flex;flex-direction:column;gap:1px;padding-left:14px;border-left:2px solid var(--wilt)}
+.cap li strong{font-weight:600;font-size:1.02rem}
+.cap li span{color:var(--muted);font-size:.92rem}
+.cap .coach{color:var(--fg);font-weight:500}
+.cap .warn{color:var(--gold)}
+.enter > *{animation:rise .7s cubic-bezier(.2,.8,.2,1) both}
+.enter > *:nth-child(2){animation-delay:.08s}.enter > *:nth-child(3){animation-delay:.16s}.enter > *:nth-child(4){animation-delay:.24s}
+@keyframes rise{from{opacity:.001;transform:translateY(14px);filter:blur(6px)}to{opacity:1;transform:none;filter:none}}
+.pill{border:1px solid var(--line);background:var(--scrim);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-radius:999px;padding:8px 12px;font-size:.82rem;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.tap{font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+/* Summary */
+.summary{padding-block:48px 72px;max-width:68rem;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+.sum-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.sum-head h2{font-family:var(--display);font-weight:500;font-size:var(--step-2);margin:0;text-wrap:balance}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:28px}
+.col{min-width:0;display:flex;flex-direction:column;gap:12px}
+.col h3{margin:0;font-family:var(--mono);font-weight:500;font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:8px}
+.col h3 .n{font-variant-numeric:tabular-nums;color:var(--fg)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.bloom{background:var(--bloom)}.dot.wilt{background:var(--wilt)}.dot.gold{background:var(--gold)}
+.col ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}
+.col li{display:flex;flex-direction:column;gap:2px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.col li strong{font-weight:600}
+.col li span{color:var(--muted);font-size:.92rem}
+.col .none{color:var(--muted);font-style:italic}
+.tomorrow{border-top:1px solid var(--line);padding-top:22px;display:flex;flex-direction:column;gap:6px}
+.tomorrow p{margin:0;font-family:var(--display);font-style:italic;font-size:var(--step-2);line-height:1.15;text-wrap:balance;max-width:40rem}
+.tomorrow small{color:var(--muted);font-size:.92rem}
+.foot{color:var(--muted);font-size:.85rem;max-width:40rem;margin:0}
+.foot a{color:inherit;text-underline-offset:2px}
+/* This week: one column per night, a dot per thing finished */
+.week{display:flex;flex-direction:column;gap:10px}
+.wk-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.wk-total{font-family:var(--display);font-style:italic;font-size:var(--step-1);color:var(--fg)}
+.wk-total b{color:var(--bloom);font-weight:700}
+.wk-row{display:grid;grid-template-columns:repeat(var(--n,7),minmax(0,1fr));gap:6px}
+.wk-row > *{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;min-height:84px;padding:8px 0 6px;border-radius:12px;border:1px solid transparent;background:none;font:inherit;color:inherit}
+.wk-row button{cursor:pointer}
+.wk-row button:hover{border-color:var(--line)}
+.wk-row .sel{border-color:var(--line);background:color-mix(in srgb,var(--bg-2) 70%,transparent)}
+.wk-row .empty{opacity:.35}
+.wk-dots{display:flex;flex-direction:column-reverse;align-items:center;gap:3px}
+.wk-dots i{width:7px;height:7px;border-radius:50%;background:var(--bloom)}
+.wk-dots i.more{background:var(--gold)}
+.wk-n{font-family:var(--mono);font-size:.8rem;font-variant-numeric:tabular-nums;line-height:1}
+.wk-d{font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);line-height:1}
+.begin .alt{pointer-events:auto;background:none;border:0;box-shadow:none;color:var(--muted);font:500 .8rem/1 var(--body);text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:8px}
+.cap .more{color:var(--muted);font-size:.88rem;padding-left:14px}
+.nogl .stage{background:radial-gradient(120% 70% at 50% 30%, color-mix(in srgb,var(--bloom) 22%, var(--bg-2)) 0%, var(--bg) 70%)}
+/* Porthole: before you enter and after you leave, the garden is a circle in the dark */
+.stage{--port:min(31vw,170px)}
+#gl{clip-path:circle(var(--port) at 50% 40%);transition:clip-path 2.2s cubic-bezier(.65,0,.25,1)}
+.stage.open #gl{clip-path:circle(150% at 50% 40%)}
+.port{position:absolute;left:50%;top:40%;width:calc(var(--port) * 2);height:calc(var(--port) * 2);border-radius:50%;transform:translate(-50%,-50%);z-index:1;pointer-events:none;
+  border:1px solid color-mix(in srgb,var(--gold) 55%,transparent);box-shadow:0 0 70px color-mix(in srgb,var(--gold) 16%,transparent);transition:transform 2.2s cubic-bezier(.65,0,.25,1),opacity 1.5s ease}
+.stage.open .port{transform:translate(-50%,-50%) scale(4.4);opacity:0}
+.cap{transition:opacity .8s ease}
+.stage.done .cap{opacity:0}
+.fin{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:10px;text-align:center;padding-bottom:max(30px,7%);
+  opacity:0;visibility:hidden;pointer-events:none;transition:opacity .4s ease,visibility 0s linear .4s}
+.stage.done .fin{opacity:1;visibility:visible;pointer-events:auto;transition:opacity 1.1s ease 1.7s,visibility 0s}
+.fin h2{font-family:var(--display);font-weight:500;font-size:var(--step-3);line-height:1.04;margin:0;text-wrap:balance}
+.fin p{margin:0;color:var(--muted)}
+.fin-b{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;justify-content:center}
+.pill.pri{background:var(--bloom);color:var(--bg);border-color:transparent;font-weight:600}
+
+/* Signs in the garden: each bloom and each wilted stem carries its own name, where it grows */
+.tags{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden}
+.tag{position:absolute;left:0;top:0;display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.7rem;letter-spacing:.03em;color:var(--fg);white-space:nowrap;
+  padding:3px 9px 3px 6px;border-radius:999px;background:var(--scrim);border:1px solid var(--line);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  opacity:0;transition:opacity .6s ease;will-change:transform}
+.tag.flip{padding:3px 6px 3px 9px}
+.tag.on{opacity:.92}
+.tag.on.dim{opacity:.5}
+.tag.flip{flex-direction:row-reverse}
+.cap-in{padding-right:58px}
+.tag .bug{width:14px;height:14px}
+.tag.wilt{color:color-mix(in srgb,var(--wilt) 45%,var(--fg))}
+.tag.wilt .bug{animation:beck 2.2s ease-in-out infinite}
+@keyframes beck{0%,100%{transform:scale(1)}50%{transform:scale(1.3)}}
+/* the way on: a breathing chevron, like Sunrise's */
+.beckon{position:absolute;right:max(18px,env(safe-area-inset-right,0px));bottom:calc(max(24px,env(safe-area-inset-bottom,0px)) + 8px);z-index:5;width:46px;height:46px;border-radius:50%;
+  border:1px solid var(--line);background:var(--scrim);display:grid;place-items:center;opacity:0;transition:opacity .6s ease;pointer-events:none;cursor:pointer}
+.beckon.on{opacity:1;pointer-events:auto}
+.beckon svg{animation:nudge 1.6s ease-in-out infinite}
+@keyframes nudge{0%,100%{transform:translateX(0)}50%{transform:translateX(4px)}}
+.beckon::after{content:"";position:absolute;inset:-1px;border-radius:50%;border:1px solid var(--bloom);animation:ring 2.4s ease-out infinite}
+/* nights in a row, as lights */
+.lights{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.lights i{width:8px;height:8px;border-radius:50%;background:var(--gold);box-shadow:0 0 10px color-mix(in srgb,var(--gold) 70%,transparent);animation:lit .5s cubic-bezier(.2,1.6,.4,1) both;animation-delay:calc(var(--i) * 90ms + .3s)}
+.lights i.today{background:var(--bloom);box-shadow:0 0 14px var(--bloom)}
+.lights b{font-family:var(--mono);font-weight:500;font-size:.74rem;color:var(--gold);margin-left:4px;letter-spacing:.06em}
+@keyframes lit{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:none}}
+.mothrow{display:flex;gap:4px;align-items:center}
+.mothrow .bug{color:var(--fg);opacity:.78;width:20px;height:20px;animation:beck 2.6s ease-in-out infinite;animation-delay:calc(var(--i) * 160ms)}
+.ctrls-in{display:flex;justify-content:space-between;align-items:center;gap:10px;padding-block:14px 0;flex-wrap:wrap}
+.ctrls-in > div{display:flex;gap:8px;flex-wrap:wrap}
+.pill:disabled{opacity:.35;cursor:default}
+a.pill{text-decoration:none;color:inherit}
+.rb{width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:transparent;display:grid;place-items:center;cursor:pointer;flex:none}
+.rb[aria-pressed="true"] .on,.rb[aria-pressed="false"] .off{display:none}
+.fin::before{content:"";position:absolute;inset:auto 0 0;height:62%;z-index:-1;pointer-events:none;background:linear-gradient(to top,var(--scrim) 55%,transparent)}
+.fin{isolation:isolate}
+.fin h2.long{font-size:var(--step-2);line-height:1.12;max-width:34rem}
+.fin .lights{justify-content:center}
+/* The circle: a night and a morning are one loop */
+.loop{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;position:relative;padding-top:18px}
+.loop::before{content:"";position:absolute;left:12%;right:12%;top:23px;height:1px;background:linear-gradient(90deg,var(--bloom),var(--gold),#ffb25e,var(--bloom))}
+.loop div{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;position:relative;min-width:0}
+.loop i{width:11px;height:11px;border-radius:50%;background:var(--bg);border:2px solid var(--gold)}
+.loop div:first-child i{border-color:var(--bloom);background:var(--bloom)}
+.loop div:nth-child(3) i{border-color:#ffb25e;background:#ffb25e}
+.loop b{font-family:var(--mono);font-weight:500;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase}
+.loop span{color:var(--muted);font-size:.8rem;line-height:1.3}
+details.about{color:var(--muted);font-size:.85rem;max-width:44rem}
+details.about summary{cursor:pointer;font-family:var(--mono);font-size:.72rem;letter-spacing:.12em;text-transform:uppercase}
+details.about p{margin:10px 0 0}
+.tomorrow .pill{align-self:flex-start;margin-top:6px}
+.cap h2.oracle{font-style:italic;font-size:clamp(1.65rem,5.4vw,2.7rem);line-height:1.08;max-width:36rem}
+.cap .ptxt{flex:1}
+.cap .prog{font:500 .84rem/1.35 var(--body);letter-spacing:0}
+.cap div.later{display:flex;flex-direction:column;gap:10px}
+.cnote{margin:0;color:var(--fg);font-size:.95rem;font-style:italic;max-width:30rem}
+.cnote:empty{display:none}
+
+/* Insects: each kind of thing has its own */
+.bug{width:16px;height:16px;flex:none;display:inline-block;vertical-align:-3px}
+.bug.flower{color:var(--bloom)} .bug.moth{color:color-mix(in srgb,var(--wilt) 70%,var(--fg))} .bug.but{color:var(--bloom)}
+.ic{display:inline-flex;align-items:center;gap:7px}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;color:var(--muted);font-size:.88rem;margin:0}
+.key .k{display:inline-flex;align-items:center;gap:6px}
+
+.seedline{font-family:var(--mono);font-size:.76rem;letter-spacing:.04em;color:var(--gold)!important;min-height:1.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seedline.gone{display:none}
+/* Phones: safe areas, and keep each card short enough that the garden still shows above it */
+.top{padding-top:max(14px,env(safe-area-inset-top,0px))}
+.cap{padding-bottom:max(24px,calc(env(safe-area-inset-bottom,0px) + 12px))}
+@media (max-width:480px){
+  .cap{padding-top:56px}
+  .cap-in{gap:8px}
+  .cap h2{font-size:clamp(1.7rem,7.6vw,2.2rem)}
+  .cap .ttl{font-size:1.45rem}
+  .cap p{font-size:.95rem}
+  .cap .ptxt p{font-size:.88rem;line-height:1.4}
+  .pitch{gap:12px}
+  .art{width:70px}
+  .cap ul{gap:6px}
+  .cap li span{font-size:.86rem}
+}
+/* Phones: strip everything that isn't the flower and its one line */
+@media (max-width:600px){
+  .mark,.streak,.seedline,.cap .sub:not(.keep),.cap .ptxt .pay,.cap .ptxt .pitch{display:none!important}
+  .tap{display:none}
+  .ctrls-in{justify-content:flex-end}
+  .tag{font-size:.64rem;gap:4px}
+  .tag .bug{width:12px;height:12px}
+  .loop span{display:none}
+  .loop b{font-size:.56rem;letter-spacing:.06em}
+  .top{gap:10px;padding-block:12px 18px}
+  .bars{height:2px}
+  .bars i{height:2px}
+  .cap{padding-top:40px}
+  .cap-in{gap:6px}
+  .col.lite li span,.col.lite li .prog{display:none}
+  .begin small{font-size:.64rem}
+}
+@media (max-height:700px){
+  .cap .num{font-size:clamp(4rem,20vw,7rem)}
+  .cap li span{display:none}
+  .ptxt .pay{display:none}
+}
+
+/* Open project pitch */
+.cap .ttl{font-size:var(--step-2)}
+.pitch{display:flex;gap:14px;align-items:flex-start}
+.art{flex:none;width:clamp(76px,22vw,100px);aspect-ratio:1;border-radius:50%;border:1px solid var(--line);background:color-mix(in srgb,var(--bg-2) 80%,transparent);overflow:hidden}
+.art svg{width:100%;height:100%;display:block}
+.ptxt{display:flex;flex-direction:column;gap:7px;min-width:0}
+.cap .ptxt p,.col .ptxt span{font-size:.95rem}
+.cap .ptxt .pay,.col li .pay{color:var(--fg)}
+.prog{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.74rem;letter-spacing:.02em;color:var(--gold)}
+.prog i{flex:none;width:52px;height:4px;border-radius:2px;background:var(--line);overflow:hidden;position:relative}
+.prog i b{position:absolute;inset:0 auto 0 0;width:var(--p,0%);background:var(--gold);border-radius:2px;animation:fill 1.2s cubic-bezier(.2,.8,.2,1) .35s both}
+@keyframes fill{from{width:0}}
+.col li .prog{margin-top:4px}
+.art .ln{stroke:var(--muted);stroke-width:3;stroke-linecap:round;fill:none;opacity:.55}
+.art .fg{stroke:var(--fg);fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.art .fgf{fill:var(--fg);opacity:.8}
+.art .gd{fill:var(--gold)} .art .gds{stroke:var(--gold);fill:none;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.art .bl{fill:var(--bloom)} .art .bls{stroke:var(--bloom);fill:none;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.art .mt{fill:var(--muted);opacity:.55} .art .bgf{fill:var(--bg)}
+.art .tk{stroke-dasharray:24;stroke-dashoffset:24;animation:tk 4.4s ease infinite}
+@keyframes tk{0%,6%{stroke-dashoffset:24}20%,86%{stroke-dashoffset:0}100%{stroke-dashoffset:24}}
+.art .d1{animation-delay:.45s}.art .d2{animation-delay:.9s}.art .d3{animation-delay:1.35s}.art .d4{animation-delay:1.8s}.art .d5{animation-delay:2.25s}.art .d6{animation-delay:2.7s}
+.art .pu{transform-box:fill-box;transform-origin:center;animation:pu 1.6s ease-in-out infinite}
+@keyframes pu{50%{transform:scale(1.14)}}
+.art .fl{transform-box:fill-box;transform-origin:50% 100%;animation:fl 1.1s ease-in-out infinite alternate}
+@keyframes fl{0%{transform:scale(1,1) rotate(-5deg);opacity:.8}100%{transform:scale(.84,1.14) rotate(5deg);opacity:1}}
+.art .bk{animation:bk 2.4s steps(1) infinite}
+@keyframes bk{50%{opacity:.15}}
+.art .sp{transform-box:view-box;transform-origin:48px 48px;animation:sp 10s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.art .eq{transform-box:fill-box;transform-origin:50% 100%;animation:eq .9s ease-in-out infinite alternate}
+@keyframes eq{from{transform:scaleY(.28)}to{transform:scaleY(1)}}
+.art .dr{stroke-dasharray:150;stroke-dashoffset:150;animation:dr 4.2s ease infinite}
+@keyframes dr{0%{stroke-dashoffset:150}45%,85%{stroke-dashoffset:0}100%{stroke-dashoffset:-150}}
+.art .flip{transform-box:fill-box;transform-origin:center;animation:flip 3.2s ease-in-out infinite}
+@keyframes flip{0%,30%{transform:scaleX(1)}45%{transform:scaleX(.02)}60%,100%{transform:scaleX(1)}}
+.art .trace{stroke-dasharray:7 70;animation:trace 1.9s linear infinite}
+@keyframes trace{to{stroke-dashoffset:-77}}
+.art .cur{animation:bk 1.1s steps(1) infinite}
+.art .tw{transform-box:fill-box;transform-origin:center;animation:tw 2.2s ease-in-out infinite}
+@keyframes tw{50%{transform:scale(.62) rotate(20deg);opacity:.55}}
+/* the week: one lantern per night, in that night's colour; a moth that turns into a flower */
+.lan{display:flex;gap:7px;align-items:flex-end;flex-wrap:wrap}
+.lan span{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:16px}
+.lan i{--c:hsl(var(--h) 86% 68%);width:10px;height:10px;border-radius:50%;background:var(--c);box-shadow:0 0 12px var(--c);transform:scale(var(--s,1));transition:opacity .5s ease,transform .5s cubic-bezier(.2,1.6,.4,1)}
+.lan.wait span:not(.lit) i{opacity:.14;transform:scale(.5);box-shadow:none}
+.lan .off i{background:transparent;box-shadow:none;border:1px solid var(--muted);opacity:.55;transform:none}
+.lan .now i{outline:1.5px solid var(--fg);outline-offset:3px}
+.lan small{font-family:var(--mono);font-size:.58rem;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;line-height:1}
+.lan b{font-family:var(--mono);font-weight:500;font-size:.74rem;color:var(--gold);margin-left:4px;letter-spacing:.06em;align-self:center}
+.fin .lan{justify-content:center}
+.cap .eyebrow .lan{display:inline-flex;gap:4px;margin-left:4px;vertical-align:middle}
+.cap .eyebrow .lan span{min-width:0}
+.cap .eyebrow .lan i{width:6px;height:6px;box-shadow:none}
+.cap .eyebrow .lan .now i{outline-offset:2px;outline-width:1px}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]) .lan i{--c:hsl(var(--h) 78% 56%)}}
+:root[data-theme="light"] .lan i{--c:hsl(var(--h) 78% 56%)}
+.turn{position:relative;width:16px;height:16px;display:inline-block;flex:none}
+.turn .bug{position:absolute;inset:0}
+.turn .moth{animation:tout 1.5s ease .5s both}
+.turn .flower{animation:tin 1.5s cubic-bezier(.2,1.5,.4,1) .9s both}
+@keyframes tout{to{opacity:0;transform:scale(.5) rotate(-25deg) translateY(-6px)}}
+@keyframes tin{from{opacity:0;transform:scale(.3) rotate(40deg)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .lan i{transition:none}
+  .turn .moth{animation:none;opacity:0}
+  .turn .flower{animation:none}
+}
+@media (prefers-reduced-motion: reduce){
+  .beckon svg,.beckon::after,.tag.wilt .bug,.mothrow .bug,.lights i{animation:none}
+  #gl,.port,.cap,.fin,.stage.done .fin{transition:none}
+  .art *{animation:none!important}
+  .art .tk,.art .dr{stroke-dashoffset:0}
+  .prog i b{animation:none}
+  .enter > *{animation:none}
+  .cap .num.slam{animation:none}
+  .cap .later{transition:none}
+  .begin .ring{animation:none;opacity:0}
+  .mark{transition:none;transform:none}
+}
+</style>
+
+<div class="stage" id="stage" aria-label="Tonight's flowers. Tap to go to the next part.">
+  <canvas id="gl" aria-hidden="true"></canvas>
+  <div class="port" aria-hidden="true"></div>
+  <div class="tags" id="tags" aria-hidden="true"></div>
+  <div class="top gut">
+    <div class="bars" id="bars" aria-hidden="true"></div>
+    <div class="nav">
+      <div class="day">
+        <button id="prev" type="button" aria-label="Earlier night"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M9 2 4 7l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <span id="dayLabel">Tonight</span>
+        <button id="next" type="button" aria-label="Later night"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="m5 2 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <div class="side">
+        <div class="streak" id="streak" hidden></div>
+        <span class="mark on" id="mark" title="Ṛta: rise, tend, arrive. Demo with made-up nights.">Ṛta · Flowers · demo</span>
+        <button class="snd" id="mute" type="button" aria-pressed="false" aria-label="Mute music">
+          <svg class="on" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="M10.6 5.4a3.6 3.6 0 0 1 0 5.2M12.4 3.6a6.1 6.1 0 0 1 0 8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <svg class="off" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor"/><path d="m10.5 6 3.5 4m0-4-3.5 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="cap gut" aria-live="polite"><div class="cap-in" id="cap">
+    <span class="eyebrow">Tonight</span>
+    <h2>Picking your flowers.</h2>
+  </div></div>
+  <button class="beckon" id="beckon" type="button" aria-label="Next"><svg width="18" height="18" viewBox="0 0 14 14" aria-hidden="true"><path d="m5 2 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  <div class="begin" id="begin">
+    <button type="button" id="beginBtn"><span class="ring" aria-hidden="true"></span><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><g fill="currentColor"><circle cx="10" cy="5.3" r="3.3"/><circle cx="14.5" cy="8.6" r="3.3"/><circle cx="12.8" cy="13.9" r="3.3"/><circle cx="7.2" cy="13.9" r="3.3"/><circle cx="5.5" cy="8.6" r="3.3"/></g></svg><span id="beginLabel">Arrive</span></button>
+    <small id="beginNote">Sound on</small>
+    <button type="button" class="alt" id="readNow">Read it instead</button>
+  </div>
+  <div class="fin gut" id="fin">
+    <span class="eyebrow" id="finDate">Tonight</span>
+    <h2 id="finHead">That's tonight's bouquet.</h2>
+    <div class="lights" id="finLights"></div>
+    <div class="fin-b"><button class="pill pri" id="again" type="button"><svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 7a4.5 4.5 0 1 0 1.4-3.3M2.5 1.8v2.4h2.4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Again</button><button class="pill" id="finDay" type="button">The whole day</button></div>
+  </div>
+</div>
+<div class="gut ctrls">
+  <div class="ctrls-in">
+    <span class="tap" id="tapHint">Tap · ← →</span>
+    <div>
+      <button class="pill" id="back" type="button" aria-label="Go back one part"><svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M9 2 4 7l5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Back</button>
+      <button class="pill" id="pause" type="button" aria-pressed="false" aria-label="Pause"><svg class="pz" width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M4.5 2.5v9M9.5 2.5v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><svg class="pl" width="13" height="13" viewBox="0 0 14 14" aria-hidden="true" hidden><path d="M4 2.3v9.4L11.5 7z" fill="currentColor"/></svg></button>
+      <button class="pill" id="fwd" type="button">Next<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="m5 2 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button class="pill" id="skip" type="button">All<svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2v9M3 7.5 7 11.5 11 7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+  </div>
+</div>
+
+<section class="summary gut" id="summary" aria-labelledby="sumTitle">
+  <div class="sum-head">
+    <h2 id="sumTitle">The whole day</h2>
+    <span class="eyebrow" id="sumDate"></span>
+  </div>
+  <div class="week" id="week" hidden>
+    <div class="wk-head"><span class="eyebrow">This week</span><span class="wk-total" id="wkTotal"></span></div>
+    <div class="wk-row" id="wkRow"></div>
+  </div>
+  <div class="cols">
+    <div class="col"><h3><i class="bug flower" data-bug="flower"></i>Finished <span class="n" id="nW">0</span></h3><ul id="lW"><li class="none">Nothing yet tonight.</li></ul></div>
+    <div class="col lite"><h3><i class="bug moth" data-bug="moth"></i>You said these mattered <span class="n" id="nM">0</span></h3><ul id="lM"><li class="none">Nothing skipped yet.</li></ul><p class="cnote" id="mNote"></p></div>
+    <div class="col lite"><h3><i class="bug bee" data-bug="bee"></i>Still open <span class="n" id="nO">0</span></h3><ul id="lO"><li class="none">Nothing left hanging.</li></ul></div>
+  </div>
+  <p class="key" aria-label="Who's in the garden"><span class="k"><i class="bug flower" data-bug="flower"></i>finished</span><span class="k"><i class="bug bee" data-bug="bee"></i>still open</span><span class="k"><i class="bug moth" data-bug="moth"></i>skipped</span><span class="k"><i class="bug but" data-bug="but"></i>tomorrow</span></p>
+  <div class="tomorrow">
+    <span class="eyebrow ic"><i class="bug but" data-bug="but"></i>Tomorrow, one thing</span>
+    <p id="tm">Your first thing for tomorrow shows up here each night.</p>
+    <small id="closeLine"></small>
+    
+  </div>
+  <div>
+    <span class="eyebrow">Ṛta · rise, tend, arrive</span>
+    <div class="loop" aria-label="How a day runs: tonight's flowers, tomorrow's one thing, Sunrise's seed, the day's work, then Flowers again">
+      <div><i></i><b>Flowers</b><span>what bloomed</span></div>
+      <div><i></i><b>One thing</b><span>for tomorrow</span></div>
+      <div><i></i><b>Sunrise</b><span>the seed</span></div>
+      <div><i></i><b>Tend</b><span>the day's work</span></div>
+    </div>
+  </div>
+  <details class="about"><summary>About Flowers</summary>
+  <p>Each night what you closed on your Tasks list blooms here. A flower for each thing finished, a bee for each thing still open, a moth on a bowed stem for each thing you said mattered and skipped, and a butterfly for tomorrow's one thing. The arrows up top go back to earlier nights.</p>
+  <p class="foot">Music: Chopin's Polonaise in A-flat, Op. 53 ("Heroic", public domain), abridged for this page and written out by ear (not note-for-note from the score), played on the Salamander Grand Piano samples by Alexander Holm, <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC BY 3.0</a>. Type: Bodoni Moda (Owen Earl), Figtree (Erik Kennedy) and IBM Plex Mono (IBM), all from Google Fonts. Garden drawn with three.js. Flowers is the evening half of Ṛta; Sunrise is the morning.</p>
+  </details>
+</section>
+
+<script src="three.min.js"></script>
+<script>
+(() => {
+"use strict";
+const $ = s => document.querySelector(s);
+const mq = matchMedia("(prefers-reduced-motion: reduce)");
+let REDUCE = mq.matches;
+const PHONE = matchMedia("(max-width: 600px)").matches;   /* phones get a calmer garden: fewer petals, sparks and raindrops */
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const easeOut = p => 1 - Math.pow(1 - p, 3);
+const easeBack = p => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2); };
+const easeElastic = p => p === 0 ? 0 : p === 1 ? 1 : Math.pow(2, -9 * p) * Math.sin((p * 10 - 0.75) * (2 * Math.PI / 3)) + 1;
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+/* ---------------- Garden (Three.js) ---------------- */
+const Garden = (() => {
+  const api = { ok: false };
+  if (!window.THREE) return api;
+  const T = THREE;
+  const canvas = $("#gl");
+  let renderer;
+  try {
+    renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
+  } catch (e) { return api; }
+  if (!renderer.getContext()) return api;
+  api.ok = true;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = T.sRGBEncoding;
+  renderer.setClearColor(0x000000, 0);
+
+  const scene = new T.Scene();
+  const camera = new T.PerspectiveCamera(40, 1, 0.1, 80);
+  const fog = new T.FogExp2(0x000000, 0.045);
+  scene.fog = fog;
+  const Y = new T.Vector3(0, 1, 0);
+
+  let theme = {};
+  function readTheme() {
+    const cs = getComputedStyle(document.documentElement);
+    const raw = n => (cs.getPropertyValue(n) || "#888").trim();
+    const lin = n => new T.Color(raw(n)).convertSRGBToLinear();
+    const bg = new T.Color(raw("--bg"));
+    const light = (bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114) > 0.5;
+    theme = { light, bg: lin("--bg"), bg2: lin("--bg-2"), bloom: lin("--bloom"), gold: lin("--gold"), wilt: lin("--wilt"), leaf: lin("--leaf"),
+      goldRaw: new T.Color(raw("--gold")), fgRaw: new T.Color(raw("--fg")), bgRaw: raw("--bg"), bg2Raw: raw("--bg-2"), goldHex: raw("--gold") };
+    const hues = [340, 14, 42, 270, 322, 356, 295, 28, 200];
+    theme.palette = hues.map(h => new T.Color().setHSL(h / 360, light ? 0.78 : 0.86, light ? 0.56 : 0.68).convertSRGBToLinear());
+  }
+  readTheme();
+
+  /* lights */
+  const hemi = new T.HemisphereLight(0xffffff, 0x222222, 1);
+  const key = new T.DirectionalLight(0xfff1e0, 1.1); key.position.set(3, 6, 5);
+  const rim = new T.DirectionalLight(0xffffff, 0.7); rim.position.set(-4, 3, -4);
+  const glow = new T.PointLight(0xffffff, 0, 7, 2);
+  scene.add(hemi, key, rim, glow);
+  const pulseLight = new T.PointLight(0xffffff, 0, 10, 2); pulseLight.position.set(0, 3.2, 1.8); scene.add(pulseLight);
+  const A = { level: 0, bass: 0, beat: 0, swell: 0 };
+  api.audio = A;
+  let kick = 0, swell = 0, flyBase = 1;
+
+  /* textures */
+  function dotTex() {
+    const c = document.createElement("canvas"); c.width = c.height = 64;
+    const g = c.getContext("2d"); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, "rgba(255,255,255,1)"); gr.addColorStop(0.35, "rgba(255,255,255,.75)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    const t = new T.CanvasTexture(c); return t;
+  }
+  const DOT = dotTex();
+  function groundTex() {
+    const c = document.createElement("canvas"); c.width = c.height = 256;
+    const g = c.getContext("2d"); const gr = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    const gold = theme.goldHex;
+    gr.addColorStop(0, hexA(gold, theme.light ? 0.28 : 0.22));
+    gr.addColorStop(0.35, hexA(theme.bg2Raw, 0.85));
+    gr.addColorStop(1, hexA(theme.bg2Raw, 0));
+    g.fillStyle = gr; g.fillRect(0, 0, 256, 256);
+    const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; return t;
+  }
+  function hexA(hex, a) { const c = new T.Color(hex); return `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},${a})`; }
+
+  /* ground + grass */
+  const ground = new T.Mesh(new T.CircleGeometry(7, 64), new T.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false }));
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+  const grassGeo = new T.ConeGeometry(0.02, 0.42, 3, 1, true); grassGeo.translate(0, 0.21, 0);
+  const grassMat = new T.MeshStandardMaterial({ roughness: 1 });
+  const GRASS = 380;
+  const grass = new T.InstancedMesh(grassGeo, grassMat, GRASS);
+  { const d = new T.Object3D();
+    for (let i = 0; i < GRASS; i++) {
+      const r = 0.35 + Math.sqrt(Math.random()) * 5.2, a = Math.random() * Math.PI * 2;
+      d.position.set(Math.cos(a) * r, 0, Math.sin(a) * r * 0.8);
+      d.rotation.set(rnd(-0.3, 0.3), rnd(0, 6.28), rnd(-0.3, 0.3));
+      d.scale.setScalar(rnd(0.5, 1.5)); d.updateMatrix(); grass.setMatrixAt(i, d.matrix);
+    } }
+  scene.add(grass);
+
+  /* geometry helpers */
+  function petalGeo(w, l, cup, bend, c0, c1) {
+    const g = new T.PlaneGeometry(1, 1, 6, 10);
+    const p = g.attributes.position, col = new Float32Array(p.count * 3), c = new T.Color();
+    for (let i = 0; i < p.count; i++) {
+      const u = p.getX(i), v = p.getY(i) + 0.5;
+      const prof = Math.pow(Math.sin(Math.PI * (0.06 + 0.88 * v)), 0.62) * (0.3 + 0.7 * Math.min(1, v * 2.2));
+      const x = u * 2 * w * prof, y = v * l;
+      const z = -cup * (x * x) / (w + 1e-6) * 0.9 + bend * v * v * l;
+      p.setXYZ(i, x, y, z);
+      c.copy(c0).lerp(c1, Math.pow(v, 0.8));
+      col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+    }
+    g.setAttribute("color", new T.BufferAttribute(col, 3));
+    g.computeVertexNormals();
+    return g;
+  }
+  const white = new T.Color(1, 1, 1);
+  function shades(color, light) {
+    const base = color.clone().multiplyScalar(light ? 0.62 : 0.42);
+    const tip = color.clone().lerp(white, light ? 0.18 : 0.28);
+    return [base, tip];
+  }
+
+  /* world state */
+  const root = new T.Group(); scene.add(root);
+  let flowers = [], wilted = [], buds = [], ribbon = null;
+  const bursts = [], tweens = [];
+  let dim = 0, dimTarget = 0, lift = 0, liftTarget = 0;
+  const focus = new T.Vector3(0, 2, 0), focusTarget = new T.Vector3(0, 2, 0);
+  let tm = 0;
+
+  function tween(dur, fn, delay = 0, done) {
+    if (REDUCE) { fn(1); done && done(); return; }
+    tweens.push({ t: -delay, dur, fn, done });
+  }
+
+  function disposeTree(o) {
+    o.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material) { (Array.isArray(n.material) ? n.material : [n.material]).forEach(m => m.dispose()); } });
+  }
+
+  function buildFlower(pts, color, opts = {}) {
+    const wil = !!opts.wilted;
+    const group = new T.Group();
+    group.position.copy(pts[0]);
+    const rel = pts.map(p => p.clone().sub(pts[0]));
+    const curve = new T.CatmullRomCurve3(rel);
+    const tube = new T.TubeGeometry(curve, 56, wil ? 0.028 : 0.036, 6, false);
+    const stemColor = wil ? theme.wilt.clone().multiplyScalar(0.75) : theme.leaf.clone();
+    const stem = new T.Mesh(tube, new T.MeshStandardMaterial({ color: stemColor, roughness: 0.75 }));
+    const total = tube.index.count;
+    tube.setDrawRange(0, 0);
+    group.add(stem);
+
+    const leaves = [];
+    const leafC = shades(wil ? theme.wilt : theme.leaf, theme.light);
+    const leafGeo = petalGeo(0.16, 0.55, 0.5, wil ? 0.5 : 0.2, leafC[0], leafC[1]);
+    const leafMat = new T.MeshStandardMaterial({ vertexColors: true, side: T.DoubleSide, roughness: 0.7 });
+    [0.28, 0.5].forEach((t, k) => {
+      const piv = new T.Group(); piv.position.copy(curve.getPoint(t));
+      piv.rotation.y = rnd(0, 6.28) + k * Math.PI;
+      const leaf = new T.Mesh(leafGeo, leafMat); leaf.rotation.x = wil ? 1.9 : 1.05;
+      piv.add(leaf); piv.scale.setScalar(0.0001); piv.userData.s = rnd(0.8, 1.15);
+      group.add(piv); leaves.push(piv);
+    });
+
+    const head = new T.Group();
+    head.position.copy(curve.getPoint(1));
+    head.quaternion.setFromUnitVectors(Y, curve.getTangent(1).normalize());
+    const size = opts.size || 0.56;
+    const layers = wil
+      ? [{ n: 6, s: 0.62, open: 0.32, r: 0.02, bend: 0.35, cup: 0.4 }, { n: 4, s: 0.5, open: 0.15, r: 0.01, bend: 0.1, cup: 0.6 }]
+      : opts.bud
+        ? [{ n: 5, s: 0.55, open: 0.18, r: 0.015, bend: -0.1, cup: 0.9 }]
+        : [{ n: 8, s: 0.82, open: 1.5, r: 0.06, bend: 0.22, cup: 0.55 },
+           { n: 7, s: 0.66, open: 1.08, r: 0.045, bend: 0.02, cup: 0.85 },
+           { n: 6, s: 0.48, open: 0.6, r: 0.025, bend: -0.28, cup: 1.1 }];
+    const [c0, c1] = shades(color, theme.light);
+    const petals = [];
+    const petalMat = new T.MeshStandardMaterial({ vertexColors: true, side: T.DoubleSide, roughness: wil ? 0.9 : 0.45,
+      emissive: wil ? new T.Color(0) : color.clone(), emissiveIntensity: theme.light ? 0.05 : 0.14 });
+    layers.forEach((L, li) => {
+      const geo = petalGeo(0.36, L.s * size, L.cup, L.bend, li === layers.length - 1 ? c0.clone().lerp(c1, 0.3) : c0, c1);
+      for (let k = 0; k < L.n; k++) {
+        const piv = new T.Group(); piv.rotation.y = k / L.n * Math.PI * 2 + li * 0.41 + rnd(-0.08, 0.08);
+        const m = new T.Mesh(geo, petalMat); m.position.z = L.r; m.rotation.x = 0.04;
+        piv.add(m); head.add(piv);
+        petals.push({ m, open: L.open + rnd(-0.08, 0.1) + (wil ? rnd(0, 0.5) : 0), li });
+      }
+    });
+    const center = new T.Mesh(new T.SphereGeometry(wil ? 0.05 : 0.075, 16, 12),
+      new T.MeshStandardMaterial({ color: wil ? theme.wilt : theme.gold, emissive: wil ? new T.Color(0) : theme.gold, emissiveIntensity: theme.light ? 0.2 : 0.6, roughness: 0.4 }));
+    center.position.y = 0.03; center.scale.setScalar(0.0001);
+    head.add(center);
+    head.scale.setScalar(0.0001);
+    group.add(head);
+
+    let fallen = [];
+    if (wil) {
+      const fGeo = petalGeo(0.3, 0.3, 0.3, 0.05, c0, c1);
+      for (let k = 0; k < 2; k++) {
+        const f = new T.Mesh(fGeo, petalMat);
+        f.position.set(rel[rel.length - 1].x * rnd(0.9, 1.3) + rnd(-0.2, 0.2), 0.012, rnd(-0.3, 0.3));
+        f.rotation.set(-Math.PI / 2, 0, rnd(0, 6.28)); f.scale.setScalar(0.0001);
+        group.add(f); fallen.push(f);
+      }
+    }
+    root.add(group);
+    return { group, stem, total, leaves, head, petals, center, fallen, wilted: wil, color, bloomed: false, phase: rnd(0, 6.28),
+      headWorld() { head.updateWorldMatrix(true, false); const v = new T.Vector3(); head.getWorldPosition(v); return v; } };
+  }
+
+  function layoutWins(n) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = i * 2.39996 + 0.9;
+      const r = n === 1 ? 0.05 : 0.32 + 1.02 * Math.sqrt((i + 0.5) / n);
+      const hx = Math.cos(a) * r, hz = Math.sin(a) * r * 0.75;
+      const hy = 3.25 - r * 0.7 + (i % 3) * 0.1;
+      const b = new T.Vector3(hx * 0.08, 0, hz * 0.08);
+      out.push([b, new T.Vector3(hx * 0.12, 0.9, hz * 0.12), new T.Vector3(hx * 0.45, hy * 0.62, hz * 0.45), new T.Vector3(hx * 0.82, hy * 0.9, hz * 0.82), new T.Vector3(hx, hy, hz)]);
+    }
+    return out;
+  }
+  function layoutWilted(n) {
+    const out = [];
+    for (let j = 0; j < n; j++) {
+      const s = j % 2 ? 1 : -1, x = s * (1.75 + Math.floor(j / 2) * 0.5), z = -0.55 - j * 0.12;
+      out.push([new T.Vector3(x, 0, z), new T.Vector3(x + s * 0.04, 0.85, z), new T.Vector3(x + s * 0.2, 1.5, z), new T.Vector3(x + s * 0.62, 1.66, z + 0.05), new T.Vector3(x + s * 0.92, 1.22, z + 0.12)]);
+    }
+    return out;
+  }
+
+  function clear() {
+    [...flowers, ...wilted, ...buds].forEach(f => { root.remove(f.group); disposeTree(f.group); });
+    if (ribbon) { root.remove(ribbon); disposeTree(ribbon); ribbon = null; }
+    flowers = []; wilted = []; buds = []; tweens.length = 0;
+    bursts.forEach(b => { scene.remove(b.pts); b.pts.geometry.dispose(); b.pts.material.dispose(); }); bursts.length = 0;
+    dim = dimTarget = 0; lift = liftTarget = 0; focusTarget.set(0, 2, 0);
+    sprouts.forEach(sp => { if (sp) { root.remove(sp); disposeTree(sp); } }); sprouts.length = 0;
+    falling.forEach(x => root.remove(x)); falling.length = 0;
+  }
+
+  api.setDay = (d) => {
+    ringCount = d ? Math.min(6, (d.open || []).length || Math.max(0, (d.started || 0) - d.finished)) : 0;
+    focusRing = -1; butOn = false; butterfly.g.userData.s = 0;
+    clear();
+    if (!d) {
+      layoutWins(3).forEach((pts, i) => buds.push(buildFlower(pts, theme.palette[i], { bud: true, size: 0.5 })));
+      buds.forEach(f => instant(f));
+      return;
+    }
+    const pts = layoutWins(d.wins.length);
+    flowers = pts.map((p, i) => buildFlower(p, theme.palette[(d.wins[i].ci != null ? d.wins[i].ci : i) % theme.palette.length]));
+    wilted = layoutWilted(Math.min(d.missed.length, 6)).map(p => buildFlower(p, theme.wilt, { wilted: true, size: 0.5 }));
+    if (flowers.length) {
+      ribbon = new T.Mesh(new T.TorusGeometry(0.13, 0.035, 10, 32), new T.MeshStandardMaterial({ color: theme.bloom, roughness: 0.35, emissive: theme.bloom, emissiveIntensity: theme.light ? 0.08 : 0.25 }));
+      ribbon.rotation.x = Math.PI / 2; ribbon.position.y = 0.88; ribbon.scale.setScalar(0.0001);
+      root.add(ribbon);
+    }
+  };
+
+  function instant(f) {
+    f.stem.geometry.setDrawRange(0, f.total);
+    f.leaves.forEach(l => l.scale.setScalar(l.userData.s));
+    f.head.scale.setScalar(1);
+    f.petals.forEach(p => { p.m.rotation.x = p.open; });
+    f.center.scale.setScalar(1);
+    f.fallen.forEach(x => x.scale.setScalar(1));
+    f.bloomed = true;
+  }
+
+  function grow(f, delay, opts = {}) {
+    if (f.bloomed) return;
+    f.bloomed = true;
+    const sd = f.wilted ? 1.7 : 1.05;
+    tween(sd, p => {
+      const e = easeOut(p);
+      f.stem.geometry.setDrawRange(0, Math.floor(f.total * e / 3) * 3);
+      f.leaves.forEach((l, i) => l.scale.setScalar(easeBack(clamp((p - 0.25 - i * 0.18) * 2.4, 0, 1)) * l.userData.s + 0.0001));
+    }, delay);
+    tween(f.wilted ? 1.6 : 1.45, p => {
+      f.head.scale.setScalar(0.2 + 0.8 * (f.wilted ? easeOut(p) : easeBack(p)));
+      f.petals.forEach(pt => {
+        const q = clamp(p * 1.35 - (2 - pt.li) * 0.12, 0, 1);
+        pt.m.rotation.x = 0.04 + (pt.open - 0.04) * (f.wilted ? easeOut(q) : easeElastic(q));
+      });
+      f.center.scale.setScalar(easeBack(clamp(p * 1.6 - 0.35, 0, 1)) + 0.0001);
+      f.fallen.forEach(x => x.scale.setScalar(clamp(p * 1.4 - 0.4, 0, 1) + 0.0001));
+    }, delay + sd * 0.88);
+    if (!f.wilted && !REDUCE) {
+      tween(0, () => { const h = f.headWorld(); burst(h, f.color, opts.big ? 260 : 170, opts.big ? 1.35 : 1); flash(h, f.color); }, delay + sd * 0.9);
+    }
+  }
+
+  function flash(pos, color) {
+    glow.position.copy(pos).add(new T.Vector3(0, 0.3, 0.6));
+    glow.color.copy(color).lerp(theme.gold, 0.4);
+    tween(1.1, p => { glow.intensity = (theme.light ? 1.6 : 3.2) * Math.pow(1 - p, 2); });
+  }
+
+  function burst(pos, color, count, power) {
+    if (PHONE) count = Math.max(8, Math.round(count * 0.45));
+    const geo = new T.BufferGeometry();
+    const P = new Float32Array(count * 3), C = new Float32Array(count * 3), V = new Float32Array(count * 3);
+    const c = new T.Color();
+    for (let i = 0; i < count; i++) {
+      P[i * 3] = pos.x; P[i * 3 + 1] = pos.y; P[i * 3 + 2] = pos.z;
+      const th = Math.random() * Math.PI * 2, ph = Math.acos(rnd(-0.6, 1)), sp = rnd(1.1, 3.1) * power;
+      V[i * 3] = Math.sin(ph) * Math.cos(th) * sp; V[i * 3 + 1] = Math.cos(ph) * sp + 0.8; V[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * sp;
+      c.copy(color).lerp(Math.random() < 0.35 ? theme.gold : white, rnd(0, theme.light ? 0.2 : 0.5));
+      C[i * 3] = c.r; C[i * 3 + 1] = c.g; C[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute("position", new T.BufferAttribute(P, 3));
+    geo.setAttribute("color", new T.BufferAttribute(C, 3));
+    const mat = new T.PointsMaterial({ size: theme.light ? 0.085 : 0.1, map: DOT, vertexColors: true, transparent: true, depthWrite: false,
+      blending: theme.light ? T.NormalBlending : T.AdditiveBlending, sizeAttenuation: true });
+    const pts = new T.Points(geo, mat);
+    scene.add(pts);
+    bursts.push({ pts, V, life: 0, max: rnd(1.8, 2.3) });
+  }
+
+  /* drifting petals */
+  const DRIFT = PHONE ? 22 : 64;
+  const driftGeo = petalGeo(0.36, 0.16, 0.6, 0.1, new T.Color(0.8, 0.8, 0.8), white);
+  const driftMat = new T.MeshStandardMaterial({ vertexColors: true, side: T.DoubleSide, roughness: 0.5, transparent: true, opacity: 0.9 });
+  const drift = new T.InstancedMesh(driftGeo, driftMat, DRIFT);
+  const driftState = [];
+  for (let i = 0; i < DRIFT; i++) driftState.push({ x: rnd(-6, 6), y: rnd(0, 7.5), z: rnd(-4, 3), vy: rnd(0.12, 0.32), ph: rnd(0, 6.28), sp: rnd(0.4, 1.4), s: rnd(0.6, 1.3) });
+  function paintDrift() { const c = new T.Color(); for (let i = 0; i < DRIFT; i++) { c.copy(theme.palette[i % theme.palette.length]); drift.setColorAt(i, c); } if (drift.instanceColor) drift.instanceColor.needsUpdate = true; }
+  paintDrift();
+  scene.add(drift);
+  let driftBoost = 0;
+
+  /* fireflies / pollen */
+  const FLY = PHONE ? 55 : 140;
+  const flyGeo = new T.BufferGeometry();
+  { const P = new Float32Array(FLY * 3), Ph = new Float32Array(FLY);
+    for (let i = 0; i < FLY; i++) { P[i * 3] = rnd(-6, 6); P[i * 3 + 1] = rnd(0.2, 6.5); P[i * 3 + 2] = rnd(-5, 3); Ph[i] = rnd(0, 6.28); }
+    flyGeo.setAttribute("position", new T.BufferAttribute(P, 3)); flyGeo.setAttribute("phase", new T.BufferAttribute(Ph, 1)); }
+  const flyMat = new T.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: T.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uSize: { value: 0.09 }, uColor: { value: new T.Color() }, uAlpha: { value: 1 } },
+    vertexShader: "attribute float phase;uniform float uTime;uniform float uSize;varying float vA;void main(){vec3 p=position;p.y+=sin(uTime*.4+phase)*.3;p.x+=cos(uTime*.27+phase*1.3)*.3;vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;vA=.25+.75*pow(.5+.5*sin(uTime*1.6+phase*3.),3.);gl_PointSize=uSize*(.6+vA*.7)*(320./-mv.z);}",
+    fragmentShader: "uniform vec3 uColor;uniform float uAlpha;varying float vA;void main(){float d=length(gl_PointCoord-.5);float a=smoothstep(.5,.0,d);gl_FragColor=vec4(uColor,a*vA*uAlpha);}"
+  });
+  const flies = new T.Points(flyGeo, flyMat);
+  scene.add(flies);
+
+  function applyTheme() {
+    readTheme();
+    fog.color.copy(theme.bg);
+    hemi.color.copy(theme.light ? new T.Color(1, 0.97, 0.98) : theme.bloom.clone().lerp(white, 0.6));
+    hemi.groundColor.copy(theme.bg2);
+    rim.color.copy(theme.bloom);
+    if (ground.material.map) ground.material.map.dispose();
+    ground.material.map = groundTex(); ground.material.needsUpdate = true;
+    grassMat.color.copy(theme.leaf).multiplyScalar(theme.light ? 0.9 : 0.55);
+    flyMat.uniforms.uColor.value.copy(theme.goldRaw);
+    flyMat.blending = theme.light ? T.NormalBlending : T.AdditiveBlending;
+    flyBase = theme.light ? 0.7 : 1; flyMat.uniforms.uAlpha.value = flyBase;
+    pulseLight.color.copy(theme.gold).lerp(theme.bloom, 0.5);
+    flyMat.needsUpdate = true;
+    paintDrift();
+  }
+  applyTheme();
+  api.retheme = () => { applyTheme(); paintBugs(); retarget(); };
+
+  /* ---------- scenery: one world per part of the music ----------
+     intro  = night sky, stars, a moon (Maestoso)          theme = golden dawn behind the bouquet (Alla polacca)
+     trio   = storm: racing clouds, lightning, wind, rain, open loops circling (Trio)
+     quiet  = moonlit drizzle and fog over the wilted stems (Sostenuto)
+     coda   = sunrise and fireworks (Coda). Colours are sRGB; lights and fog are converted to linear. */
+  const P = (o) => o;
+  const PRESETS = {
+    intro: { dark: P({ top: "#06051a", mid: "#191443", hor: "#3d2b63", ground: "#6d6aa6", fly: "#ffd27a" }),
+             light: P({ top: "#4a4f8f", mid: "#9c96cf", hor: "#f0cfe0", ground: "#b8b2dc", fly: "#c98a12" }),
+             sun: 0, sunY: -0.1, moon: 0.95, moonY: 0.3, stars: 1, cloud: 0.12, cloudSpeed: 0.004, rain: 0, wind: 0.08, rings: 0,
+             hemi: "#9aa0ff", hemiI: 0.6, key: "#c0c8ff", keyI: 0.6, rim: "#8a7dff", rimI: 0.9, fog: 1.1, flies: 1, camD: 0.92, camY: 0.9, lookY: -0.8 },
+    theme: { dark: P({ top: "#22183c", mid: "#8e3b5e", hor: "#ffb27a", ground: "#d9a27a", fly: "#ffd27a" }),
+             light: P({ top: "#86b6ec", mid: "#f4c8c2", hor: "#ffe3b3", ground: "#f0d2b6", fly: "#c98a12" }),
+             sun: 1.0, sunY: 0.05, sunCol: "#ffd29a", moon: 0, moonY: 0.3, stars: 0.08, cloud: 0.22, cloudSpeed: 0.006, rain: 0, wind: 0.15, rings: 0,
+             hemi: "#ffe2cc", hemiI: 0.95, key: "#ffd6a6", keyI: 1.2, rim: "#ff9a7a", rimI: 0.95, fog: 1, flies: 0.75, camD: 1, camY: 0, lookY: 0 },
+    trio:  { dark: P({ top: "#0a0f1f", mid: "#29244f", hor: "#4b3e6b", ground: "#7d76a8", fly: "#ffd27a" }),
+             light: P({ top: "#8a90aa", mid: "#b0aec6", hor: "#dcd8e6", ground: "#b4afc8", fly: "#a96f00" }),
+             sun: 0, sunY: -0.1, moon: 0, moonY: 0.3, stars: 0, cloud: 0.95, cloudSpeed: 0.07, rain: 0.55, wind: 1, rings: 1,
+             hemi: "#b8b4ff", hemiI: 0.7, key: "#cfd6ff", keyI: 0.75, rim: "#ffc65c", rimI: 1.5, fog: 1.25, flies: 0.3, camD: 0.9, camY: -0.3, lookY: 0.25 },
+    quiet: { dark: P({ top: "#03060e", mid: "#0e1b33", hor: "#21324f", ground: "#46597d", fly: "#9fc4ff" }),
+             light: P({ top: "#8ea4bf", mid: "#b9c7d8", hor: "#dfe6ee", ground: "#c2ccd8", fly: "#4a6a9a" }),
+             sun: 0, sunY: -0.1, moon: 1, moonY: 0.13, stars: 0.45, cloud: 0.35, cloudSpeed: 0.01, rain: 0.85, wind: 0.04, rings: 0,
+             hemi: "#9db8ff", hemiI: 0.5, key: "#a9c4ff", keyI: 0.5, rim: "#6f8cff", rimI: 0.8, fog: 1.9, flies: 0.35, camD: 0.97, camY: 0.55, lookY: -0.25 },
+    coda:  { dark: P({ top: "#2b2453", mid: "#ff7b6b", hor: "#ffd57d", ground: "#ffd0a0", fly: "#fff0b0" }),
+             light: P({ top: "#6db4ff", mid: "#ffdab2", hor: "#fff2cb", ground: "#ffe7c4", fly: "#c98a12" }),
+             sun: 1.25, sunY: 0.2, sunCol: "#fff0c2", moon: 0, moonY: 0.3, stars: 0, cloud: 0.18, cloudSpeed: 0.01, rain: 0, wind: 0.22, rings: 0,
+             hemi: "#fff0e0", hemiI: 1.15, key: "#fff1d8", keyI: 1.45, rim: "#ffd27a", rimI: 1.1, fog: 0.85, flies: 1, camD: 1.1, camY: 0.35, lookY: 0.45 },
+  };
+  const NUMS = ["sun", "sunY", "moon", "moonY", "stars", "cloud", "cloudSpeed", "rain", "wind", "rings", "hemiI", "keyI", "rimI", "fog", "flies", "camD", "camY", "lookY"];
+  const COLS = ["top", "mid", "hor", "ground", "fly"], LCOLS = ["hemi", "key", "rim", "sunCol"];
+  function target(id) {
+    const p = PRESETS[id] || PRESETS.intro, pal = theme.light ? p.light : p.dark, o = {};
+    NUMS.forEach(k => { o[k] = p[k]; });
+    if (theme.light) { o.stars *= 0.35; o.hemiI *= 1.15; o.keyI *= 1.05; }
+    COLS.forEach(k => { o[k] = new T.Color(pal[k]); });
+    LCOLS.forEach(k => { o[k] = new T.Color(p[k] || "#ffd29a"); });
+    return o;
+  }
+  let sceneId = "intro", want = target("intro"), cur = target("intro");
+  api.setScene = (id) => { if (id !== sceneId) { sceneId = id; want = target(id); } };
+  const retarget = () => { want = target(sceneId); };
+
+  const skyU = {
+    uTop: { value: new T.Color() }, uMid: { value: new T.Color() }, uHor: { value: new T.Color() }, uSunCol: { value: new T.Color() },
+    uSunDir: { value: new T.Vector3(0, 0.05, -1).normalize() }, uMoonDir: { value: new T.Vector3(-0.13, 0.3, -1).normalize() },
+    uSun: { value: 0 }, uMoon: { value: 0 }, uStars: { value: 0 }, uCloud: { value: 0 }, uTime: { value: 0 }, uFlash: { value: 0 }, uLight: { value: 0 }
+  };
+  const sky = new T.Mesh(new T.SphereGeometry(40, 48, 24), new T.ShaderMaterial({
+    uniforms: skyU, side: T.BackSide, depthWrite: false, depthTest: false, fog: false,
+    vertexShader: "varying vec3 vDir;void main(){vDir=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
+    fragmentShader: [
+      "uniform vec3 uTop,uMid,uHor,uSunCol,uSunDir,uMoonDir;uniform float uSun,uMoon,uStars,uCloud,uTime,uFlash,uLight;varying vec3 vDir;",
+      "float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}",
+      "float n2(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h21(i),h21(i+vec2(1.,0.)),f.x),mix(h21(i+vec2(0.,1.)),h21(i+vec2(1.,1.)),f.x),f.y);}",
+      "float fbm(vec2 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*n2(p);p=p*2.03+7.1;a*=.5;}return s;}",
+      "void main(){vec3 d=normalize(vDir);float y=d.y;",
+      "vec3 col=mix(uMid,uTop,smoothstep(.04,.8,y));col=mix(uHor,col,smoothstep(-.03,.26,y));col=mix(col,uHor*.42,smoothstep(-.02,-.35,y));",
+      "float sd=max(dot(d,normalize(uSunDir)),0.);",
+      "col+=uSunCol*uSun*(smoothstep(.9988,.9993,sd)*2.2+pow(sd,24.)*.5+pow(sd,4.)*.16);",
+      "float md=max(dot(d,normalize(uMoonDir)),0.);",
+      "col+=vec3(1.,.97,.9)*uMoon*(smoothstep(.99966,.99978,md)*1.1+pow(md,90.)*.2+pow(md,8.)*.05);",
+      "if(uStars>.001&&y>0.){vec2 g=d.xz/(y+.4)*60.;vec2 c=floor(g);float r=h21(c);float tw=.55+.45*sin(uTime*2.3+r*50.);",
+      "float st=step(.982,r)*smoothstep(.45,0.,length(fract(g)-.5))*tw;col+=vec3(st)*uStars*smoothstep(.02,.3,y)*(1.-uCloud*.7);}",
+      "if(uCloud>.001&&y>-.06){vec2 q=d.xz/(y+.2)*1.5+vec2(uTime,uTime*.35);float f=fbm(q);float c=smoothstep(.36,.78,f);",
+      "vec3 cc=mix(uTop*.55,mix(uMid,uHor,.55)*1.3,smoothstep(.5,.95,f+.25*fbm(q*2.3)))+uFlash*vec3(.8,.85,1.);",
+      "if(uLight>.5)cc=mix(uMid,vec3(1.),.35)+uFlash*vec3(.4);",
+      "col=mix(col,cc,c*uCloud*smoothstep(-.06,.25,y));}",
+      "col+=uFlash*vec3(.55,.6,.85)*(.25+.75*smoothstep(0.,.7,y));",
+      "gl_FragColor=vec4(col,1.);}"
+    ].join("\n")
+  }));
+  sky.renderOrder = -10; sky.frustumCulled = false;
+  scene.add(sky);
+  let cloudT = 0, flashAmt = 0;
+
+  /* rain */
+  const RAIN = PHONE ? 240 : 700;
+  const rainGeo = new T.BufferGeometry();
+  const rainP = new Float32Array(RAIN * 6), rainS = [];
+  for (let i = 0; i < RAIN; i++) rainS.push({ x: rnd(-8, 8), y: rnd(0, 9), z: rnd(-7, 4), v: rnd(6, 10) });
+  rainGeo.setAttribute("position", new T.BufferAttribute(rainP, 3));
+  const rainMat = new T.LineBasicMaterial({ color: 0xbcd0ff, transparent: true, opacity: 0, depthWrite: false });
+  const rain = new T.LineSegments(rainGeo, rainMat); rain.frustumCulled = false; rain.visible = false;
+  scene.add(rain);
+
+  /* open loops: rings circling the bouquet in the storm */
+  const ringMat = new T.MeshStandardMaterial({ color: 0xffc65c, emissive: 0xffc65c, emissiveIntensity: 0.6, roughness: 0.3, metalness: 0.2 });
+  const ringGeo = new T.TorusGeometry(0.42, 0.022, 8, 64);
+  const rings = [];
+  for (let i = 0; i < 6; i++) {
+    const r = new T.Mesh(ringGeo, ringMat);
+    r.userData = { a: i / 6 * Math.PI * 2, rad: rnd(1.25, 1.75), y: rnd(1.0, 3.6), sp: rnd(0.7, 1.1), tilt: rnd(-0.6, 0.6) };
+    r.visible = false; rings.push(r);   /* rings retired: bees now stand for open projects */
+  }
+  let ringCount = 0;
+  api.setOpenLoops = (n) => { ringCount = clamp(n, 0, 6); };
+  let focusRing = -1;
+  api.focusLoop = (j) => { focusRing = j; };
+  const FRONT = new T.Vector3(-0.7, 3.95, 1.5), qFront = new T.Quaternion(), tmpV = new T.Vector3(), tmpV2 = new T.Vector3(), tmpV3 = new T.Vector3(),
+    tmpE = new T.Euler(), tmpQ = new T.Quaternion(), tmpM = new T.Matrix4();
+
+  /* ---------- insects: each kind stands for one kind of thing ----------
+     bee = a project started and still open (it buzzes round the bouquet)
+     moth = you said it mattered and skipped it (it keeps to its bowed stem)      butterfly = tomorrow's one thing
+     Wings are drawn from the same outlines as the little key icons on the page. */
+  function pathShape(cmds, s) {          /* icon coords (left wing, body at x=10, head at the top) -> wing plane: x outward, y forward */
+    const sh = new T.Shape(), c = (x, y) => [(10 - x) * s, (10 - y) * s];
+    cmds.forEach(k => { if (k[0] === "M") sh.moveTo(...c(k[1], k[2])); else sh.bezierCurveTo(...c(k[1], k[2]), ...c(k[3], k[4]), ...c(k[5], k[6])); });
+    return new T.ShapeGeometry(sh, 12);
+  }
+  function ellGeo(cx, cy, rx, ry, rot) {
+    const sh = new T.Shape(), N = 22, cr = Math.cos(rot), sr = Math.sin(rot);
+    for (let i = 0; i <= N; i++) { const a = i / N * Math.PI * 2, x = Math.cos(a) * rx, y = Math.sin(a) * ry; const px = cx + x * cr - y * sr, py = cy + x * sr + y * cr; i ? sh.lineTo(px, py) : sh.moveTo(px, py); }
+    return new T.ShapeGeometry(sh);
+  }
+  const stripeTex = (() => {
+    const c = document.createElement("canvas"); c.width = 4; c.height = 64; const g = c.getContext("2d");
+    [["#f2b51c", 0, 14], ["#2a1d12", 14, 7], ["#f2b51c", 21, 10], ["#2a1d12", 31, 7], ["#f2b51c", 38, 10], ["#2a1d12", 48, 16]].forEach(([col, y, h]) => { g.fillStyle = col; g.fillRect(0, y, 4, h); });
+    const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; return t;
+  })();
+  const BUG = {
+    clearWing: new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: T.DoubleSide, depthWrite: false }),
+    beeBody: new T.MeshStandardMaterial({ map: stripeTex, emissive: 0xffffff, emissiveMap: stripeTex, emissiveIntensity: 0.22, roughness: 0.6 }),
+    dark: new T.MeshStandardMaterial({ color: 0x241a14, roughness: 0.7 }),
+    fly: new T.MeshStandardMaterial({ color: 0xffc65c, emissive: 0xffc65c, emissiveIntensity: 0.5, roughness: 0.35, metalness: 0.3 }),
+    flyWing: new T.MeshBasicMaterial({ color: 0xfff3d6, transparent: true, opacity: 0.42, side: T.DoubleSide, depthWrite: false }),
+    moth: new T.MeshStandardMaterial({ color: 0xb9ad9a, emissive: 0xb9ad9a, emissiveIntensity: 0.12, roughness: 1, side: T.DoubleSide }),
+    but: new T.MeshStandardMaterial({ color: 0xff7eaa, emissive: 0xff7eaa, emissiveIntensity: 0.25, roughness: 0.5, side: T.DoubleSide })
+  };
+  const GEO = {
+    ball: new T.SphereGeometry(1, 14, 10).rotateX(Math.PI / 2),
+    beeW: [ellGeo(0.055, 0.0, 0.055, 0.026, 0.35), ellGeo(0.042, -0.032, 0.04, 0.019, 0.6)],
+    flyBody: new T.CylinderGeometry(0.011, 0.006, 0.3, 6).rotateX(Math.PI / 2).translate(0, 0, -0.05),
+    flyW: [ellGeo(0.12, 0.012, 0.12, 0.022, -0.08), ellGeo(0.11, -0.03, 0.11, 0.02, 0.12)],
+    mothW: [pathShape([["M", 10, 7.5], ["C", 6, 3.5, 1, 4.5, 1.5, 9.8], ["C", 2.5, 13.5, 7, 13, 10, 11.2]], 0.017)],
+    butW: [pathShape([["M", 10, 9], ["C", 6, 2, 1, 3, 2, 8], ["C", 3, 11, 7, 11, 9.5, 10.5], ["C", 7, 12, 4, 14, 5, 17], ["C", 7, 18, 9, 15, 10, 12]], 0.021)],
+    stick: new T.CylinderGeometry(0.008, 0.008, 0.16, 6).rotateX(Math.PI / 2)
+  };
+  function makeBug(kind, parent) {
+    const g = new T.Group(), L = new T.Group(), R = new T.Group(); R.scale.x = -1; g.add(L, R);
+    const part = (geo, mat, sx, sy, sz, z) => { const m = new T.Mesh(geo, mat); m.scale.set(sx, sy, sz); m.position.z = z || 0; g.add(m); return m; };
+    const wings = (geos, mat, y, z) => geos.forEach(geo => { [L, R].forEach(P => { const m = new T.Mesh(geo, mat); m.rotation.x = Math.PI / 2; P.add(m); }); L.position.set(0, y, z); R.position.set(0, y, z); });
+    if (kind === "bee") { part(GEO.ball, BUG.beeBody, 0.046, 0.042, 0.075); part(GEO.ball, BUG.dark, 0.032, 0.032, 0.032, 0.088); wings(GEO.beeW, BUG.clearWing, 0.036, 0.01); }
+    if (kind === "fly") { part(GEO.flyBody, BUG.fly, 1, 1, 1); part(GEO.ball, BUG.fly, 0.026, 0.024, 0.026, 0.115); wings(GEO.flyW, BUG.flyWing, 0.012, 0.07); }
+    if (kind === "moth") { part(GEO.ball, BUG.moth, 0.022, 0.02, 0.058); wings(GEO.mothW, BUG.moth, 0.012, 0); }
+    if (kind === "but") { part(GEO.stick, BUG.dark, 1, 1, 1); wings(GEO.butW, BUG.but, 0.006, 0); }
+    g.userData = { s: 0, ph: rnd(0, 6.28), sp: rnd(1.0, 1.5) * (Math.random() < 0.5 ? -1 : 1) };
+    g.visible = false; (parent || scene).add(g);
+    return { g, L, R };
+  }
+  const flap = (b, a) => { b.L.rotation.z = a; b.R.rotation.z = -a; };
+  const bees = Array.from({ length: 6 }, () => makeBug("bee"));
+  let beeCount = 0;
+  api.showBees = (n) => { beeCount = clamp(n, 0, bees.length); };
+  const moths = Array.from({ length: 6 }, () => makeBug("moth"));
+  const butterfly = makeBug("but");
+  let butOn = false;
+  api.butterfly = (on) => { butOn = !!on; };
+  function paintBugs() {
+    BUG.fly.color.copy(theme.gold); BUG.fly.emissive.copy(theme.gold); BUG.fly.emissiveIntensity = theme.light ? 0.2 : 0.5;
+    BUG.moth.color.copy(theme.wilt).lerp(new T.Color(0.75, 0.62, 0.45), 0.35); BUG.moth.emissive.copy(BUG.moth.color); BUG.moth.emissiveIntensity = theme.light ? 0.06 : 0.38;
+    BUG.but.color.copy(theme.bloom); BUG.but.emissive.copy(theme.bloom); BUG.but.emissiveIntensity = theme.light ? 0.12 : 0.3;
+    BUG.clearWing.opacity = theme.light ? 0.75 : 0.5; BUG.clearWing.color.set(theme.light ? 0xe9eef7 : 0xffffff);
+    BUG.flyWing.opacity = theme.light ? 0.6 : 0.42;
+  }
+  paintBugs();
+  /* a bug hovering round a point: ang sets where on its circle it is, and it faces the way it is going */
+  function hover(b, h, ang, rx, rz, y, dt, on, size) {
+    const u = b.g.userData;
+    u.s += ((on ? 1 : 0) - u.s) * (REDUCE ? 1 : Math.min(1, dt * 2.4));
+    b.g.visible = u.s > 0.02;
+    if (!b.g.visible) return false;
+    b.g.position.set(h.x + Math.cos(ang) * rx, h.y + y, h.z + Math.sin(ang) * rz);
+    const ah = ang + 0.3 * Math.sign(u.sp);
+    tmpV.set(h.x + Math.cos(ah) * rx, h.y + y, h.z + Math.sin(ah) * rz);
+    b.g.lookAt(tmpV);
+    b.g.scale.setScalar(u.s * size);
+    return true;
+  }
+  function stepBugs(dt) {
+    const bt = REDUCE ? 0 : tm;
+    /* a bee per open project: it arrives with its card in the storm and keeps buzzing round the bouquet for the rest of the night;
+       the project on screen flies forward and grows */
+    const bf = flowers.filter(f => f.bloomed);
+    bees.forEach((b, i) => {
+      const u = b.g.userData;
+      u.fp = (u.fp || 0) + ((i === focusRing ? 1 : 0) - (u.fp || 0)) * (REDUCE ? 1 : Math.min(1, dt * 2.2));
+      const h = bf.length ? bf[i % bf.length].headWorld() : new T.Vector3(Math.cos(i * 2.4) * 0.6, 2.9, Math.sin(i * 2.4) * 0.4);
+      if (u.fp > 0.001) { tmpV3.copy(FRONT); tmpV3.y += REDUCE ? 0 : Math.sin(tm * 1.1) * 0.08; h.lerp(tmpV3, u.fp); }
+      const r = 0.44 * (1 - u.fp * 0.55), dim = focusRing >= 0 && i !== focusRing ? 0.85 : 1;
+      if (hover(b, h, bt * u.sp + u.ph, r, r * 0.82, (0.2 + Math.sin(bt * 2.7 + u.ph) * 0.08) * (1 - u.fp), dt, i < beeCount, 2.1 * (1 + u.fp * 1.15) * dim))
+        flap(b, REDUCE ? 0.5 : 0.3 + Math.sin(tm * 57 + u.ph) * 0.6);
+    });
+    moths.forEach((b, j) => {
+      const f = wilted[j], u = b.g.userData;
+      if (!f) { b.g.visible = false; u.s = 0; return; }
+      const on = f.bloomed && f.head.scale.x > 0.6;
+      const h = f.headWorld(); h.x = h.x * 0.55 + Math.sin(bt * 3.7 + u.ph * 2) * 0.08; h.z += 0.5;   /* the wilted heads hang out at the edges; the moths keep near enough to see */
+      if (hover(b, h, bt * u.sp * 0.8 + u.ph, 0.34, 0.26, 0.5 + Math.sin(bt * 2.1 + u.ph) * 0.14, dt, on, 2))
+        flap(b, REDUCE ? 0.4 : 0.2 + Math.sin(tm * 11 + u.ph) * 0.8);
+    });
+    { const b = butterfly, u = b.g.userData;
+      tmpV2.set(0, 3.75 + xE * 3.2, 0.35);
+      if (hover(b, tmpV2, bt * 0.55 + 0.6, 1.0, 0.6, Math.sin(bt * 1.7) * 0.2, dt, butOn, 2.2)) flap(b, REDUCE ? 0.6 : 0.3 + Math.sin(tm * 8.5) * 0.85); }
+  }
+
+  /* ---------- seeds: during the opening count one seed per win drops into the soil and sprouts; each sprout gives way when its flower grows ---------- */
+  const seedGeo = new T.SphereGeometry(1, 10, 8);
+  const seedMat = new T.MeshStandardMaterial({ color: 0xc89a52, emissive: 0xffc65c, emissiveIntensity: 0.75, roughness: 0.5 });
+  const sprouts = [], falling = [];
+  function sproutAt(i, n) {
+    const a = i * 2.39996 + 0.9, r = 0.3 + 0.45 * Math.sqrt((i + 0.5) / Math.max(1, n));
+    return new T.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r * 0.75 + 0.25);
+  }
+  function makeSprout(pos) {
+    const g = new T.Group(); g.position.copy(pos);
+    const green = new T.Color(0x5fc46f).convertSRGBToLinear();
+    const sm = new T.MeshStandardMaterial({ color: green, emissive: green, emissiveIntensity: 0.35, roughness: 0.7, side: T.DoubleSide });
+    g.add(new T.Mesh(new T.CylinderGeometry(0.011, 0.016, 0.2, 5).translate(0, 0.1, 0), sm));
+    const lg = new T.SphereGeometry(1, 10, 6);
+    [0, Math.PI].forEach(ry => { const piv = new T.Group(); piv.position.y = 0.19; piv.rotation.y = ry + rnd(-0.3, 0.3); const m = new T.Mesh(lg, sm); m.scale.set(0.045, 0.012, 0.085); m.position.z = 0.07; m.rotation.x = -0.5; piv.add(m); g.add(piv); });
+    g.scale.setScalar(0.0001); g.visible = false; g.userData = { k: 0, grown: 0, ph: rnd(0, 6.28) };
+    root.add(g); return g;
+  }
+  api.plant = (i, n, instant) => {
+    if (sprouts[i]) return;
+    const at = sproutAt(i, n), sp = makeSprout(at); sprouts[i] = sp;
+    if (instant || REDUCE) { sp.userData.grown = 1; return; }
+    const seed = new T.Mesh(seedGeo, seedMat); seed.scale.set(0.055, 0.075, 0.055); root.add(seed); falling.push(seed);
+    const y0 = 5.4, x0 = at.x * 0.5;
+    tween(0.95, p => { seed.position.set(x0 + (at.x - x0) * p, y0 + (0.05 - y0) * p * p, at.z); seed.rotation.set(p * 9, p * 5, 0); }, 0, () => {
+      root.remove(seed); falling.splice(falling.indexOf(seed), 1);
+      const g = at.clone(); g.y = 0.06;
+      burst(g, theme.gold, 50, 0.42); burst(g, theme.leaf, 24, 0.3);
+      flash(g.clone().setY(0.35), theme.gold);
+      tween(0.75, p => { sp.userData.grown = easeBack(p); });
+    });
+  };
+  api.sproutGlow = () => { if (REDUCE) return; sprouts.forEach(sp => { if (sp) { const g = sp.position.clone(); g.y = 0.3; burst(g, theme.gold, 40, 0.5); } }); };
+  function stepSprouts(dt) {
+    sprouts.forEach((sp, i) => {
+      if (!sp) return;
+      const u = sp.userData, f = flowers[i];
+      u.k += ((f && f.bloomed ? 1 : 0) - u.k) * Math.min(1, dt * 2.5);
+      const sc = u.grown * (1 - u.k);
+      sp.visible = sc > 0.01;
+      sp.scale.setScalar(Math.max(0.0001, sc) * 2.4);
+      sp.rotation.z = REDUCE ? 0 : Math.sin(tm * 1.4 + u.ph) * 0.08;
+    });
+  }
+
+  /* ---------- entering and leaving: the camera dives down from the night sky, through cloud, into the garden; at the end it rises away ---------- */
+  let entP = 0, entT = 0, exP = 0, exT = 0, eE = 0, xE = 0;
+  const easeIO = p => p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+  const stepTo = (p, t, r) => p < t ? Math.min(t, p + r) : Math.max(t, p - r);
+  api.setEntry = (v) => { entP = entT = v; exP = exT = 0; };
+  api.enter = () => { entT = 1; if (REDUCE) entP = 1; };
+  api.exit = (on) => { exT = on ? 1 : 0; if (REDUCE) exP = exT; };
+  const puffs = [];
+  for (let i = 0; i < 16; i++) {
+    const s = new T.Sprite(new T.SpriteMaterial({ map: DOT, transparent: true, depthWrite: false, fog: false, opacity: 0 }));
+    s.position.set(rnd(-5, 5), rnd(4.8, 9.8), rnd(-3, 9));
+    const sc = rnd(2.6, 4.8); s.scale.set(sc * 1.7, sc, 1); s.userData.o = rnd(0.3, 0.6); s.visible = false;
+    scene.add(s); puffs.push(s);
+  }
+  function stepPuffs() {
+    const v = Math.max(1 - eE, xE * 0.7);
+    puffs.forEach(s => {
+      const o = REDUCE ? 0 : s.userData.o * v * clamp(s.position.distanceTo(camera.position) / 3, 0, 1);
+      s.visible = o > 0.01; if (!s.visible) return;
+      s.material.opacity = o * (theme.light ? 0.9 : 0.55);
+      s.material.color.copy(cur.hor).lerp(white, theme.light ? 0.7 : 0.25);
+    });
+  }
+
+  /* grass bends in the wind */
+  const windU = { value: 0 }, grassT = { value: 0 };
+  grassMat.onBeforeCompile = sh => {
+    sh.uniforms.uWind = windU; sh.uniforms.uGT = grassT;
+    /* bend in world space, after each blade's own placement, so the whole field leans one way */
+    sh.vertexShader = "uniform float uWind;uniform float uGT;\n" + sh.vertexShader.replace("#include <project_vertex>",
+      "vec4 mvPosition=vec4(transformed,1.);\n#ifdef USE_INSTANCING\nmvPosition=instanceMatrix*mvPosition;\n#endif\n" +
+      "float hh=clamp(position.y/.42,0.,1.);hh*=hh;" +
+      "mvPosition.x+=hh*((.035+uWind*.2)*sin(uGT*(1.3+uWind*3.)+mvPosition.x*1.7+mvPosition.z*1.3)+uWind*.13);" +
+      "mvPosition.z+=hh*uWind*.04*sin(uGT*2.+mvPosition.x);" +
+      "mvPosition=modelViewMatrix*mvPosition;gl_Position=projectionMatrix*mvPosition;");
+  };
+
+  api.lightning = (s) => { if (!REDUCE) flashAmt = Math.max(flashAmt, s); };
+  api.fireworks = (s) => {
+    if (REDUCE) return;
+    const n = s >= 0.95 ? 3 : 1;
+    for (let k = 0; k < n; k++) {
+      const c = theme.palette[Math.floor(Math.random() * theme.palette.length)];
+      const at = new T.Vector3(rnd(-4.5, 4.5), rnd(4.6, 6.8), rnd(-7, -3.5));
+      tween(0, () => { burst(at, c, Math.round(140 + s * 160), 1.9 + s * 0.6); burst(at, theme.gold, 60, 0.9); }, k * 0.18);
+    }
+  };
+
+  const tmpC = new T.Color();
+  function sceneStep(dt) {
+    const k = REDUCE ? 1 : 1 - Math.exp(-dt * 1.5);
+    NUMS.forEach(n => { cur[n] += (want[n] - cur[n]) * k; });
+    COLS.concat(LCOLS).forEach(n => cur[n].lerp(want[n], k));
+    skyU.uTop.value.copy(cur.top); skyU.uMid.value.copy(cur.mid); skyU.uHor.value.copy(cur.hor); skyU.uSunCol.value.copy(cur.sunCol);
+    skyU.uSun.value = cur.sun; skyU.uMoon.value = cur.moon; skyU.uStars.value = cur.stars; skyU.uCloud.value = cur.cloud;
+    skyU.uSunDir.value.set(0.12, cur.sunY, -1).normalize();
+    skyU.uMoonDir.value.set(-0.13, cur.moonY, -1).normalize();
+    skyU.uLight.value = theme.light ? 1 : 0;
+    if (!REDUCE) cloudT += dt * cur.cloudSpeed;
+    skyU.uTime.value = cloudT; 
+    flashAmt = Math.max(0, flashAmt - dt * 5);
+    skyU.uFlash.value = flashAmt * (theme.light ? 0.35 : 0.6);
+    fog.color.copy(cur.hor).convertSRGBToLinear();
+    ground.material.color.set(0xffffff).lerp(tmpC.copy(cur.ground), 0.55).convertSRGBToLinear();
+    hemi.color.copy(cur.hemi).convertSRGBToLinear(); key.color.copy(cur.key).convertSRGBToLinear(); rim.color.copy(cur.rim).convertSRGBToLinear();
+    flyMat.uniforms.uColor.value.copy(cur.fly);
+    windU.value = REDUCE ? 0 : cur.wind; grassT.value = tm;
+    /* rain */
+    const ra = REDUCE ? 0 : cur.rain;
+    rain.visible = ra > 0.02;
+    if (rain.visible) {
+      rainMat.color.set(theme.light ? "#56688c" : "#c4d4ff");
+      rainMat.opacity = ra * (theme.light ? 0.4 : 0.5);
+      const slant = cur.wind * 0.5;
+      for (let i = 0; i < RAIN; i++) {
+        const s = rainS[i];
+        s.y -= s.v * dt; s.x += slant * s.v * dt * 0.35;
+        if (s.y < 0) { s.y = rnd(7, 9.5); s.x = rnd(-8, 8); }
+        if (s.x > 8) s.x -= 16;
+        const j = i * 6;
+        rainP[j] = s.x; rainP[j + 1] = s.y; rainP[j + 2] = s.z;
+        rainP[j + 3] = s.x - slant * 0.12; rainP[j + 4] = s.y + 0.32; rainP[j + 5] = s.z;
+      }
+      rainGeo.attributes.position.needsUpdate = true;
+    }
+  }
+  api.mark = () => sceneId;
+
+  /* camera framing */
+  let dist = 9, camY = 2.5, lookY = 1.8, portrait = false, fogBase = 0.04;
+  function frame() {
+    const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
+    renderer.setSize(w, h, false);
+    const asp = w / h; portrait = asp < 0.85;
+    camera.aspect = asp; camera.fov = portrait ? 50 : 38;
+    const half = 2.7;
+    dist = clamp(half / (Math.tan(camera.fov * Math.PI / 360) * asp), 7.2, 13);
+    camY = portrait ? 2.2 : 2.6; lookY = portrait ? 1.25 : 1.85;
+    fog.density = 0.38 / dist; fogBase = fog.density;
+    camera.updateProjectionMatrix();
+  }
+  frame();
+  new ResizeObserver(frame).observe(canvas);
+
+  /* drag to turn */
+  let drag = 0, dragTarget = 0, down = null, moved = false;
+  canvas.parentElement.addEventListener("pointerdown", e => { down = { x: e.clientX, d: dragTarget }; moved = false; });
+  window.addEventListener("pointermove", e => { if (!down) return; const dx = e.clientX - down.x; if (Math.abs(dx) > 6) moved = true; dragTarget = clamp(down.d + dx * 0.005, -0.9, 0.9); });
+  window.addEventListener("pointerup", () => { down = null; });
+  api.wasDrag = () => moved;
+
+  /* where each bloom and each moth sits on screen, so its name can sit beside it */
+  const pv = new T.Vector3();
+  api.anchors = { wins: [], missed: [] };
+  function put(arr, i, v, vis) {
+    const w = canvas.clientWidth, h = canvas.clientHeight; pv.copy(v).project(camera);
+    const a = arr[i] || (arr[i] = {});
+    a.x = (pv.x * 0.5 + 0.5) * w; a.y = (-pv.y * 0.5 + 0.5) * h; a.w = w; a.h = h; a.vis = !!vis && pv.z < 1;
+  }
+  function project() {
+    camera.updateMatrixWorld();
+    const live = eE > 0.92 && xE < 0.05, A = api.anchors;
+    A.wins.length = flowers.length; A.missed.length = wilted.length;
+    flowers.forEach((f, i) => put(A.wins, i, f.headWorld(), live && f.bloomed && f.head.scale.x > 0.7));
+    wilted.forEach((f, j) => { const b = moths[j], on = live && f.bloomed && f.head.scale.x > 0.6;
+      put(A.missed, j, b && b.g.visible ? b.g.position : f.headWorld(), on); });
+  }
+
+  /* hooks for the story */
+  api.bloomUpTo = (i, opts) => { flowers.slice(0, i + 1).forEach((f, k) => grow(f, k < i ? 0 : 0.05, k === i ? opts : {})); if (ribbon && ribbon.scale.x < 0.5) tween(0.8, p => ribbon.scale.setScalar(easeBack(p) + 0.0001), 0.6); };
+  api.focusOn = (i) => { const f = flowers[i]; if (!f) { focusTarget.set(0, 2, 0); return; } const h = f.headWorld(); focusTarget.set(h.x * 0.35, 2 + (h.y - 2) * 0.3, h.z * 0.35); };
+  api.showWilted = () => { dimTarget = 1; focusTarget.set(0, 1.5, -0.4); wilted.forEach((f, j) => grow(f, 0.2 + j * 0.35)); };
+  api.undim = () => { dimTarget = 0; focusTarget.set(0, 2, 0); };
+  api.finale = () => {
+    dimTarget = 0; liftTarget = 1; focusTarget.set(0, 2.2, 0);
+    api.bloomAll();
+    if (REDUCE) return;
+    driftBoost = 1;
+    flowers.forEach((f, k) => tween(0, () => burst(f.headWorld(), f.color, 120, 1.25), 0.2 + k * 0.16));
+    tween(0, () => { const h = new T.Vector3(0, 3, 0); burst(h, theme.gold, 320, 1.6); flash(h, theme.gold); }, 0.25 + flowers.length * 0.16);
+  };
+  api.bloomAll = () => { flowers.forEach(f => grow(f, 0)); if (ribbon) ribbon.scale.setScalar(1); };
+  api.instantUpTo = (i, withWilted) => { flowers.slice(0, i + 1).forEach(f => instant(f)); if (withWilted) wilted.forEach(f => instant(f)); if (ribbon && i >= 0) ribbon.scale.setScalar(1); };
+  const bloomedOnes = () => flowers.filter(f => f.bloomed);
+  /* music hooks: a scripted accent (strength 0..1) in a named section of the piece */
+  api.accent = (st, sec) => {
+    if (REDUCE) return;
+    kick = Math.max(kick, st);
+    if (sec === "quiet") return;
+    if (sec === "trio") api.lightning(0.5 + st * 0.6);
+    if (sec === "coda") api.fireworks(st);
+    if (sec === "intro" || sec === "trio") {
+      const c = sec === "trio" ? theme.gold : theme.palette[Math.floor(Math.random() * theme.palette.length)];
+      const at = new T.Vector3(rnd(-1.4, 1.4), 0.2, rnd(-0.7, 0.5));
+      burst(at, c, Math.round(50 + st * 190), 0.55 + st * 0.95);
+      if (st >= 0.8) flash(new T.Vector3(0, 2.4, 0.4), c);
+      return;
+    }
+    const b = bloomedOnes();
+    if (b.length) { const f = b[Math.floor(Math.random() * b.length)]; burst(f.headWorld(), f.color, Math.round(40 + st * 150), 0.6 + st * 0.7); }
+    if (st >= 0.95) { const h = new T.Vector3(0, 3, 0); burst(h, theme.gold, Math.round(200 * st), 1.45); flash(h, theme.gold); }
+  };
+  /* small sparkle on a detected note onset */
+  api.sparkle = () => {
+    if (REDUCE || dimTarget > 0.5) return;
+    const b = bloomedOnes(); if (!b.length) return;
+    const f = b[Math.floor(Math.random() * b.length)];
+    burst(f.headWorld(), f.color, 22, 0.42);
+  };
+  api.instantAll = (withWilted) => { flowers.forEach(f => instant(f)); if (withWilted) wilted.forEach(f => instant(f)); if (ribbon) ribbon.scale.setScalar(1); dimTarget = 0; };
+
+  /* loop */
+  const clock = new T.Clock();
+  const dummy = new T.Object3D();
+  let running = true;
+  document.addEventListener("visibilitychange", () => { running = !document.hidden; if (running) { clock.getDelta(); requestAnimationFrame(loop); } });
+  function loop() {
+    if (!running) return;
+    const dt = Math.min(clock.getDelta(), 0.1);   /* slow frames still keep pace with the story */
+    tm += dt;
+    for (let i = tweens.length - 1; i >= 0; i--) {
+      const tw = tweens[i]; tw.t += dt;
+      if (tw.t < 0) continue;
+      const p = tw.dur <= 0 ? 1 : clamp(tw.t / tw.dur, 0, 1);
+      tw.fn(p);
+      if (p >= 1) { tweens.splice(i, 1); tw.done && tw.done(); }
+    }
+    for (let i = bursts.length - 1; i >= 0; i--) {
+      const b = bursts[i]; b.life += dt;
+      const P = b.pts.geometry.attributes.position.array, V = b.V;
+      for (let k = 0; k < V.length; k += 3) {
+        V[k + 1] -= 1.9 * dt; V[k] *= 0.986; V[k + 1] *= 0.986; V[k + 2] *= 0.986;
+        P[k] += V[k] * dt; P[k + 1] += V[k + 1] * dt; P[k + 2] += V[k + 2] * dt;
+      }
+      b.pts.geometry.attributes.position.needsUpdate = true;
+      b.pts.material.opacity = clamp(1 - Math.pow(b.life / b.max, 1.6), 0, 1);
+      if (b.life >= b.max) { scene.remove(b.pts); b.pts.geometry.dispose(); b.pts.material.dispose(); bursts.splice(i, 1); }
+    }
+    dim += (dimTarget - dim) * Math.min(1, dt * 2.2);
+    lift += (liftTarget - lift) * Math.min(1, dt * 1.2);
+    driftBoost = Math.max(0, driftBoost - dt * 0.15);
+    entP = stepTo(entP, entT, dt / 5.4); exP = stepTo(exP, exT, dt / 5.8);
+    eE = easeIO(entP); xE = easeIO(exP);
+    sceneStep(dt);
+    stepBugs(dt);
+    stepSprouts(dt);
+    fog.density = fogBase * cur.fog;
+    const lk = 1 - 0.35 * dim;
+    hemi.intensity = cur.hemiI * lk + 0.12 + flashAmt * 0.8;
+    key.intensity = cur.keyI * lk;
+    rim.intensity = cur.rimI * (theme.light ? 0.5 : 1) * lk + flashAmt * 0.6;
+
+    const sw = REDUCE ? 0 : 1;
+    swell += (A.swell - swell) * Math.min(1, dt * 1.5);
+    kick = Math.max(0, kick - dt * 2.6);
+    pulseLight.intensity = sw * (theme.light ? 0.9 : 2.4) * (A.bass * 0.75 + A.level * 0.45 + kick * 0.5) * lk;
+    const beatSw = Math.sin(A.beat * Math.PI) * 0.045 * swell * sw;
+    [...flowers, ...wilted, ...buds].forEach((f, i) => {
+      f.group.rotation.z = Math.sin(tm * 0.7 + f.phase) * 0.018 * sw + beatSw * (f.wilted ? 0.3 : 1)
+        - sw * cur.wind * 0.05 * (0.7 + 0.5 * Math.sin(tm * 2.1 + f.phase));
+      f.group.rotation.x = Math.cos(tm * 0.55 + f.phase) * 0.012 * sw;
+      if (!f.wilted) f.group.scale.setScalar(1 + sw * (A.level * 0.05 + kick * 0.025));
+    });
+    ground.scale.setScalar(1 + sw * A.bass * 0.06);
+    flyMat.uniforms.uSize.value = 0.09 * (1 + sw * A.level * 0.9);
+    flyMat.uniforms.uAlpha.value = flyBase * cur.flies * (1 - 0.4 * dim) * (0.75 + 0.45 * (sw ? A.level : 0.5));
+
+    for (let i = 0; i < DRIFT; i++) {
+      const s = driftState[i];
+      if (!REDUCE) { s.y -= s.vy * dt * (1 + driftBoost * 2.5 + swell * 1.6 + A.level * 0.8); s.x += Math.sin(tm * s.sp + s.ph) * dt * 0.25 + cur.wind * dt * 1.8; }
+      if (s.y < 0) { s.y = 7.5; s.x = rnd(-6, 6); }
+      if (s.x > 7) s.x -= 14;
+      dummy.position.set(s.x, s.y, s.z);
+      dummy.rotation.set(tm * s.sp + s.ph, tm * s.sp * 0.7, s.ph);
+      dummy.scale.setScalar(s.s * (1 + driftBoost * 0.4));
+      dummy.updateMatrix(); drift.setMatrixAt(i, dummy.matrix);
+    }
+    drift.instanceMatrix.needsUpdate = true;
+    flyMat.uniforms.uTime.value = REDUCE ? 2 : tm;
+
+    drag += (dragTarget - drag) * Math.min(1, dt * 4);
+    focus.lerp(focusTarget, Math.min(1, dt * 1.4));
+    const az = (REDUCE ? 0 : Math.sin(tm * 0.09) * 0.3) + drag + xE * 0.7;
+    const up = 1 - eE;
+    const d = dist * cur.camD * (1 - 0.06 * lift - sw * (0.022 * kick + 0.012 * A.bass)) * (1 + up * 0.45 + xE * 0.85);
+    camera.position.set(Math.sin(az) * d + focus.x * 0.4, camY + cur.camY + lift * 0.5 + up * 8.6 + xE * 6.2, Math.cos(az) * d + focus.z * 0.4);
+    camera.lookAt(focus.x * 0.6, lookY + cur.lookY + (focus.y - 2) * 0.6 + lift * 0.2 + up * 9.8 - xE * 0.9, focus.z * 0.6);
+    sky.position.copy(camera.position);
+    stepPuffs();
+    project();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  return api;
+})();
+if (!Garden.ok) document.documentElement.classList.add("nogl");
+
+/* ---------------- Data ---------------- */
+const fmtDay = (iso, long) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12));
+  return dt.toLocaleDateString("en-US", long ? { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" } : { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+};
+/* he is Ryo; older nights were written to "Rio" */
+const fixName = v => String(v == null ? "" : v).replace(/\bRio\b/g, "Ryo");
+const firstSentence = t => { t = String(t || "").trim(); const m = t.match(/^.+?[.!?]["”]?(?=\s+["“]?[A-Z0-9]|$)/); return m ? m[0] : t; };
+/* the oracle speaks in one line: a long first sentence breaks at its first comma, the rest goes underneath */
+function oracle(t) {
+  const f = firstSentence(t), rest = restSentences(t);
+  if (f.length <= 64) return [f, rest];
+  const m = f.slice(20, 110).search(/,\s| so | before | then /);
+  let at = m >= 0 ? 20 + m : -1, clause = at >= 0 && at <= 64;
+  if (!clause && f.length <= 76) return [f, rest];
+  if (!clause) { const sp = f.lastIndexOf(" ", 60); at = sp > 20 ? sp : -1; }
+  if (at < 0) return [f, rest];
+  const head = f.slice(0, at).replace(/[\s,;:]+$/, "") + (clause ? "." : "…");
+  let tail = f.slice(at).replace(/^[\s,]+/, "");
+  if (clause) tail = tail.charAt(0).toUpperCase() + tail.slice(1);
+  return [head, (tail + " " + rest).trim()];
+}
+const restSentences = t => String(t || "").trim().slice(firstSentence(t).length).trim();
+const lastSentence = t => { t = String(t || "").trim(); const parts = t.match(/[^.!?]+[.!?]+["”]?/g); return parts && parts.length > 1 ? parts[parts.length - 1].trim() : t; };
+const short = (t, n) => { t = String(t || "").trim(); if (t.length <= n) return t; const c = t.slice(0, n - 1), sp = c.lastIndexOf(" "); return (sp > n * 0.55 ? c.slice(0, sp) : c).replace(/[,;:.\s]+$/, "") + "…"; };
+const asItems = (arr, k2) => (Array.isArray(arr) ? arr : []).map(x => typeof x === "string" ? { title: fixName(x) } : (x && typeof x === "object" ? { title: fixName(x.title || ""), note: fixName(x[k2] || x.note || x.detail || x.why || "") } : null)).filter(x => x && x.title);
+/* an open project can carry a short pitch: what it is, how close it is (status, progress 0..1), why finishing pays off, and a kind for its picture */
+const KINDS = ["checklist", "dashboard", "hub", "site", "game", "music", "hardware", "code", "writing", "spark"];
+function guessKind(t) {
+  t = t.toLowerCase();
+  if (/all your pages|home base|\bhub\b|every page/.test(t)) return "hub";
+  if (/todo|to-do|checklist|\blist\b|task/.test(t)) return "checklist";
+  if (/dashboard|tracker|metric|countdown|halloween|week/.test(t)) return "dashboard";
+  if (/site|website|portfolio|blog|\.com|\.is\b|shop|store|page/.test(t)) return "site";
+  if (/game|cards?\b/.test(t)) return "game";
+  if (/music|beat|song|track|riff/.test(t)) return "music";
+  if (/arduino|sensor|hardware|circuit|solder|chamber|esp32|rack/.test(t)) return "hardware";
+  if (/code|app\b|bot\b|api\b|repo|script|extension|plugin/.test(t)) return "code";
+  if (/write|essay|post\b|letter|resume|cover|application/.test(t)) return "writing";
+  return "spark";
+}
+const cut = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+const openItems = arr => (Array.isArray(arr) ? arr : []).map(x => {
+  if (typeof x === "string") x = { title: x };
+  if (!x || typeof x !== "object" || !x.title) return null;
+  const title = fixName(x.title);
+  let p = x.progress === null || x.progress === "" || x.progress === undefined ? NaN : Number(x.progress);
+  p = Number.isFinite(p) ? clamp(p > 1 ? p / 100 : p, 0, 1) : null;
+  return { title, note: cut(x.note || x.detail, 180), pitch: cut(x.pitch, 180), status: cut(x.status, 90), payoff: cut(x.payoff, 180), progress: p,
+    kind: KINDS.includes(x.kind) ? x.kind : guessKind(title) };
+}).filter(Boolean);
+function normalize(id, raw) {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(raw.date || "") ? raw.date : id;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const wins = asItems(raw.wins, "detail"), missed = stillMissing(date, asItems(raw.missed, "why")), open = openItems(raw.started_open);
+  const num = (v, f) => Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : f;
+  return { id, date, wins, missed, open,
+    started: num(raw.started_count, null), finished: num(raw.finished_count, wins.length),
+    streak: num(raw.streak, 0), headline: fixName(raw.headline || ""), tomorrow: fixName(raw.tomorrow || ""), close: fixName(raw.close || ""),
+    missedNote: fixName(raw.missed_note || "") };
+}
+
+let days = [], idx = -1;
+const nightsLatest = () => { for (let i = days.length - 1; i >= 0; i--) if (!days[i].week) return days[i].date; return ""; };
+
+/* Things the nightly list kept carrying after they were done (checked against the mail they came from). */
+const DONE = [];
+const stillMissing = (date, items) => items.filter(m => !DONE.some(x => date > x.on && x.re.test(m.title)));
+
+/* The week. Every night's flowers in one bouquet, each night in its own colour.
+   WEEK_NOTES adds what got done off the list that week (each checked at its source), and the doors that close at its end. */
+const WEEK_NOTES = { from: "1970-01-01", through: "1970-01-01", extra: [], open: [] };
+const isoAdd = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d, 12) + n * 864e5).toISOString().slice(0, 10); };
+const dayGap = (a, b) => { const t = x => { const [y, m, d] = x.split("-").map(Number); return Date.UTC(y, m - 1, d); }; return Math.round((t(b) - t(a)) / 864e5); };
+const shortDay = iso => fmtDay(iso, false).replace(/^(\w+), /, "$1 ");
+function weekRange(d) {
+  const a = fmtDay(d.from, false).split(", ")[1], b = fmtDay(d.date, false).split(", ")[1];
+  return a.split(" ")[0] === b.split(" ")[0] ? `${a} – ${b.split(" ")[1]}` : `${a} – ${b}`;
+}
+function buildWeek(list) {
+  if (!list.length) return null;
+  const last = list[list.length - 1].date, N = WEEK_NOTES, notes = last <= N.through && last >= N.from;
+  const from = notes ? N.from : isoAdd(last, -7);
+  const nights = [];
+  for (let iso = from; iso <= last; iso = isoAdd(iso, 1)) nights.push({ date: iso, n: 0, rec: !!list.find(x => x.date === iso) });
+  const wins = [];
+  nights.forEach((nt, ci) => {
+    const day = list.find(x => x.date === nt.date);
+    const mine = (day ? day.wins : []).map(w => ({ title: w.title, note: w.note }));
+    if (notes) N.extra.filter(x => x.date === nt.date).forEach(x => mine.push({ title: x.title, note: x.note, turned: !!x.turned }));
+    mine.forEach(w => { w.ci = ci; w.night = nt.date; wins.push(w); });
+    nt.n = mine.length; nt.ci = ci;
+  });
+  if (!wins.length) return null;
+  const end = list[list.length - 1];
+  return { id: "week", week: true, date: last, from, nights, wins,
+    missed: end.missed, open: notes ? N.open.map(o => ({ ...o, progress: null, note: "" })) : end.open,
+    started: null, finished: wins.length, streak: 0,
+    headline: notes ? N.headline : "", missedNote: notes ? N.missedNote : end.missedNote,
+    tomorrow: notes ? N.tomorrow : end.tomorrow, tomorrowLabel: notes ? N.tomorrowLabel : "Tomorrow, one thing",
+    close: notes ? N.close : end.close };
+}
+/* one lantern per night; lit by what finished that night */
+function lanternsInto(box, d, now, wait) {
+  box.textContent = ""; box.className = "lan" + (wait ? " wait" : "");
+  if (!d || !d.week) { box.hidden = true; return; }
+  box.hidden = false; box.setAttribute("role", "img");
+  box.setAttribute("aria-label", d.nights.map(n => `${shortDay(n.date)}: ${n.n}`).join(", "));
+  const HUES = [340, 14, 42, 270, 322, 356, 295, 28, 200];
+  d.nights.forEach(n => {
+    const sp = el("span", (n.n ? "" : "off") + (now === n.date ? " now" : ""));
+    const i = el("i"); i.style.setProperty("--h", HUES[n.ci % HUES.length]); i.style.setProperty("--s", (0.8 + Math.min(n.n, 5) * 0.14).toFixed(2));
+    sp.append(i); if (!now) sp.append(el("small", null, fmtDay(n.date, false).slice(0, 1)));
+    sp.dataset.d = n.date; box.append(sp);
+  });
+}
+const SEEN = "flowers.seen";
+const seenGet = () => { try { return localStorage.getItem(SEEN) || ""; } catch (e) { return ""; } };
+const seenSet = v => { try { localStorage.setItem(SEEN, v); } catch (e) {} };
+
+/* ---------------- Music ---------------- */
+/* An abridgement of Chopin's Op. 53, written out by ear, rendered on Salamander Grand Piano samples (CC BY 3.0, Alexander Holm).
+   CUES holds its section map, scripted accents and a 20 Hz loudness envelope (used when the analyser can't run). */
+const CUES = {"duration":114.703,"sections":[{"id":"intro","mark":"Maestoso","bpm":96,"start":0.0,"end":22.805},{"id":"theme","mark":"Alla polacca","bpm":88,"start":22.805,"end":47.505},{"id":"trio","mark":"Trio","bpm":92,"start":47.505,"end":67.07},{"id":"quiet","mark":"Sostenuto","bpm":70,"start":67.07,"end":88.37},{"id":"coda","mark":"Coda","bpm":90,"start":88.37,"end":114.703}],"slam":18.75,"themeBars":[22.805,24.851,26.896,28.942,30.987,33.033,35.078,37.123,39.169,41.214,43.26,45.305],"accents":[[0.0,0.32],[3.75,0.44],[7.5,0.56],[11.25,0.68],[15.0,0.72],[16.875,0.8],[18.75,1.0],[20.625,0.6],[22.805,0.9],[24.851,0.6],[26.896,0.6],[28.942,0.6],[30.987,0.9],[33.033,0.6],[35.078,0.6],[37.123,0.6],[39.169,0.9],[41.214,0.7],[43.26,0.7],[45.305,1.0],[47.505,0.92],[48.157,0.88],[48.809,0.84],[49.461,0.8],[50.113,0.76],[50.766,0.72],[51.418,0.42],[53.374,0.48],[55.331,0.54],[57.287,0.6],[59.244,0.66],[61.2,0.72],[63.157,0.78],[65.113,0.84],[67.07,0.2],[88.37,0.95],[90.37,0.8],[92.37,0.8],[94.37,0.8],[96.37,0.85],[98.37,0.85],[100.37,0.88],[101.037,0.5],[101.703,0.5],[102.37,0.88],[103.111,0.5],[103.851,0.5],[104.592,1.0],[107.37,1.0]],"env20":"P19cWlVMSEVBPTo5OEM8PEo/P0lDOURGPEVNQk9RSkpZU01YXFBLU0RXVFBZUVVcX1Z0Z11raWdZTTozLyYxWF1TTktIR0RAPjw4VYV9c3BuZmNhXllbVF5ZWGFlVmJVTWJcVFliW1hgaGBkaVphalteVVBmZmVrfHGJgY2GkYuOkZKGVVJAOzc2dYZ+fHFuamliXVpZcK6tp56blZSTjIeFgHF5ho9/g39wbYZ4coGNhoeViY2ViZOTlYeEgXaSgn6Xp4WusZ2bpcG3yaa7hWhgVEVJf4uKhoFwbmtoZ2BZgsK3tKulmpSSiIeKiZ6qlJmYlp2LhZqlkrOpnaGunqezqp2xrqCqnKO/vKjNxrLa1sLY3sbl69u8sZNxa19VucvDxLSkn5SJeXJukZmRh4aCi5OPlZWQkZeEgYV8eZ6ckoyAe6GsopqQiJ2tpZuShovHv6KcmpnJv67R07/j79rDu6Kz2cuynY+d5NnIsaiZ4OHPuqygpODt7d/e2MvJxMS4vO3r2su7r8jMu66emLrRxreqnLXY0r+wpp+EaGBldmhxlYuRhqKBipyrkIKlmJOYtaCfqLWbobawsLTMubO+z7ux0dS/r5yMjY5+hoyChZSooqG6w7KtrJ2hl4+NgoN1i6SblZCPhIuJind7dHaLmIN6bV9TWFdLe5+ShJeNiX51dH+ZjoR7cWd6jH50bGlkg5d+dW1gVoyTi4GGgHqaoJeUkYd+joeBf3p1kpyBd2xjX4eYh3pybmiLj4B6d3Joio1/gYJ9gYd/gouEhIKloZyVkomKkYmMgoGDnaGZkY6Dhn2FfXh4d2ytoIJraHByfXZtnJ+Lk7GtqJ+Ujp2prqurqq61rKWjn56boZqTko6JhbeymX13WnKHfHSTm4mRnIh3cmdqgIx8fXVpa5ONgnhpY2F+c3VwZ2FkoJqLgXhxdY2QhbytmqCikouDeHV/hnp2a2djuMGul4F5dXh2bm1taIaRj4+SlIeKj4CElI6Ooq+rnp+Vjau0rKSlmJKrsKWenZeOqpmEioSGkqSShnl3bHd5cHCWe3ioqrKam5iKqJillZ+Rj7CdkJKWioyvm5OTlI2y2r+tm415dHp5kL2hiKuXg3R3bmqmnZCOgHOAnoF0cmtrh4NzbGRjX5KsmYKEfm58g4SOo5aNmI+Kh4F8eaaSh4N6doSqhXhxbmt5ln5sbWlfhsnq3uja09TKyr+/urGuoJyYkI2FhoKAgHZ5c3J3cXFuaGpiYmFbXldbVFdtptHFzMa7s7SpnZSKh7C4t767sqafj4eJfnqWmoyemIuAfn+AdnR1gKKanqWckYaGf3p7foiclpyUhYB2bWZeXVdqeYCHf3dtZ1tQR01VYVhTVk9RQ09BS01NRkc8NDs8NTw7MzMxMTZKQDo9OjdMT0U7PjtAXVZMSlhFTkNHPz44PGBWTFVYVVpjWVZbT05WUlFQSURaY1VUWFZMenxvamJUVFhUXHRxaHJYR0pYTlBaUUlYUVJlYFVLU0JhYV1VUlBEiYhwXWFVXmpnY2BYT3NgWVhoV3B3eHFpYVd2Yl1cXVZTTlZMWFFOdHFiYWdbWF5aUYR8b315ZmVoXFFjYVtZUE18f3FvcWNmi4qCeXFgmbOokJF3gHN0aHJ3aZu1q5OKfm+Zk4d9em+Sp56WlpKAl5GMjn9zm6mZj4OFgX5ya6yrnJuslIGbgX6WgIiXkICTm3V2kHGFqaGMhYZxoMzAopWJjpeZi4uKfoeyoo6OjH6vsaGYmpOsvrKUnJ6HnqCUnIeRi4NyYVZLTkxJSEVDPjs8OzU5RjY5MTMsLC1MV1ZPTEM9QTxORkRFQUE7OVNsZE8+ODY1NU1PSE5MSEZEPTk3NS8tKyopPzgzNTM1Ly45V1FGPjczMTBZbWROPzk2NjU1MSoqKicnJ0VTSUVDPzo3M0FCOzg1MS0tMDUwLy4tKyspSk9IQVJmXkxFbGdXR0dFQDhUZFdGPjg0NDpkZllPSERBQ0ZDPjgyMzEwMGZvY05DPjs7QFJRTEtEPTs5WVJPRkA6NTQvOzc1MjAxMC9JY1hPUEVAPzo7ODUzMCwqJis2MzEuKygnJUVAPkM/Ojc0TVdEOS8tKy0qRU1JREE5NzU1W1VPS0hHQkBHTEVBPjk4NTplXEo/PDw6NVBqZFJDPDc2NU5FQkA8OC4qM0Q7NTQtKSsqYFE+ODQvLy0sL0I+QDo8Oj04VVdGQDo5OjU2TVNIRkE6NTEtS2heRjw7Ojk0MUE9ODMwKikmKFxfWVdUVEpMS0VKSEFKRUdLR1ZUUGFVXXNqb2dYXFlrbGFhXF11cYKFg66ipaGclJCRmIqIgICqqqS7r9HIwNfJtKifkpaalZ+5rq6wtKqmoZaZn5CUkYmGxb2kmJORhqGTiYp8dIPOwKudjn97d3W28deowL63tqydnsm3o5mUiri7qpmakpK+sJ2Zko6n3c2wpJ2PkaSdm6yqoa6upKCYlqi/rJuViYXGspmHgXh2paCYjoeDrsOuqKWhm4Z+c4WslpC0vrmpqqWco5SVh4iHuMW6qZyHfZGHiIODg5nPzbelmo2QlYak0Mu21MfEv72+u62dnZaTkrrBsqOfm5bU2s/P0tPP3LitjJl8lZN/m66ajsKvoKSYlZy/tayelpC2tJ6ioqKWrbGhnZWNmsW2raOmm7XHwcLy69/9//Tr3dXOzsm7tKecoaOXmI6MgKu1pp6ZkKXKuq6hopSPxNTGwNnR0MK3t62hmZCUtbOkm52Xkai0ta6enJCPrbrIwbiwqp+85vHx+u/a083LyMzDvLSgo5uIiIJ5c21raGdnbGxpcGtrbmxmZ2diX19XVlZRTVJQUk1OUUqHxKeVkJKGgoF2aGxobWdxbWluZGpnXF9bWFlbU1RWUFRWUlZXUlZVUFBRTElMQ0ZIQ0RIQ0hJRklJSUdLR0ZJQkREP0BBPT4+Pj8/Pz5CPkBBP0BBPj0+Ozo6ODY3NTMzMjEzMTA0MDIyMDAxMC8wKysrKScoJSUnJicnIRwWEA4NDg0NDQwMDAsLCQgHBgUEAwE="};
+const AUDIO_URL = "polonaise.m4a";
+const SEC = Object.fromEntries(CUES.sections.map(x => [x.id, x]));
+const ENV = (() => { try { return Uint8Array.from(atob(CUES.env20), c => c.charCodeAt(0)); } catch (e) { return new Uint8Array(1); } })();
+const SLAM = CUES.slam;   /* the E-flat fanfare after the four rising chord-runs: the count lands here */
+const INTRO0 = SLAM - 4.5;   /* start just before the fanfare: the count lands about four seconds after you press play */
+const secOf = t => { for (const x of CUES.sections) if (t >= x.start && t < x.end) return x; return SEC.coda; };
+const secAt = t => secOf(t).id;
+
+const Music = (() => {
+  const m = { state: "idle", started: false, muted: false, ended: false, silent: false, plan: [[0, CUES.duration]], seg: 0, onAudio: null };
+  let ctx = null, buf = null, src = null, sg = null, gain = null, an = null, t0 = 0, off = 0, vt0 = 0, loadP = null;
+  let fd = null, td = null, prevF = null; const fluxHist = []; let lastOn = 0;
+  try { m.muted = localStorage.getItem("flowers.muted") === "1"; } catch (e) {}
+  m.load = () => {
+    if (loadP) return loadP;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { m.state = "failed"; return (loadP = Promise.resolve(false)); }
+    try { ctx = new AC(); } catch (e) { m.state = "failed"; return (loadP = Promise.resolve(false)); }
+    m.state = "loading";
+    loadP = fetch(AUDIO_URL).then(r => { if (!r.ok) throw new Error("audio " + r.status); return r.arrayBuffer(); })
+      .then(ab => new Promise((res, rej) => { const r = ctx.decodeAudioData(ab, res, rej); if (r && r.catch) r.catch(() => {}); }))
+      .then(b => {
+        buf = b;
+        an = ctx.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.55;
+        gain = ctx.createGain(); gain.gain.value = m.muted ? 0 : 1;
+        an.connect(gain); gain.connect(ctx.destination);      /* analyser sits before the mute, so the garden still dances when muted */
+        fd = new Uint8Array(an.frequencyBinCount); td = new Uint8Array(an.fftSize);
+        m.state = "ready"; return true;
+      })
+      .catch(() => { m.state = "failed"; return false; });
+    return loadP;
+  };
+  m.duration = () => buf ? buf.duration : CUES.duration;
+  /* fade: crossfade from the old source instead of a hard cut (used when the night skips ahead in the piece) */
+  function startAt(o, fade) {
+    off = clamp(o, 0, m.duration() - 0.05);
+    m.ended = false;
+    if (src) {
+      const os = src, og = sg; src = null; sg = null;
+      if (fade && og && ctx) { try { og.gain.setTargetAtTime(0, ctx.currentTime, 0.09); os.stop(ctx.currentTime + 0.5); } catch (e) { try { os.stop(); } catch (e2) {} } }
+      else { try { os.stop(); } catch (e) {} try { os.disconnect(); } catch (e) {} }
+    }
+    if (!m.silent && buf && ctx) {
+      src = ctx.createBufferSource(); src.buffer = buf;
+      sg = ctx.createGain(); src.connect(sg); sg.connect(an);
+      if (fade) { sg.gain.setValueAtTime(0.0001, ctx.currentTime); sg.gain.setTargetAtTime(1, ctx.currentTime, 0.07); }
+      t0 = ctx.currentTime; src.start(0, off);
+    } else vt0 = performance.now() / 1000;
+  }
+  /* plan = list of [from, to] stretches of the recording, played in order; v0 = where each starts on the night's own clock */
+  let v0 = [0];
+  m.setPlan = plan => {
+    m.plan = plan && plan.length ? plan : [[0, m.duration()]]; m.seg = 0;
+    v0 = []; let acc = 0; m.plan.forEach(s => { v0.push(acc); acc += s[1] - s[0]; }); m.total = acc;
+  };
+  m.setPlan(m.plan);
+  m.planStart = () => m.plan[0][0];
+  m.planLength = () => m.total;
+  /* the night's clock: seconds since the first card, across every cut */
+  m.vtime = () => { if (!m.started) return 0; const s = m.plan[m.seg]; return v0[m.seg] + clamp(m.time() - s[0], 0, s[1] - s[0]); };
+  m.seekV = v => {
+    if (!m.started) return;
+    m.wake();
+    let i = 0; while (i < m.plan.length - 1 && v0[i + 1] <= v + 1e-3) i++;
+    m.seg = i; startAt(m.plan[i][0] + clamp(v - v0[i], 0, m.plan[i][1] - m.plan[i][0] - 0.05), true);
+  };
+  /* called every frame: at the end of one stretch of music, jump to the next */
+  m.step = () => {
+    if (!m.started || m.ended) return;
+    const s = m.plan[m.seg];
+    if (s && m.seg < m.plan.length - 1 && m.time() >= s[1] - 0.02) { m.seg++; startAt(m.plan[m.seg][0], true); }
+  };
+  /* pause holds everything on the night's clock: the music, the card, the count */
+  let pT = 0; m.paused = false;
+  m.pause = on => {
+    if (!m.started || on === m.paused || (on && m.ended)) return;
+    if (on) { pT = m.time(); m.paused = true; if (ctx) { try { ctx.suspend(); } catch (e) {} } }
+    else { m.paused = false; vt0 = performance.now() / 1000 - (pT - off); if (ctx) { try { ctx.resume(); } catch (e) {} } }
+  };
+  m.time = () => {
+    if (!m.started) return 0;
+    if (m.paused) return pT;
+    const t = (!m.silent && ctx) ? off + (ctx.currentTime - t0) : off + (performance.now() / 1000 - vt0);
+    return Math.min(t, m.duration());
+  };
+  m.wake = () => { if (m.paused) return; if (ctx && ctx.state !== "running" && ctx.state !== "closed") { try { ctx.resume(); } catch (e) {} } };
+  /* must run inside the tap: resume + unlock happen before the first await */
+  /* starts at once: if the piano is still loading, the night runs on a silent clock and the music fades in when it lands */
+  m.begin = () => {
+    m.load();
+    if (navigator.audioSession) { try { navigator.audioSession.type = "playback"; } catch (e) {} }
+    m.wake();
+    if (ctx) { try { const s = ctx.createBufferSource(); s.buffer = ctx.createBuffer(1, 1, 22050); s.connect(ctx.destination); s.start(0); } catch (e) {} }
+    m.silent = m.state !== "ready";
+    m.started = true; m.seg = 0; startAt(m.planStart());
+    if (m.silent) loadP.then(ok => {
+      if (ok && m.started && m.silent && !m.ended) { const t = m.time(); m.silent = false; m.wake(); startAt(t, true); }
+      m.onAudio && m.onAudio(ok);
+    });
+    return m.state === "ready";
+  };
+
+  m.setMuted = v => {
+    m.muted = v;
+    try { localStorage.setItem("flowers.muted", v ? "1" : "0"); } catch (e) {}
+    if (gain && ctx) gain.gain.setTargetAtTime(v ? 0 : 1, ctx.currentTime, 0.04);
+  };
+  /* level 0..1, bass 0..1, onset true on a fresh note attack */
+  m.read = t => {
+    if (!m.silent && an && src && !m.ended) {
+      an.getByteTimeDomainData(td); an.getByteFrequencyData(fd);
+      let s = 0; for (let i = 0; i < td.length; i++) { const v = (td[i] - 128) / 128; s += v * v; }
+      const level = clamp(Math.sqrt(s / td.length) * 3.4, 0, 1);
+      let b = 0; for (let i = 1; i <= 4; i++) b += fd[i];
+      const bass = clamp((b / 4 - 95) / 140, 0, 1);
+      let fl = 0;
+      if (prevF) { for (let i = 2; i < 160; i++) { const d = fd[i] - prevF[i]; if (d > 0) fl += d; } } else prevF = new Uint8Array(fd.length);
+      prevF.set(fd); fl /= 158 * 255;
+      fluxHist.push(fl); if (fluxHist.length > 40) fluxHist.shift();
+      const mean = fluxHist.reduce((a, x) => a + x, 0) / fluxHist.length;
+      const now = performance.now();
+      const onset = fl > mean * 1.8 + 0.012 && now - lastOn > 200;
+      if (onset) lastOn = now;
+      return { level, bass, onset };
+    }
+    const e = (ENV[Math.min(ENV.length - 1, Math.max(0, Math.floor(t * 20)))] || 0) / 255;
+    return { level: m.ended ? 0 : e, bass: m.ended ? 0 : e * e, onset: false };
+  };
+  return m;
+})();
+Music.load();
+
+/* ---------------- Story ---------------- */
+const cap = $("#cap"), bars = $("#bars"), stageEl = $("#stage");
+let stages = [], si = 0;
+let unitNode = null, lanNode = null;
+let countNode = null, countTo = 0, laterNode = null, slammed = false, ai = 0, lv = 0;
+let seedPlan = null, seedLine = null, planted = 0, shownSeed = -1;
+const beesFor = d => d ? Math.min(6, d.open.length || Math.max(0, (d.started || 0) - d.finished)) : 0;
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+/* little insect icons for the key (trusted strings, written here) */
+const BUGS = {
+  flower: '<svg viewBox="0 0 20 20" aria-hidden="true"><g fill="currentColor"><circle cx="10" cy="5.3" r="3.3"/><circle cx="14.5" cy="8.6" r="3.3"/><circle cx="12.8" cy="13.9" r="3.3"/><circle cx="7.2" cy="13.9" r="3.3"/><circle cx="5.5" cy="8.6" r="3.3"/></g><circle cx="10" cy="10" r="2.6" fill="#f2b51c"/></svg>',
+  bee: '<svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="8.4" cy="6" rx="3.6" ry="2.3" transform="rotate(-28 8.4 6)" fill="currentColor" fill-opacity=".14" stroke="currentColor" stroke-width="1.1" opacity=".75"/><ellipse cx="12.6" cy="6" rx="3" ry="2" transform="rotate(26 12.6 6)" fill="currentColor" fill-opacity=".14" stroke="currentColor" stroke-width="1.1" opacity=".75"/><ellipse cx="11.2" cy="12.2" rx="5.8" ry="3.9" fill="#f2b51c"/><path d="M9.6 8.6v7.2M12.8 8.5v7.4" stroke="#2a1d12" stroke-width="1.7"/><circle cx="4.4" cy="12.2" r="2.2" fill="#2a1d12"/></svg>',
+  fly: '<svg viewBox="0 0 20 20" aria-hidden="true"><g fill="currentColor" fill-opacity=".28" stroke="currentColor" stroke-width=".9"><ellipse cx="5.3" cy="6.8" rx="4.5" ry="1.4" transform="rotate(-8 5.3 6.8)"/><ellipse cx="14.7" cy="6.8" rx="4.5" ry="1.4" transform="rotate(8 14.7 6.8)"/><ellipse cx="5.7" cy="9.6" rx="4.1" ry="1.3" transform="rotate(12 5.7 9.6)"/><ellipse cx="14.3" cy="9.6" rx="4.1" ry="1.3" transform="rotate(-12 14.3 9.6)"/></g><path d="M10 6.2v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="10" cy="4.3" r="2" fill="currentColor"/></svg>',
+  moth: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 7.5C6 3.5 1 4.5 1.5 9.8 2.5 13.5 7 13 10 11.2ZM10 7.5C14 3.5 19 4.5 18.5 9.8 17.5 13.5 13 13 10 11.2Z" fill="currentColor" opacity=".6"/><ellipse cx="10" cy="10.6" rx="1.3" ry="4" fill="currentColor"/><path d="M9.4 6.8 7.6 3.4M10.6 6.8l1.8-3.4" stroke="currentColor" stroke-width=".9" stroke-linecap="round"/></svg>',
+  but: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 9C6 2 1 3 2 8c1 3 5 3 7.5 2.5C7 12 4 14 5 17c2 1 4-2 5-5ZM10 9c4-7 9-6 8-1-1 3-5 3-7.5 2.5C13 12 16 14 15 17c-2 1-4-2-5-5Z" fill="currentColor"/><path d="M10 7.3v8.6" style="stroke:var(--fg)" stroke-width="1.2" stroke-linecap="round"/></svg>'
+};
+const bugEl = k => { const i = el("i", "bug " + k); i.innerHTML = BUGS[k] || ""; return i; };
+const eyebrowWith = (k, text, extra) => { const s = el("span", "eyebrow ic" + (extra ? " " + extra : "")); s.append(bugEl(k), document.createTextNode(text)); return s; };
+
+/* a moving picture for each kind of project, drawn here (no screenshots: nothing of yours is fetched) */
+const ART = {
+  checklist: '<circle class="fg" cx="28" cy="30" r="6"/><path class="ln" d="M42 30h28"/><path class="gds tk d1" d="M25 30.2l2.4 2.5 4.4-4.9"/>' +
+    '<circle class="fg" cx="28" cy="47" r="6"/><path class="ln" d="M42 47h22"/><path class="gds tk d2" d="M25 47.2l2.4 2.5 4.4-4.9"/>' +
+    '<circle class="fg" cx="28" cy="64" r="6"/><path class="ln" d="M42 64h26"/><path class="gds tk d3" d="M25 64.2l2.4 2.5 4.4-4.9"/>' +
+    '<g class="pu"><rect class="bl" x="56" y="70" width="26" height="13" rx="6.5"/><path class="bgf" d="M66.5 73.4v6.2l5-3.1z"/></g>',
+  dashboard: '<path class="mt" d="M70 17a10 10 0 1 0 7 17 8 8 0 1 1-7-17z"/><path class="ln" d="M16 74h64"/>' +
+    [[22, 52], [33, 42], [44, 56], [55, 38], [66, 48]].map(([x, t], i) => `<rect class="fgf" x="${x}" y="${t}" width="7" height="${74 - t}" rx="1.5"/><path class="gd fl d${i % 3 + 1}" d="M${x + 3.5} ${t - 2}c-3.2-3.4-1.4-8 0-11 1.4 3 3.2 7.6 0 11z"/>`).join(""),
+  hub: '<circle class="gds sp" cx="48" cy="48" r="34" stroke-dasharray="3 8" opacity=".55"/>' +
+    [0, 1, 2, 3, 4, 5].map(i => { const a = i * Math.PI / 3 - Math.PI / 2, x = (48 + Math.cos(a) * 25).toFixed(1), y = (48 + Math.sin(a) * 25).toFixed(1);
+      return `<path class="ln" d="M48 48L${x} ${y}"/><circle class="gd${i % 2 ? " bk d" + i : ""}" cx="${x}" cy="${y}" r="4.6"/>`; }).join("") +
+    '<circle class="bl pu" cx="48" cy="48" r="8.5"/>',
+  site: '<rect class="fg" x="16" y="22" width="64" height="52" rx="6"/><path class="fg" d="M16 32h64"/><circle class="gd" cx="23" cy="27" r="1.6"/><circle class="gd" cx="28.5" cy="27" r="1.6"/><circle class="gd" cx="34" cy="27" r="1.6"/>' +
+    '<path class="bls dr" d="M24 44h40"/><path class="ln dr d2" d="M24 54h30"/><path class="ln dr d4" d="M24 64h20"/>',
+  game: '<rect class="fg" x="20" y="26" width="30" height="44" rx="4" transform="rotate(-12 35 48)"/><path class="gds" d="M35 41l5 7-5 7-5-7z" transform="rotate(-12 35 48)"/>' +
+    '<g class="flip"><rect class="bl" x="46" y="26" width="30" height="44" rx="4"/><path class="bgf" d="M61 40l6 8-6 8-6-8z"/></g>',
+  music: [22, 30, 38, 46, 54, 62, 70].map((x, i) => `<rect class="${i % 2 ? "gd" : "bl"} eq d${i % 6 + 1}" x="${x}" y="${30 + (i * 7) % 18}" width="5" height="${42 - (i * 7) % 18}" rx="2.5"/>`).join("") + '<path class="ln" d="M18 74h60"/>',
+  hardware: '<rect class="fg" x="30" y="30" width="36" height="36" rx="4"/>' +
+    [38, 48, 58].map(v => `<path class="fg" d="M${v} 22v8M${v} 66v8M22 ${v}h8M66 ${v}h8"/>`).join("") +
+    '<circle class="gd pu" cx="48" cy="48" r="7"/><path class="gds trace" d="M74 48h8V18H48"/>',
+  code: '<path class="fg" d="M34 32 20 48l14 16M62 32l14 16-14 16"/><path class="gds" d="M53 28 43 68"/><rect class="bl cur" x="66" y="70" width="10" height="3" rx="1.5"/>',
+  writing: '<path class="bls dr" d="M16 62c8-14 14 12 22 0s14-14 22 0 10 6 16-6"/><path class="fgf" d="M70 26l8 8-20 20-10 2 2-10z"/><path class="gd" d="M48 56l1.5-7.5 6 6z"/>',
+  spark: '<path class="gd tw" d="M48 22l5 18 18 6-18 6-5 18-5-18-18-6 18-6z"/><circle class="bl bk d1" cx="24" cy="26" r="2.6"/><circle class="gd bk d3" cx="74" cy="70" r="2.6"/><circle class="bl bk d5" cx="76" cy="24" r="2"/>'
+};
+const artSvg = k => '<svg viewBox="0 0 96 96" aria-hidden="true">' + (ART[k] || ART.spark) + '</svg>';
+function progRow(o) {
+  const r = el("div", "prog");
+  const pct = o.progress != null ? Math.round(o.progress * 100) : null;
+  if (pct != null) { const i = el("i"), b = el("b"); b.style.setProperty("--p", pct + "%"); i.append(b); r.append(i); }
+  r.append(el("span", null, o.status || (pct != null ? `About ${pct}% there` : "")));
+  return r;
+}
+
+function headline(d) {
+  const n = d.wins.length;
+  if (d.headline) return d.headline;
+  if (d.week) return n >= 5 ? "A week of real finishes." : "A week, still blooming.";
+  if (n >= 5) return "That's a real day, Ryo.";
+  if (n >= 3) return "Solid. Here's what you closed.";
+  if (n >= 1) return "Small, real, done.";
+  return "The vase is empty tonight. Tomorrow, one thing.";
+}
+
+/* Each part of the night starts on a cue in the music:
+   intro = the count, theme = one bloom per win on a downbeat, trio (galloping octaves) = too many open,
+   quiet episode = what you skipped, return + coda = tomorrow and the finale. A missing part hands its music to the one before. */
+/* Every card stays on screen as long as it takes to read (about 190 words a minute, plus a beat to look at the flower).
+   The music is built around those times: each card gets whole bars of its own part of the piece, and a part repeats
+   if a card needs more than it has. Cuts land on bar lines and crossfade, so the piece keeps its pulse. */
+let PLAN = [[0, CUES.duration]];
+const BAR = 3 * 60 / SEC.theme.bpm;
+const wordsIn = (...xs) => xs.filter(Boolean).join(" ").split(/\s+/).filter(Boolean).length;
+const readFor = n => clamp(2.8 + n * 0.34, 5.5, 16);   /* never rushed: at least five and a half seconds a card */
+const coachLine = d => {
+  const t = String(d.missedNote || "").trim(), parts = t.match(/[^.!?]+[.!?]+["”]?/g) || [];
+  if (parts.length < 2) return t;
+  const last = parts[parts.length - 1].trim();
+  /* a short scold leans on the sentence before it, so keep the two together */
+  return last.split(/\s+/).length < 6 || /^(Do it|It|That|This|Then)\b/.test(last) ? (parts[parts.length - 2].trim() + " " + last) : last;
+};
+function cardWords(st, d) {
+  if (st.k === "title") return wordsIn("things finished", headline(d));
+  if (st.k === "win") { const w = d.wins[st.i]; return wordsIn(w.title, PHONE && !w.turned ? "" : w.note); }
+  if (st.k === "open" && st.j >= 0) { const o = d.open[st.j]; return 2 + wordsIn(o.title, o.status, PHONE ? "" : (o.payoff || o.pitch || o.note)); }
+  if (st.k === "open") return wordsIn("Still open", d.open.map(o => o.title).join(" "), "You started things and finished some");
+  if (st.k === "missed") return 2 + wordsIn("Still waiting on you", coachLine(d), d.missed.slice(0, 3).map(m => m.title).join(" "));
+  if (st.k === "close") { const [h, sub] = oracle(d.tomorrow); return 3 + wordsIn("Tomorrow, one thing", h, PHONE && !d.week ? "" : sub); }
+  return 6;
+}
+function buildStages(d) {
+  if (!d) { PLAN = [[0, CUES.duration]]; return [{ k: "empty", vt: 0 }]; }
+  const segs = [], s = [];
+  let v = 0;
+  const take = (a, b) => { if (b - a < 0.02) return; const p = segs[segs.length - 1]; if (p && Math.abs(p[1] - a) < 0.02) p[1] = b; else segs.push([a, b]); v += b - a; };
+  /* play len seconds from a looping region, starting at cursor c.t */
+  const loop = (a, b, c, len) => { while (len > 0.02) { const e = Math.min(b, c.t + len); take(c.t, e); len -= e - c.t; c.t = e >= b - 0.02 ? a : e; } };
+  const lead = Garden.ok && !REDUCE ? 0.93 : 0;   /* start the stem early so the head opens on the chord */
+  const need = st => readFor(cardWords(st, d));
+
+  /* title: the count lands on the fanfare; the headline needs its own reading time after that */
+  const title = { k: "title", vt: 0 }; s.push(title);
+  take(INTRO0, SEC.theme.start);
+  const TB = CUES.themeBars, barEnd = c => c + 1 < TB.length ? TB[c + 1] : SEC.theme.end;
+  let bar = 0;
+  const takeBar = () => { take(TB[bar], barEnd(bar)); bar = (bar + 1) % TB.length; };
+  let titleLeft = need(title) - (SEC.theme.start - SLAM) + lead;   /* the first bloom starts a beat early, so add that back */
+  while (titleLeft > 0.05) { takeBar(); titleLeft -= BAR; }   /* the big tune starts under the headline */
+
+  /* wins: whole bars of the big tune each, repeating it if the night is long */
+  d.wins.forEach((w, i) => {
+    const st = { k: "win", i, vt: Math.max(0, v - lead) }; s.push(st);
+    const bars = Math.max(2, Math.ceil(need(st) / BAR));
+    for (let b = 0; b < bars; b++) takeBar();
+  });
+
+  /* open projects: the trio, looping */
+  const tc = { t: SEC.trio.start }, nOpen = Math.min(6, d.open.length);
+  const openCards = nOpen ? Array.from({ length: nOpen }, (_, j) => ({ k: "open", j })) : (d.started != null && d.started > d.finished ? [{ k: "open", j: -1 }] : []);
+  openCards.forEach(st => { st.vt = v; s.push(st); loop(SEC.trio.start, SEC.quiet.start, tc, need(st)); });
+
+  /* skipped: the quiet middle section */
+  if (d.missed.length) { const st = { k: "missed", vt: v }; s.push(st); loop(SEC.quiet.start, SEC.coda.start - 0.25, { t: SEC.quiet.start }, need(st)); }
+
+  /* close: the coda's fanfare, as much of its middle as the card needs, then the last climb and final chords */
+  const close = { k: "close", vt: v }; s.push(close);
+  const C0 = SEC.coda.start - 0.25, C1 = 92.37, C2 = 102.37;
+  take(C0, C1);
+  const shown = (C1 - C0) + (OUT - C2);   /* the card is up until the camera rises away */
+  const extra = clamp(need(close) - shown, 0, C2 - C1);
+  take(C1, C1 + extra);
+  take(C2, CUES.duration);
+  PLAN = segs;
+  return s;
+}
+const fmtLen = sec => sec < 75 ? `about ${Math.max(10, Math.round(sec / 5) * 5)} seconds` : `about ${Math.round(sec / 60)} minute${Math.round(sec / 60) === 1 ? "" : "s"}`;
+const stageAt = v => { let k = 0; for (let i = 0; i < stages.length; i++) if (stages[i].vt <= v + 1e-3) k = i; return k; };
+
+function paintBars() {
+  bars.textContent = "";
+  bars.hidden = stages.length < 2;
+  stages.forEach((st, i) => {
+    const b = el("i"); b.appendChild(el("b"));
+    if (Music.started && i < si) b.className = "done";
+    else if (Music.started && i === si) b.className = "now";
+    bars.appendChild(b);
+  });
+}
+
+function render(stage) {
+  const d = days[idx];
+  cap.className = "cap-in" + (REDUCE ? "" : " enter");
+  cap.textContent = "";
+  countNode = null; laterNode = null; lanNode = null;
+  void cap.offsetWidth;
+  seedPlan = null; seedLine = null;
+  if (Garden.ok) {
+    Garden.focusLoop(stage.k === "open" ? stage.j : -1); Garden.butterfly(stage.k === "close");
+    Garden.showBees(stage.k === "open" ? (stage.j >= 0 ? stage.j + 1 : beesFor(d)) : (stage.k === "missed" || stage.k === "close") ? beesFor(d) : 0);
+  }
+  if (stage.k === "pre") {
+    if (PHONE) return;
+    cap.append(el("span", "eyebrow", d ? (d.week ? "This week · " + weekRange(d) : fmtDay(d.date, true)) : "Tonight"),
+      el("h2", null, d ? (d.week ? "Your week is in bloom." : "Your flowers are ready.") : "Your flowers arrive at the end of the day."));
+    return;
+  }
+  if (stage.k === "empty") {
+    cap.append(el("span", "eyebrow", "Tonight"), el("h2", null, "Your flowers arrive at the end of the day."));
+    return;
+  }
+  if (stage.k === "title") {
+    cap.append(el("span", "eyebrow", d.week ? "This week · " + weekRange(d) : fmtDay(d.date, true)));
+    const big = el("div", "big"); const num = el("span", "num", "0");
+    const unit = el("span", "unit", d.wins.length === 1 ? "thing finished." : "things finished."); unitNode = unit;
+    big.append(num, unit);
+    const later = el("div", "later"), lt = el("div", "lights");
+    later.append(el("p", null, headline(d)), lt); lightsInto(lt, d.streak);
+    const sl = el("p", "seedline", "");
+    if (d.week) { const lw = el("div"); lanternsInto(lw, d, null, !REDUCE && Music.started); lanNode = lw; cap.append(big, lw, sl, later); }
+    else cap.append(big, sl, later);
+    countNode = num; countTo = d.wins.length; laterNode = later; slammed = false;
+    /* one seed per win lands while the count climbs (twelve at most); the count is the seeds in the ground */
+    const nS = Math.min(12, d.wins.length);
+    if (nS && !REDUCE && Music.started) { const a = INTRO0 + 0.8, b = SLAM - 0.4; seedPlan = nS === 1 ? [SLAM - 1.2] : Array.from({ length: nS }, (_, i) => a + i * (b - a) / (nS - 1)); seedLine = sl; planted = 0; shownSeed = -1; }
+    if (REDUCE || !Music.started) { num.textContent = String(countTo); later.classList.add("on"); countNode = null; }
+    Garden.ok && Garden.focusOn(-1);
+    return;
+  }
+  if (stage.k === "win") {
+    const w = d.wins[stage.i];
+    if (d.week) {
+      const eb = el("span", "eyebrow ic eb-win");
+      if (w.turned) { const t = el("span", "turn"); t.append(bugEl("moth"), bugEl("flower")); eb.append(t); } else eb.append(bugEl("flower"));
+      eb.append(document.createTextNode(`${shortDay(w.night)} · ${stage.i + 1} of ${d.wins.length}`));
+      const lw = el("span"); lanternsInto(lw, d, w.night, false); lw.setAttribute("aria-hidden", "true"); eb.append(lw);
+      cap.append(eb, el("h2", null, w.title));
+    } else cap.append(eyebrowWith("flower", `Finished · ${stage.i + 1} of ${d.wins.length}`, "eb-win"), el("h2", null, w.title));
+    if (w.note) cap.append(el("p", w.turned ? "sub keep" : "sub", w.note));
+    if (Garden.ok) { Garden.undim(); Garden.bloomUpTo(stage.i, { big: stage.i === d.wins.length - 1 }); Garden.focusOn(stage.i); }
+    return;
+  }
+  if (stage.k === "missed") {
+    /* the gentle reprimand: one moth for each thing you said mattered, its name on the bowed stem it keeps to */
+    const row = el("div", "mothrow"); row.setAttribute("aria-hidden", "true");
+    d.missed.slice(0, 6).forEach((m, i) => { const b = bugEl("moth"); b.style.setProperty("--i", i); row.append(b); });
+    cap.append(row, el("h2", null, "Still waiting on you."));
+    cap.append(el("p", "coach", coachLine(d) || "They're still yours. Pick one for tomorrow."));
+    if (!Garden.ok) {
+      const ul = el("ul");
+      d.missed.slice(0, 3).forEach(m => { const li = el("li"); li.append(el("strong", null, m.title)); ul.append(li); });
+      cap.append(ul);
+    } else cap.append(el("p", "sr", "Still waiting: " + d.missed.map(m => m.title).join(", ")));
+    if (Garden.ok) { Garden.bloomAll(); Garden.showWilted(); }
+    return;
+  }
+  if (stage.k === "open" && d.open[stage.j]) {
+    /* make the case for finishing it: what it is, how close it is, what you get */
+    const n = Math.min(6, d.open.length), o = d.open[stage.j];
+    cap.append(eyebrowWith("bee", `Still open · ${stage.j + 1} of ${n}`, "warn"), el("h2", "ttl", o.title));
+    const row = el("div", "pitch"), art = el("div", "art"), tx = el("div", "ptxt");
+    art.innerHTML = artSvg(o.kind);
+    if (o.status || o.progress != null) tx.append(progRow(o));
+    if (o.payoff) tx.append(el("p", "pay", o.payoff));
+    else if (o.pitch || o.note) tx.append(el("p", "pitch", o.pitch || o.note));
+    row.append(art, tx);
+    cap.append(row);
+    if (Garden.ok) { Garden.bloomAll(); Garden.undim(); }
+    return;
+  }
+  if (stage.k === "open") {
+    cap.append(eyebrowWith("bee", "Still open", "warn"));
+    const n = d.open.length;
+    cap.append(el("h2", null, d.started != null
+      ? `You started ${d.started} new ${d.started === 1 ? "thing" : "things"} and finished ${d.finished}.`
+      : `${n} ${n === 1 ? "thing" : "things"} you started ${n === 1 ? "is" : "are"} still open.`));
+    if (d.open.length) cap.append(el("p", null, d.open.map(o => o.title).join(" · ")));
+    if (Garden.ok) { Garden.bloomAll(); Garden.undim(); }
+    return;
+  }
+  if (stage.k === "close") {
+    /* the oracle: one line, the butterfly carries it */
+    const t = d.tomorrow || "Pick one thing and finish it before noon.";
+    const [h, sub] = oracle(t);
+    cap.append(eyebrowWith("but", d.tomorrowLabel || "Tomorrow, one thing"), el("h2", "oracle", h));
+    if (sub) cap.append(el("p", d.week ? "sub keep" : "sub", sub));
+    if (Garden.ok) Garden.finale();
+  }
+}
+
+function hint() {
+  if (!(Music.state === "failed" && Music.started)) $("#tapHint").textContent = !Music.started ? "Arrive · or press →" : Music.ended ? "Again · or drag the garden" : "Tap · ← → · drag to turn";
+  $("#back").disabled = !Music.started || si <= 0;
+  $("#fwd").disabled = Music.started && si >= stages.length - 1;
+  $("#pause").disabled = !Music.started || Music.ended;
+}
+const beckonEl = $("#beckon"); let beckT = 0;
+function beckon(on) { clearTimeout(beckT); beckonEl.classList.remove("on"); beckonEl.tabIndex = on ? 0 : -1; if (on) beckT = setTimeout(() => { if (!Music.paused) beckonEl.classList.add("on"); }, REDUCE ? 0 : 2200); }
+function go(i) {
+  si = clamp(i, 0, stages.length - 1);
+  render(stages[si]);
+  paintBars();
+  hint();
+  beckon(Music.started && !Music.ended && si < stages.length - 1);
+}
+
+/* names in the garden: each bloom carries what it was, each moth what it waits for */
+const tagsEl = $("#tags"); let tagW = [], tagM = [];
+function measureTags() { tagW.concat(tagM).forEach(n => { n._w = n.offsetWidth; n._h = n.offsetHeight; }); }
+function buildTags(d) {
+  tagsEl.textContent = ""; tagW = []; tagM = [];
+  if (!d || !Garden.ok) return;
+  const L = PHONE ? 24 : 34;
+  d.wins.forEach(w => { const n = el("div", "tag"); n.append(bugEl("flower"), el("span", null, short(w.title, L))); tagsEl.append(n); tagW.push(n); });
+  d.missed.slice(0, 6).forEach(m => { const n = el("div", "tag wilt"); n.append(bugEl("moth"), el("span", null, short(m.title, L))); tagsEl.append(n); tagM.push(n); });
+  requestAnimationFrame(measureTags);
+}
+addEventListener("resize", () => requestAnimationFrame(measureTags));
+function placeTags() {
+  if (!Garden.ok || !(tagW.length || tagM.length)) return;
+  const A = Garden.anchors, st = stages[si] || {}, k = st.k, live = Music.started && !stageEl.classList.contains("done");
+  const want = [];
+  tagW.forEach((n, i) => {
+    /* the last few blooms keep their names; older ones let theirs go so the bouquet stays clear */
+    want.push({ n, a: A.wins[i], show: k === "win" && i < st.i && i >= st.i - (PHONE ? 3 : 5), dim: false });
+  });
+  tagM.forEach((n, j) => want.push({ n, a: A.missed[j], show: k === "missed", dim: false }));
+  const on = want.filter(t => live && t.show && t.a && t.a.vis), placed = [];
+  want.forEach(t => { const v = on.includes(t); t.n.classList.toggle("on", v); t.n.classList.toggle("dim", v && t.dim); });
+  on.forEach(t => {
+    const a = t.a, w = t.n._w || 120, h = t.n._h || 16;
+    let flip = a.x < a.w / 2, x = flip ? a.x - 12 - w : a.x + 12, y = a.y - h / 2;
+    /* no room beside it: sit centred just under it instead of on top of it */
+    if (x < 8 || x + w > a.w - 8) { flip = false; x = clamp(a.x - w / 2, 8, a.w - 8 - w); y = a.y + 14; }
+    for (let pass = 0; pass < 3; pass++) for (const p of placed) if (x < p.x + p.w && x + w > p.x && y < p.y + p.h && y + h > p.y) y = p.y + p.h + 2;
+    placed.push({ x, y, w, h });
+    const n = t.n, e = REDUCE || n._x == null ? 1 : 0.15;
+    n._x = n._x == null ? x : n._x + (x - n._x) * e; n._y = n._y == null ? y : n._y + (y - n._y) * e;
+    n.classList.toggle("flip", flip);
+    n.style.transform = `translate(${Math.round(n._x)}px,${Math.round(n._y)}px)`;
+  });
+}
+function resetAccents(t) { ai = CUES.accents.findIndex(a => a[0] >= t - 0.02); if (ai < 0) ai = CUES.accents.length; }
+function seekStage(i) {
+  i = clamp(i, 0, stages.length - 1);
+  Music.seekV(stages[i].vt + 0.01); resetAccents(Music.time()); go(i);
+}
+
+function play() {
+  const d = days[idx] || null;
+  stages = buildStages(d);
+  Music.setPlan(PLAN);
+  $("#beginNote").textContent = d ? `Sound on · ${fmtLen(Music.planLength())}` : "Sound on";
+  if (Garden.ok) Garden.setDay(d);
+  buildTags(d);
+  if (Garden.ok) { Garden.setEntry(0); if (Music.started) Garden.enter(); }
+  outro = false;
+  if (Music.started) { Music.seekV(0); resetAccents(Music.time()); go(0); stageEl.classList.remove("done"); stageEl.classList.add("open"); }
+  else { si = 0; render({ k: "pre" }); paintBars(); hint(); }
+}
+
+/* one clock for everything: the music's own position */
+let markSec = "", markT = 0, outro = false, lastT = 0;
+const OUT = 108.2;   /* after the last chord the camera rises away; when the music stops the garden closes to a circle */
+/* nights in a row, drawn as lights; tonight's is the pink one */
+function lightsInto(box, n) {
+  box.textContent = ""; box.hidden = !(n > 0); if (!(n > 0)) return;
+  box.setAttribute("role", "img"); box.setAttribute("aria-label", `${n} ${n === 1 ? "night" : "nights"} in a row`);
+  const k = Math.min(n, 14);
+  for (let i = 0; i < k; i++) { const b = el("i", i === k - 1 ? "today" : ""); b.style.setProperty("--i", i); box.append(b); }
+  box.append(el("b", null, String(n)));
+}
+function finish(on) {
+  const d = days[idx];
+  if (on) {
+    $("#finDate").textContent = d ? (d.week ? "This week · " + weekRange(d) : fmtDay(d.date, true)) : "Tonight";
+    const fh = $("#finHead"), line = (d && d.close) || (d && d.week ? "That's the week's bouquet." : "That's tonight's bouquet.");
+    fh.textContent = line; fh.classList.toggle("long", line.length > 34);
+    if (d && d.week) lanternsInto($("#finLights"), d, null, false); else { $("#finLights").className = "lights"; lightsInto($("#finLights"), d ? d.streak : 0); }
+    $("#finDay").textContent = d && d.week ? "The whole week" : "The whole day";
+    beckon(false);
+  }
+  stageEl.classList.toggle("done", on);
+  stageEl.classList.toggle("open", !on);
+}
+const markEl = $("#mark");
+function tick() {
+  requestAnimationFrame(tick);
+  if (!Music.started) return;
+  Music.step();
+  const t = Music.time(), vt = Music.vtime();
+  if (t < lastT - 0.5) resetAccents(t);   /* a passage repeated: re-arm its accents */
+  lastT = t;
+  const want = stageAt(vt);
+  if (want !== si) go(want);
+  const cur = bars.children[si];
+  if (cur && cur.firstChild) {
+    const a = stages[si].vt, b = si + 1 < stages.length ? stages[si + 1].vt : Music.planLength();
+    const f = clamp((vt - a) / Math.max(0.1, b - a), 0, 1);
+    cur.firstChild.style.width = (f * 100).toFixed(2) + "%";
+  }
+  placeTags();
+  let landed = -1;
+  if (seedPlan) {
+    landed = 0; while (landed < seedPlan.length && seedPlan[landed] <= t) landed++;
+    while (planted < seedPlan.length && seedPlan[planted] - 0.95 <= t) { if (Garden.ok) Garden.plant(planted, seedPlan.length, seedPlan[planted] < t - 0.3); planted++; }
+    const d = days[idx];
+    if (seedLine && d && planted - 1 !== shownSeed && planted > 0) {
+      shownSeed = planted - 1; seedLine.textContent = "Planting · " + d.wins[shownSeed].title;
+      if (lanNode && d.week) { const k = Math.round(shownSeed / Math.max(1, seedPlan.length - 1) * (d.wins.length - 1)), w = d.wins[k], c = w && lanNode.querySelector(`[data-d="${w.night}"]`); if (c) c.classList.add("lit"); }
+    }
+  }
+  if (countNode) {
+    const p = clamp((t - INTRO0) / (SLAM - INTRO0), 0, 1);
+    const cv = landed >= 0 ? Math.round(landed / seedPlan.length * countTo) : Math.round(Math.pow(p, 1.7) * countTo);
+    countNode.textContent = String(cv);
+    if (unitNode) unitNode.textContent = cv === 1 ? "thing finished." : "things finished.";
+    if (p >= 1 && !slammed) {
+      slammed = true;
+      if (countTo > 0) countNode.classList.add("slam");
+      laterNode && laterNode.classList.add("on");
+      if (seedLine) seedLine.classList.add("gone");
+      if (lanNode) lanNode.classList.remove("wait");
+      if (Garden.ok && seedPlan) Garden.sproutGlow();
+      countNode = null;
+    }
+  }
+  const r = Music.read(t);
+  lv += (r.level - lv) * (r.level > lv ? 0.6 : 0.12);
+  const so = secOf(t), sec = so.id;
+  if (Garden.ok) {
+    const A = Garden.audio;
+    Garden.setScene(Music.ended ? "coda" : sec);
+    A.level = lv;
+    A.bass += (r.bass - A.bass) * (r.bass > A.bass ? 0.5 : 0.1);
+    A.beat = (t - so.start) * so.bpm / 60;
+    A.swell = Music.ended ? 0 : sec === "trio" ? 1 : sec === "coda" ? 0.45 : 0;
+  }
+  stageEl.style.setProperty("--pulse", REDUCE ? "0" : lv.toFixed(3));
+  while (ai < CUES.accents.length && CUES.accents[ai][0] <= t) {
+    const [at, st] = CUES.accents[ai++];
+    if (t - at < 0.3 && Garden.ok) Garden.accent(st, secAt(at));
+  }
+  if (r.onset && Garden.ok && (sec === "theme" || sec === "coda")) Garden.sparkle();
+  const wantOut = t >= Math.min(OUT, Music.duration() - 4);
+  if (wantOut !== outro) { outro = wantOut; if (Garden.ok) Garden.exit(outro); }
+  if (!Music.ended && t >= Music.duration() - 0.05) { Music.ended = true; hint(); }
+  const isDone = stageEl.classList.contains("done");
+  if (Music.ended !== isDone) finish(Music.ended);
+}
+requestAnimationFrame(tick);
+
+Music.onAudio = ok => { if (!ok) { const mb = $("#mute"); mb.disabled = true; mb.setAttribute("aria-pressed", "true"); mb.setAttribute("aria-label", "The music didn't load, so this run is silent"); $("#tapHint").textContent = "Silent tonight: the music didn't load"; } };
+function begin() {
+  if (Music.started) return;
+  Music.begin();
+  $("#begin").hidden = true;
+  hint();
+  if (Music.state === "failed") $("#mute").disabled = true;
+  stageEl.classList.add("open");
+  if (Garden.ok) Garden.enter();
+  resetAccents(Music.planStart()); go(0);
+  const nl = nightsLatest(); if (nl) seenSet(nl);
+}
+
+/* ---------------- Summary ---------------- */
+function fillList(ul, items, empty) {
+  ul.textContent = "";
+  if (!items.length) { ul.append(el("li", "none", empty)); return; }
+  items.forEach(it => { const li = el("li"); li.append(el("strong", null, it.title)); if (it.note) li.append(el("span", null, it.note)); ul.append(li); });
+}
+function fillOpen(ul, items) {
+  ul.textContent = "";
+  if (!items.length) { ul.append(el("li", "none", "Nothing left hanging.")); return; }
+  items.forEach(o => {
+    const li = el("li"); li.append(el("strong", null, o.title));
+    if (o.pitch || o.note) li.append(el("span", null, o.pitch || o.note));
+    if (o.status || o.progress != null) li.append(progRow(o));
+    if (o.payoff) li.append(el("span", "pay", o.payoff));
+    ul.append(li);
+  });
+}
+function paintSummary() {
+  const d = days[idx];
+  $("#prev").disabled = idx <= 0;
+  $("#next").disabled = idx < 0 || idx >= days.length - 1;
+  const sk = $("#streak");
+  if (!d) {
+    $("#dayLabel").textContent = "Tonight"; sk.hidden = true; $("#sumDate").textContent = ""; $("#mNote").textContent = "";
+    return;
+  }
+  $("#dayLabel").textContent = d.week ? "The week" : fmtDay(d.date, false);
+  $("#sumDate").textContent = d.week ? weekRange(d) : fmtDay(d.date, true);
+  $("#sumTitle").textContent = d.week ? "The whole week" : "The whole day";
+  document.querySelector(".tomorrow .eyebrow").lastChild.textContent = d.tomorrowLabel || "Tomorrow, one thing";
+  sk.hidden = !(d.streak > 0); sk.textContent = "";
+  if (d.streak > 0) { sk.append(el("b", null, String(d.streak))); sk.append(document.createTextNode(d.streak === 1 ? " night" : " nights")); }
+  $("#nW").textContent = d.wins.length; $("#nM").textContent = d.missed.length; $("#nO").textContent = d.open.length;
+  fillList($("#lW"), d.week ? d.wins.map(w => ({ title: w.title, note: shortDay(w.night) + (w.note ? " · " + w.note : "") })) : d.wins, "Nothing finished. Tomorrow, one thing.");
+  fillList($("#lM"), d.missed, "Nothing you flagged got skipped.");
+  $("#mNote").textContent = d.missed.length ? d.missedNote : "";
+  fillOpen($("#lO"), d.open);
+  $("#tm").textContent = d.tomorrow || "Pick one thing and finish it before noon.";
+  $("#closeLine").textContent = d.close || "";
+}
+
+/* the seven nights ending on the one you're looking at: a dot per thing finished, tap a night to open it */
+function paintWeek() {
+  const wk = $("#week"), row = $("#wkRow"), d = days[idx];
+  if (!d) { wk.hidden = true; return; }
+  const [y, m, dd] = d.date.split("-").map(Number), end = Date.UTC(y, m - 1, dd, 12);
+  row.textContent = ""; let total = 0, nights = 0;
+  const span = d.week ? d.nights.length - 1 : 6;
+  row.style.setProperty("--n", span + 1);
+  for (let k = span; k >= 0; k--) {
+    const dt = new Date(end - k * 864e5), iso = dt.toISOString().slice(0, 10);
+    const di = days.findIndex(x => x.date === iso && !x.week), day = days[di];
+    const cell = el(day ? "button" : "div", di === idx ? "sel" : day ? "" : "empty");
+    const wn = d.week ? d.nights.find(x => x.date === iso) : null;
+    const dots = el("span", "wk-dots"), n = wn ? wn.n : day ? day.wins.length : 0;
+    for (let j = 0; j < Math.min(n, 8); j++) dots.append(el("i", j === 7 && n > 8 ? "more" : ""));
+    cell.append(dots, el("span", "wk-n", day || n ? String(n) : "·"), el("span", "wk-d", dt.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })));
+    if (wn && !day && n) { total += n; nights++; cell.className = ""; }
+    if (day) { total += n; if (!d.week || n) nights++; cell.type = "button"; cell.setAttribute("aria-label", `${fmtDay(iso, true)}: ${n} finished`); cell.addEventListener("click", () => { if (di !== idx) { selectDay(di); stageEl.scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" }); } }); }
+    row.append(cell);
+  }
+  $("#wkTotal").textContent = "";
+  $("#wkTotal").append(el("b", null, String(total)), document.createTextNode(` finished over ${nights} ${nights === 1 ? "night" : "nights"}`));
+  wk.hidden = false;
+}
+
+function selectDay(i, replay = true) {
+  idx = i;
+  const d = days[idx];
+  try { if (d) history.replaceState(null, "", d.week ? "#week" : "#d-" + d.date); } catch (e) {}
+  paintSummary();
+  paintWeek();
+  if (replay) play();
+}
+
+/* ---------------- Controls ---------------- */
+function setPause(on) {
+  Music.pause(on);
+  const pb = $("#pause"), p = Music.paused;
+  pb.setAttribute("aria-pressed", String(p)); pb.setAttribute("aria-label", p ? "Play" : "Pause");
+  pb.querySelector(".pz").hidden = p; pb.querySelector(".pl").hidden = !p;
+  if (p) beckon(false); else beckon(Music.started && !Music.ended && si < stages.length - 1);
+}
+const forward = () => {
+  if (!Music.started) { begin(); return; }
+  if (Music.paused) setPause(false);
+  if (stages[si] && stages[si].k === "title" && countNode) return;   /* let the count land first */
+  Music.wake(); if (si < stages.length - 1) seekStage(si + 1);
+};
+const backward = () => { if (!Music.started) return; if (Music.paused) setPause(false); Music.wake(); seekStage(Math.max(0, si - 1)); };
+$("#beginBtn").addEventListener("click", () => begin());
+const showAll = () => {
+  if (days[idx]) { if (Garden.ok) Garden.instantAll(true); if (Music.started) seekStage(stages.length - 1); }
+  $("#summary").scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" });
+};
+$("#readNow").addEventListener("click", e => { e.stopPropagation(); const nl = nightsLatest(); if (nl) seenSet(nl); showAll(); });
+$("#stage").addEventListener("click", e => {
+  if (e.target.closest("button")) return;
+  if (Garden.ok && Garden.wasDrag()) return;
+  forward();
+});
+document.addEventListener("keydown", e => {
+  if ((e.key === " " || e.key === "Enter") && e.target.closest && e.target.closest("button,input,textarea,a,summary")) return;
+  if (e.target.closest && e.target.closest("input,textarea")) return;
+  if (e.key === "ArrowRight" || e.key === " " || e.key === "Enter") { e.preventDefault(); forward(); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); backward(); }
+  if (e.key === "p" || e.key === "P" || e.key === "k" || e.key === "K") { if (Music.started) { e.preventDefault(); setPause(!Music.paused); } }
+});
+$("#back").addEventListener("click", backward);
+$("#fwd").addEventListener("click", forward);
+$("#pause").addEventListener("click", () => { if (Music.started) setPause(!Music.paused); });
+beckonEl.addEventListener("click", e => { e.stopPropagation(); forward(); });
+$("#skip").addEventListener("click", showAll);
+$("#again").addEventListener("click", () => { if (Music.paused) setPause(false); Music.wake(); play(); });
+$("#finDay").addEventListener("click", () => $("#summary").scrollIntoView({ behavior: REDUCE ? "auto" : "smooth", block: "start" }));
+document.querySelectorAll("[data-bug]").forEach(n => { n.innerHTML = BUGS[n.dataset.bug] || ""; });
+$("#prev").addEventListener("click", () => { if (idx > 0) selectDay(idx - 1); });
+$("#next").addEventListener("click", () => { if (idx < days.length - 1) selectDay(idx + 1); });
+const muteBtn = $("#mute");
+muteBtn.setAttribute("aria-pressed", String(Music.muted));
+muteBtn.addEventListener("click", () => { Music.setMuted(!Music.muted); muteBtn.setAttribute("aria-pressed", String(Music.muted)); Music.wake(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && Music.started) Music.wake(); });
+mq.addEventListener && mq.addEventListener("change", e => { REDUCE = e.matches; });
+
+/* a theme change rebuilds the garden in place and keeps the music going */
+const retheme = () => {
+  if (!Garden.ok) return;
+  Garden.retheme();
+  const d = days[idx] || null;
+  Garden.setDay(d);
+  if (!d) return;
+  const st = stages[si] || { k: "title" };
+  if (!Music.started) { if (REDUCE) Garden.instantAll(false); return; }
+  if (st.k === "title" && seedPlan) for (let i = 0; i < planted; i++) Garden.plant(i, seedPlan.length, true);
+  const upto = st.k === "win" ? st.i : st.k === "title" ? -1 : d.wins.length - 1;
+  Garden.instantUpTo(upto, st.k === "missed" || st.k === "close");
+  if (st.k === "missed") Garden.showWilted();
+};
+matchMedia("(prefers-color-scheme: dark)").addEventListener && matchMedia("(prefers-color-scheme: dark)").addEventListener("change", retheme);
+new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+/* ---------------- Boot ---------------- */
+play();
+(async () => {
+  /* Demo: made-up nights, generated around today. Nothing is read from or sent anywhere. */
+  const today = (() => { const d = new Date(); return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), 12)).toISOString().slice(0, 10); })();
+  const SAMPLE = [
+    { ago: 3, headline: "A steady day.", wins: [{ title: "Fixed the flaky login test", detail: "It only failed on Mondays." }, { title: "Repotted the basil" }], missed: [{ title: "Stretch break", why: "Back-to-back calls." }], started_open: [{ title: "Recipe card generator", status: "Layout done", progress: 0.4, kind: "site", payoff: "One click from a recipe to a printable card." }], started_count: 3, tomorrow: "Ship the recipe card layout.", streak: 1 },
+    { ago: 2, headline: "Small things, all of them done.", wins: [{ title: "Answered the backlog of email" }, { title: "Wrote the README for the side project" }, { title: "Went for a run" }], missed: [], started_open: [], started_count: 3, tomorrow: "Start the weekend playlist.", streak: 2 },
+    { ago: 1, headline: "Big push on the side project.", wins: [{ title: "Recipe card generator, first print", detail: "It fits on one card." }, { title: "Cleaned the desk" }, { title: "Practiced piano for twenty minutes" }, { title: "Called a friend back" }], missed: [{ title: "Laundry", why: "Tomorrow, for real." }], started_open: [{ title: "Weekend playlist", status: "Twelve songs in", progress: 0.6, kind: "music", payoff: "Something good for the drive." }], started_count: 5, tomorrow: "Do the laundry before anything else.", streak: 3 },
+    { ago: 0, headline: "That's a real day.", wins: [{ title: "Laundry, finally", detail: "Before anything else, like you said." }, { title: "Weekend playlist, done" }, { title: "Sketched the next idea" }, { title: "Read a chapter" }, { title: "Cooked dinner" }], missed: [{ title: "Inbox zero", why: "It can wait." }], started_open: [{ title: "Garden sensor", status: "Parts ordered", progress: 0.2, kind: "hardware", payoff: "The plants text you when they're thirsty." }], started_count: 6, tomorrow: "Solder the first sensor.", close: "Good night. Tomorrow's already set.", streak: 4 }
+  ];
+  const docs = SAMPLE.map(s => { const date = isoAdd(today, -s.ago); const { ago, ...rest } = s; return { id: date, exists: true, data: () => ({ date, finished_count: rest.wins.length, ...rest }) }; });
+  const db = { collection: () => ({ onSnapshot: cb => setTimeout(() => cb({ docs }), 0) }) };
+  let first = true, lastSig = "";
+  db.collection("days").onSnapshot(snap => {
+    const list = snap.docs.map(doc => doc.exists ? normalize(doc.id, doc.data() || {}) : null).filter(Boolean).sort((a, b) => a.date < b.date ? -1 : 1);
+    const wasWeek = !!(days[idx] && days[idx].week), prevDate = days[idx] && !wasWeek && days[idx].date;
+    const prevLatest = nightsLatest();
+    const wk = buildWeek(list);
+    days = wk ? list.concat([wk]) : list;   /* the week sits after tonight: the next arrow from tonight */
+    if (!days.length) { idx = -1; paintSummary(); if (!first) play(); first = false; return; }
+    const latest = list.length - 1;
+    let want = latest;
+    if (first) {
+      const hash = location.hash || "", h = hash.replace(/^#d-/, "");
+      const hi = days.findIndex(x => x.date === h && !x.week);
+      const seen = seenGet();
+      /* back after a few nights away (or the first time): the week first */
+      if (hash === "#week" && wk) want = days.length - 1;
+      else if (hi >= 0) want = hi;
+      else if (wk && (!seen || dayGap(seen, list[latest].date) >= 3)) want = days.length - 1;
+    } else if (wasWeek && wk) want = days.length - 1;
+    else if (prevDate && list[latest].date === prevLatest) {
+      const pi = days.findIndex(x => x.date === prevDate && !x.week);
+      if (pi >= 0) want = pi;
+    }
+    const sig = JSON.stringify(days[want]);
+    const replay = first || sig !== lastSig;
+    lastSig = sig; first = false;
+    selectDay(want, replay);
+  }, () => {});
+})();
+})();
+</script>
+
+
+</body></html>
