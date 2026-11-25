@@ -250,5 +250,6 @@ export const buildLog = [
 
 export const profile = {
   github: 'https://github.com/rdilaz',
+  linkedin: 'https://www.linkedin.com/in/ryodila/',
   home: 'https://ryo-nd.com/',
 };
