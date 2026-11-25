@@ -13,11 +13,11 @@ const SELECTED = [
     tags: ['Web Audio', 'Canvas/WebGL', 'LLMs'],
   },
   {
-    id: 'ryodev',
-    name: 'RyoDev',
-    status: 'Beta',
-    tagline: 'What needs me, where, and how fresh is that claim?',
-    tags: ['PWA', 'Cloudflare Workers', 'Claude Code hooks'],
+    id: 'riff',
+    name: 'Riff',
+    status: 'In the lab',
+    tagline: 'Turn your Spotify library into a playable Clone Hero setlist.',
+    tags: ['Python', 'Flask', 'OAuth PKCE'],
   },
   {
     id: 'mcb',
@@ -37,7 +37,6 @@ const SELECTED = [
 
 const BUILDS = [
   'AI Visualizer',
-  'RyoDev',
   'DNS Integrity Checker',
   'Riff',
   'Most Common Blunder',
@@ -45,6 +44,7 @@ const BUILDS = [
   'Agent Station',
   'Sadhana',
   'DreamField',
+  'Flowers',
   'SpamShredder',
   'Slay the Spire bot',
   'Kensa',
@@ -251,7 +251,7 @@ export default function Home() {
               <span className="devcta-row">
                 <span className="devcta-stats">
                   <span>
-                    <b>12</b> builds
+                    <b>{BUILDS.length}</b> builds
                   </span>
                   <span>
                     <b>3</b> live
