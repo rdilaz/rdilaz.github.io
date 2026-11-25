@@ -257,6 +257,7 @@ function renderProgress() {
     title.innerHTML = 'You’ve seen <em>everything</em>.';
     text.textContent = `All ${TOTAL} builds, explored. Thanks for looking around. The code lives on GitHub, and new things land here first.`;
     actions.innerHTML = `<a class="btn btn-primary" href="${esc(profile.github)}" rel="noopener">${icon('gh')}Follow along on GitHub</a>
+      <a class="btn btn-ghost" href="${esc(profile.linkedin)}" rel="noopener">${icon('in')}LinkedIn</a>
       <a class="btn btn-ghost" href="${esc(profile.home)}">Back to ryo-nd.com ${icon('arrow')}</a>
       <button type="button" class="text-btn" data-reset>Start over</button>`;
   } else {
@@ -544,6 +545,7 @@ const entries = [
   { kind: 'jump', id: 'log', name: 'Build log', sub: 'What moved recently, month by month', hay: 'build log timeline recent', target: '#log', ico: 'arrow' },
   { kind: 'jump', id: 'progress', name: 'Your progress', sub: 'See what you have explored', hay: 'progress explored seen', target: '#progress', ico: 'check' },
   { kind: 'link', id: 'github', name: 'GitHub', sub: 'github.com/rdilaz', hay: 'github code source profile', href: profile.github, ico: 'gh' },
+  { kind: 'link', id: 'linkedin', name: 'LinkedIn', sub: 'linkedin.com/in/ryodila', hay: 'linkedin contact hire resume profile', href: profile.linkedin, ico: 'in' },
 ];
 
 function fuzzy(q, s) {
