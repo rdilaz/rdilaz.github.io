@@ -129,50 +129,6 @@ const renderers = {
     });
   },
 
-  ryodev(host) {
-    const machines = [
-      ['Mac', 'Claude Code'],
-      ['Dell', 'Codex'],
-      ['HP', 'Claude Code'],
-      ['Aero', 'Codex'],
-    ];
-    const label = { wait: 'Needs you', run: 'Running', done: 'Finished', stale: 'Stale · 14m' };
-    const frames = [
-      ['wait', 'run', 'done', 'stale'],
-      ['run', 'run', 'wait', 'stale'],
-      ['run', 'done', 'wait', 'run'],
-      ['done', 'wait', 'run', 'run'],
-    ];
-    host.innerHTML = `<div class="rd-phone"><div class="rd-screen">
-      <div class="rd-status"><span>9:41</span><span class="rd-island"></span><span>100%</span></div>
-      <div class="rd-head"><b>RyoDev</b><span class="rd-need" data-need>1 needs you</span></div>
-      <ul class="rd-list">${machines
-        .map(([m, a]) => `<li class="rd-row"><i class="dot"></i><b>${m} <small>${a}</small></b><span></span></li>`)
-        .join('')}</ul>
-      <p class="rd-fresh">Synced 2s ago · 4 machines</p>
-    </div></div>`;
-    const rows = [...host.querySelectorAll('.rd-row')];
-    const need = host.querySelector('[data-need]');
-    return stepper(
-      host,
-      [2000, 2000, 2000, 2000],
-      (k) => {
-        const f = frames[k];
-        rows.forEach((row, j) => {
-          if (row.dataset.s === f[j]) return;
-          row.dataset.s = f[j];
-          row.lastElementChild.textContent = label[f[j]];
-          row.classList.remove('flash');
-          void row.offsetWidth;
-          row.classList.add('flash');
-        });
-        const n = f.filter((s) => s === 'wait').length;
-        need.textContent = `${n} needs you`;
-      },
-      0,
-    );
-  },
-
   mcb(host) {
     // White at the bottom. x = file (a=0), y = 8 - rank.
     const pieces = [

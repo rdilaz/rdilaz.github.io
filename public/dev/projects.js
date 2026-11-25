@@ -29,21 +29,6 @@ export const projects = [
     size: 'xl',
   },
   {
-    id: 'ryodev',
-    name: 'RyoDev',
-    tagline: 'What needs me, where, and how fresh is that claim?',
-    blurb:
-      'A phone command center for AI coding sessions running across four laptops (Mac, Dell, HP and Aero): who is waiting on me, what finished, what is stale. It is honest about freshness, so stale never pretends to be offline. Now gaining a live mode fed by Claude Code and Codex hooks through a Cloudflare Worker.',
-    status: 'Beta',
-    year: 2026,
-    tags: ['Vanilla JS', 'PWA', 'Cloudflare Workers', 'Claude Code hooks'],
-    links: [{ label: 'Try the demo', href: 'https://rdilaz.github.io/ryodev/' }],
-    facts: ['44 model tests', '30 demo scenarios', 'Installable on iPhone'],
-    accent: 'live',
-    demo: 'ryodev',
-    size: 'tall',
-  },
-  {
     id: 'dns',
     name: 'DNS Integrity Checker',
     tagline: 'A Chrome extension that catches DNS spoofing with DNS-over-HTTPS cross-checks.',
@@ -64,11 +49,11 @@ export const projects = [
     tagline: 'Turn your Spotify library into a playable Clone Hero setlist.',
     blurb:
       'Reads Spotify, iTunes or CSV libraries, finds community charts for your songs, scores every match from 0 to 100 and builds a ready-to-play song folder.',
-    status: 'Private',
+    status: 'In the lab',
     year: 2026,
     tags: ['Python', 'Flask', 'OAuth PKCE', 'Fuzzy matching', 'Docker'],
-    links: [],
-    facts: ['660+ tests', 'Match confidence 0–100'],
+    links: [{ label: 'Source on GitHub', href: 'https://github.com/rdilaz/csv-to-clone-hero' }],
+    facts: ['1,000+ tests', 'Match confidence 0–100'],
     accent: 'ember',
     demo: 'riff',
     size: 'wide',
@@ -211,7 +196,7 @@ export const heroStats = [
 
 // "Now building" ticker in the hero. `id` opens that project.
 export const nowBuilding = [
-  { label: 'RyoDev live mode', id: 'ryodev' },
+  { label: 'Riff', id: 'riff' },
   { label: 'Kensa', id: 'kensa' },
 ];
 
@@ -220,7 +205,6 @@ export const buildLog = [
   {
     month: 'Sep 2026',
     items: [
-      { id: 'ryodev', text: 'Demo shipped, live mode underway' },
       { id: 'visualizer', text: '60 commits in 6 days' },
       { id: 'sadhana', text: 'A one-evening build' },
     ],
