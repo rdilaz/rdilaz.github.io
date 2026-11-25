@@ -4,7 +4,7 @@ A self-contained, static showcase of Ryo's projects. No build step, no framework
 no third-party requests. Every path is relative, so the folder works unchanged at
 any mount point: `ryo-nd.com/dev/`, `ryo.is/dev/`, `dev.ryo.is/`, and so on.
 
-It is live at **https://ryo-nd.com/dev/** (Vite copies `public/dev/` verbatim into `dist/dev/`).
+It deploys to `ryo-nd.com/dev/`, which is currently behind a sign-in (Vite copies `public/dev/` verbatim into `dist/dev/`).
 
 ## Files
 
