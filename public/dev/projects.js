@@ -150,12 +150,13 @@ export const projects = [
     tagline: 'Find your loudest promo senders and shred them in one click.',
     blurb:
       'A client-side Chrome extension that ranks the senders flooding your Gmail with promotions and clears them out in one click.',
-    status: 'Paused',
+    status: 'Live',
     year: 2026,
     tags: ['Chrome MV3', 'Gmail API', 'OAuth'],
     links: [
+      { label: 'Chrome Web Store', href: 'https://chromewebstore.google.com/detail/spam-shredder/cbfeclcjnbhalmengbpmbkbkgcpgnidk' },
       { label: 'Source on GitHub', href: 'https://github.com/rdilaz/SpamShredder' },
-      { label: 'Privacy policy', href: 'https://ryo-nd.com/SpamShredder/privacy.html' },
+      { label: 'Privacy policy', href: 'https://gist.github.com/rdilaz/5ebdc944f4a1cfa7f6f4547e7cb08448' },
     ],
     facts: ['Runs client-side in your browser'],
     accent: 'ember',
