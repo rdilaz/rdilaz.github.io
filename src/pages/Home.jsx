@@ -3,6 +3,7 @@ import DreamField from '../components/DreamField';
 import './Home.css';
 
 const GITHUB = 'https://github.com/rdilaz';
+const LINKEDIN = 'https://www.linkedin.com/in/ryodila/';
 
 const SELECTED = [
   {
@@ -107,6 +108,14 @@ function GitHubMark() {
   );
 }
 
+function LinkedInMark() {
+  return (
+    <svg className="icon icon-fill" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4.98 3.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM3 9.75h4v11H3v-11Zm6.5 0h3.84v1.5h.05c.53-1 1.84-2.06 3.79-2.06 4.05 0 4.8 2.67 4.8 6.13v6.43h-4v-5.7c0-1.36-.02-3.1-1.89-3.1-1.9 0-2.19 1.48-2.19 3v5.8h-4v-11Z" />
+    </svg>
+  );
+}
+
 function Spectrum() {
   return (
     <div className="spectrum" aria-hidden="true">
@@ -200,6 +209,9 @@ export default function Home() {
                 </a>
                 <a className="btn btn-ghost" href={GITHUB} rel="noopener">
                   <GitHubMark /> GitHub
+                </a>
+                <a className="btn btn-ghost" href={LINKEDIN} rel="noopener">
+                  <LinkedInMark /> LinkedIn
                 </a>
               </div>
             </div>
@@ -363,6 +375,9 @@ export default function Home() {
             <a href="/dev/">Dev Center</a>
             <a href={GITHUB} rel="noopener">
               <GitHubMark /> GitHub
+            </a>
+            <a href={LINKEDIN} rel="noopener">
+              <LinkedInMark /> LinkedIn
             </a>
             <a href="/SpamShredder/privacy.html">SpamShredder privacy policy</a>
           </nav>
