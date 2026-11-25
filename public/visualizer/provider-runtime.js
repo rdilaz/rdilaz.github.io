@@ -1026,7 +1026,13 @@ async function generateOpenRouterVisualizer({ modelId, apiKey = getOpenRouterCre
     promptProfile,
     attemptKind: 'generation',
   });
-  return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 1 };
+  return {
+    ...result,
+    html: extractHtml(result.raw),
+    promptVersion: PROMPT_VERSION,
+    audioApiVersion: AUDIO_API_VERSION,
+    attempt: 1,
+  };
 }
 
 async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getOpenRouterCredential(), signal, traceContext, promptProfile, reasoningSelection }) {
@@ -1041,7 +1047,13 @@ async function repairOpenRouterVisualizer({ modelId, raw, problem, apiKey = getO
     promptProfile,
     attemptKind: 'repair',
   });
-  return { ...result, html: extractHtml(result.raw), promptVersion: PROMPT_VERSION, attempt: 2 };
+  return {
+    ...result,
+    html: extractHtml(result.raw),
+    promptVersion: PROMPT_VERSION,
+    audioApiVersion: AUDIO_API_VERSION,
+    attempt: 2,
+  };
 }
 
 const openRouterAdapter = {

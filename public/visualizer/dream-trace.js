@@ -1,4 +1,10 @@
-import { buildGenerationMessages, buildRepairMessages } from './prompt.js';
+import {
+  AUDIO_API_VERSION,
+  PROMPT_VERSION,
+  buildGenerationMessages,
+  buildRepairMessages,
+} from './prompt.js';
+import { resolveAudioApiVersion } from './audio-contract.js';
 
 export const DREAM_TRACE_SCHEMA = 'dream-trace-v1';
 export const DREAM_TRACE_EXPORT_SCHEMA = 'dream-trace-export-v1';
@@ -60,6 +66,8 @@ function isSensitiveKey(key) {
   if (name === 'access' || name === 'refresh' || /cookie/.test(name)) return true;
   if (name === 'audioapiversion') return false;
   if (/audio|waveform|spectrum/.test(name)) return true;
+  if (/expressive|logbands|bandattack|silenceseconds|ageseconds|lowimpact|midhit|highspark/.test(name)) return true;
+  if (/filename|mimetype|objecturl|queuestate|sourceidentity|sourcekind/.test(name)) return true;
   if (/song|nowplaying|trackname|tracktitle|artistname|albumname/.test(name)) return true;
   if (/microphone|camera|mediastream/.test(name) || name === 'mic' || name.startsWith('micinput')) return true;
   return false;
@@ -651,6 +659,9 @@ export function createDreamTrace(options = {}, {
     modelName,
     providerId: selectedModel.providerId,
     upstreamProvider: selectedModel.upstreamProvider,
+    promptVersion: text(options.promptVersion),
+    promptProfile: sanitizeTraceValue(options.promptProfile ?? null),
+    audioApiVersion: text(options.audioApiVersion),
     liveAtStart: sanitizeTraceValue(options.liveAtStart ?? options.liveSnapshot ?? null),
     nextAtStart: sanitizeTraceValue(options.nextAtStart ?? options.nextSnapshot ?? null),
     finalLiveIdentity: null,
@@ -746,6 +757,17 @@ export function patchDreamAttempt(trace, attemptId, patch = {}, {
     if (patch.request.serializedBody !== undefined) attempt.request.serializedBody = redactSecretStrings(patch.request.serializedBody);
     if (attempt.request.model && attempt.request.model !== attempt.identity.requestedModelId) {
       throw new Error('Captured request model does not match the selected model.');
+    }
+    const requestPrompt = attempt.request.policy?.prompt || {};
+    const requestAudioApiVersion = text(
+      requestPrompt.audioApiVersion
+        ?? attempt.request.policy?.modelFitConfiguration?.audioApiVersion,
+    );
+    if (next.audioApiVersion && requestAudioApiVersion && requestAudioApiVersion !== next.audioApiVersion) {
+      throw new Error('Captured request audio contract does not match the Dream trace.');
+    }
+    if (next.promptVersion && requestPrompt.version && requestPrompt.version !== next.promptVersion) {
+      throw new Error('Captured request prompt version does not match the Dream trace.');
     }
   }
   if (patch.response) {
@@ -1012,6 +1034,8 @@ export function legacyDiagnosticToTrace(diagnostic = {}) {
     failureCode: text(safe.failureCode),
     failureMessage: text(safe.failureMessage),
     promptVersion: text(safe.promptVersion),
+    promptProfile: safe.promptProfile ?? null,
+    audioApiVersion: resolveAudioApiVersion(safe.audioApiVersion),
     healthStatus: text(safe.healthStatus),
     healthSummary: safe.healthSummary ?? null,
     attempt: numeric(safe.attempt),
@@ -1077,6 +1101,8 @@ function buildFixtureTraces() {
     liveAtStart: liveBefore,
     nextAtStart: liveBefore,
     startedAt: 1000,
+    promptVersion: PROMPT_VERSION,
+    audioApiVersion: AUDIO_API_VERSION,
   }, dependencies);
   repaired = appendDreamAttempt(repaired, { id: 'attempt-fixture-generation', kind: 'generation', createdAt: 1010 }, dependencies);
   const generationPayload = {
@@ -1170,6 +1196,8 @@ function buildFixtureTraces() {
     liveAtStart: rolledBackStart,
     nextAtStart: rolledBackStart,
     startedAt: 3000,
+    promptVersion: PROMPT_VERSION,
+    audioApiVersion: AUDIO_API_VERSION,
   }, dependencies);
   rolledBack = appendDreamAttempt(rolledBack, { id: 'attempt-fixture-rolled-back', kind: 'generation', createdAt: 3010 }, dependencies);
   const rollbackOutput = '<!doctype html><html><body><div>Fixture candidate</div></body></html>';

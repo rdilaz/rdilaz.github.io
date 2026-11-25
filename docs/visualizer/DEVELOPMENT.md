@@ -38,9 +38,10 @@ Read these files in order for the shortest path through a Dream:
 5. `public/visualizer/provider-runtime.js`, `openrouter-sse.js`, and `reasoning-settings.js` - provider normalization, private SSE assembly, exact reasoning choices, request construction, and HTML extraction.
 6. `public/visualizer/cost-guard.js`, `completion-accounting.js`, `dream-transport.js`, and `generation-envelope.js` - request reservation/settlement, activity-aware transport deadlines, the quality-first envelope, and the last browser boundary before a paid request.
 7. `public/visualizer/model-fit-evidence.js`, `model-product-catalog.js`, and `model-guide.js` - local evidence, operator approval input, and consumer/developer model discovery.
-8. `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js` - safe global arrows and the post-normalization host transform.
-9. `public/visualizer/immersive-ui.js` and `render-quality.js` - host chrome visibility and local Full/Balanced/Saver playback cost.
-10. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
+8. `public/visualizer/audio-contract.js`, `expressive-audio.js`, `audio-engine.js`, and `audio-sensitivity.js` - per-artifact V1/V2 shape routing, bounded expressive DSP, trusted source graphs, and the post-normalization host transform.
+9. `public/visualizer/keyboard-transport.js` - safe global arrows.
+10. `public/visualizer/immersive-ui.js` and `render-quality.js` - host chrome visibility and local Full/Balanced/Saver playback cost.
+11. `public/visualizer/dream-trace.js` - the local trace shape and lifecycle evidence.
 
 ## Architecture map
 
@@ -88,9 +89,11 @@ Ready and opened visualizers are available in Recent and the full Library. Attem
 - `public/visualizer/keyboard-transport.js` and `audio-sensitivity.js`: own safe global arrow routing and the local post-normalization sensitivity transform.
 - `public/visualizer/dream-status.js` and `dream-transport.js`: own request-scoped fetch lifecycle, cancellation, body-activity idle timing, the secondary hard ceiling, and truthful connected/thinking/creating/checking events. `dream-job.js` owns product job state/UI.
 - `public/visualizer/model-eligibility.js`: owns the pure live-Dream model eligibility rules used by catalogs and the final availability check.
-- `public/visualizer/audio-engine.js`: owns tab/window/system capture, explicit microphone capture, the local MediaElementAudioSource graph, and normalized audio features supplied to the trusted host. Only the local media-element graph has one intentional destination route; capture graphs are never monitored. It does not own model requests.
-- `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the injected `window.VIZ` bridge, trusted iframe-activity reporting, effective DPR/generated-RAF policy, CSP, runtime instrumentation, heartbeats, and probes.
-- `public/visualizer/reliability.js`: owns deterministic synthetic VIZ stimulation, visible-output and VIZ-use evaluation, the real-viewport canary, watchdog checks, and repair diagnostics.
+- `public/visualizer/audio-contract.js`: owns exact V1/V2 identifiers, fixed-shape projection, safe absent/unknown-to-V1 resolution, zero frames, and bounded expressive normalization.
+- `public/visualizer/expressive-audio.js`: owns the stateful browser-local V2 dynamics, retained regional events, logarithmic bands, and conservative rhythm evidence. Its history and buffers are bounded.
+- `public/visualizer/audio-engine.js`: owns tab/window/system capture, explicit microphone capture, the local MediaElementAudioSource graph, unchanged V1 analysis, and the separate unsmoothed expressive analyser supplied to the trusted host. Only the local media-element graph has one intentional destination route; capture graphs are never monitored. It does not own model requests.
+- `public/visualizer/sandbox.js`: owns isolated generated-HTML execution, the per-session V1/V2 `window.VIZ` bridge, trusted iframe-activity reporting, effective DPR/generated-RAF policy, CSP, runtime instrumentation, heartbeats, and probes.
+- `public/visualizer/reliability.js`: owns declared-contract deterministic synthetic VIZ stimulation, visible-output and VIZ-use evaluation, the real-viewport canary, watchdog checks, and repair diagnostics.
 - `public/visualizer/diagnostics.js`: owns the general diagnostic record, timeline, bounded retained artifacts, redaction, status labels, copy helpers, and export helpers.
 - `public/visualizer/dream-trace.js`: owns the nested, versioned Dream Trace representation and its attempt/lifecycle semantics.
 - `public/visualizer/trace-bridge.js`: owns the narrow app-boundary handoff that associates the cost-guarded final request and the returned provider material with the correct trace.
@@ -130,6 +133,25 @@ Status: implemented and CI-verified in PR #36; production desktop and real-iPhon
 - File selection leaves media and visuals paused; actual `playing`, `pause`, `ended`, and rejected `play()` results drive host state. A started queue may advance, paused previous/next stays paused, and the final queue end pauses visuals without reloading the Dream.
 - `tests/helpers/synthetic-audio.mjs` generates deterministic test-only mono PCM sine-wave WAV buffers. Chromium tests feed those bytes through native media decoding and the real Web Audio analysis path; media state is mocked only for focused lifecycle contracts.
 
+## Music Reactivity v2 implementation
+
+New generation and repair requests use `visualizer-prompt-v3` and `visualizer-audio-v2`. The model sees only the compact technical schema; no song, bytes, waveform/spectrum history, source kind, filename, MIME declaration, object URL, queue state, metadata, or live feature value enters a provider request or trace. Existing Featured and saved V1 artifacts remain V1. Missing, malformed, or unsupported artifact provenance resolves to V1 only at execution time and does not rewrite the stored record.
+
+`VisualizerSandbox.load()` pins one resolved audio contract to the session. Its initial `VIZ.version`, initial frame, synthetic reliability frames, live frames, probes, and promotion session all use that identity. Because the active and standby sandboxes are pinned independently, a V1 LIVE Dream and V2 candidate can coexist during the reversible Open watchdog. `projectVisualizerFrame()` reconstructs V1 with exactly the legacy enumerable keys and no `expressive` field.
+
+The V2 layer is `audio.expressive` / `visualizer-expressive-audio-v1`:
+
+- `dynamics.fast`, `slow`, `attack`, `release`, `quietness`, `silenceSeconds`, `crest`, and `surge` describe energy across time, quiet duration, peakiness, and sudden short-versus-long growth. `surge` is not a drop or section classifier.
+- `events.onset`, `lowImpact`, `midHit`, and `highSpark` each expose a time-retained `pulse`, relative `strength`, and capped `ageSeconds`. Regional events are attack gestures, not named-instrument recognition.
+- `rhythm.pulse`, `phase`, `tempo`, and `confidence` remain conservative. Tempo is zero when unavailable; phase stays neutral below sufficient confidence.
+- `frequency.logBands[24]` covers 30 Hz through the useful upper audible range logarithmically. `bandAttack[24]` is positive recent change in the corresponding bands.
+
+Except tempo and capped seconds, expressive values are finite `0..1`. `silenceSeconds` caps at 300 and event ages at 30 seconds. The processor uses one reusable 4096-point unsmoothed analyser buffer, fixed 24-element state, four event latches, and at most 16 rhythm onsets. Envelope coefficients and derivative normalization use elapsed time. A gap over 250 ms resets V2 temporal/rhythm state, and the first post-reset sample primes a baseline rather than becoming a false impact. Pause, resume, seek, track/source replacement, disconnect, and new source attachment reset V2 state without altering V1 field calculations.
+
+Full/Balanced/Saver still affect generated delivery/RAF/DPR only. Host analysis remains at the independent 60 Hz target, and event latches remain observable by a 30 FPS consumer. Local media, shared-stream, and microphone-stream browser fixtures exercise the same processor. Local media still reports neutral stereo because the media-element graph cannot prove mono versus stereo topology in this milestone. AudioWorklet remains unnecessary based on the passing phase-offset and native decoding evidence.
+
+`pulse-spice-v1` / Pulse + Spice is optional creative direction and is not the default. `tests/fixtures/expressive-audio-reference.html` is explicitly host-authored test evidence, never model output or a Featured candidate. Its six screenshot/pixel families are attached to CI under `expressive-reference-evidence`; they are research evidence, not an admission or taste gate.
+
 ## Dream display metadata
 
 `displayTitle` is the only user-editable saved-Dream naming field and is persisted separately through `GenerationStore`. `curatedDisplayTitle` belongs to Featured editorial metadata. `artifactTitle`, existing legacy `title`, and deterministic model/generation fallback remain lower-precedence sources. Renaming never mutates `id`, HTML, digest, trace/diagnostic identity, prompt metadata/hash, model-fit configuration, provider identity, or Featured provenance. The LIVE identity may update only its `displayName` when its exact generation ID matches the renamed saved Dream.
@@ -149,10 +171,10 @@ Klangfiguren passed focused cold-start, mobile Saver, microphone, qualification,
 - Reasoning `Default` is native omission. Explicit choices come only from the exact refreshed model's `reasoning.supported_efforts`; a stale saved choice visibly falls back to Default for a new generation, while a repair blocks if its snapshotted explicit effort disappears. Insufficient spend also blocks without lowering effort. Generation and the optional same-model repair share immutable Dream-start reasoning intent and prompt snapshots, each revalidated against its fresh catalog row.
 - Left/Right selects the previous/next Favorite in the supplied display order and wraps. From a non-Favorite, Right selects the first and Left the last; zero Favorites is a safe no-op. Reopen uses the standby sandbox and commits LIVE only after validation/watchdog success, including while a separate Dream request remains in flight.
 - Up/Down adjusts `visualizer-audio-sensitivity-v1` from 50% through 200% in 10% steps; 100% is the default. The About range/Reset provides pointer, touch, and native keyboard control. Global arrows stand down for inputs, sliders, Prompt Lab, model navigation, the Dream switcher, dialogs, drawers, popovers, modifiers, composition, and repeats.
-- Sensitivity runs after `AudioEngine` adaptive normalization and before host-frame composition. It scales/clamps volume, peak, transient, beat, spectral flux, named bands, spectrum, and symmetric waveform amplitude without changing tempo, tempo confidence, centroid, stereo, connection/silence truth, time, schema, or the source sample. It never changes the creative brief, model request, generated HTML, stored artifact, or VIZ pointer coordinates.
+- Sensitivity runs after `AudioEngine` adaptive normalization and before host-frame composition. It scales/clamps V1 reactive values plus V2 dynamics, event strengths/pulses, rhythm pulse, log bands, and band attacks without changing quiet/silence duration, event age, tempo, phase, confidence, centroid, stereo, connection/silence truth, time, schema, or the source sample. It never changes the creative brief, model request, generated HTML, stored artifact, or VIZ pointer coordinates.
 - Render quality is separate from generation quality. Full uses up to 60 FPS/2× DPR, Balanced 45 FPS/1.5× DPR, and Saver 30 FPS/1× DPR, but no profile increases a sub-1 native DPR. Audio analysis retains its independent 60 Hz target; only generated VIZ delivery, generated `requestAnimationFrame`, and JavaScript-visible DPR are capped. Switching or moving across native DPRs sends a private host message and a resize signal without replacing `srcdoc` or the sandbox session. Cadence recovery skips missed intervals in constant time rather than replaying them.
-- `visualizer-runtime-v2` stabilizes only a verified fixed/all-edge canvas whose authored CSS width and height are both `auto`, preventing DPR-backed intrinsic dimensions from changing its viewport layout. Explicit, partial, nested, transformed, and offscreen canvases are not coerced. Marker authority remains closure-private; coalesced DOM checks plus a bounded observed-canvas check on the existing heartbeat keep live CSSOM changes and detachments truthful without scanning the document.
-- `dream-reliability-v2` treats stale heartbeat age as suspicion rather than proof. It performs one bounded authenticated probe, permits at most one short retry only when heartbeat evidence advances, and still rolls back deterministically when both heartbeat and probe remain unresponsive. Fatal events bypass this confirmation.
+- `visualizer-runtime-v3` stabilizes only a verified fixed/all-edge canvas whose authored CSS width and height are both `auto`, preventing DPR-backed intrinsic dimensions from changing its viewport layout. Explicit, partial, nested, transformed, and offscreen canvases are not coerced. Marker authority remains closure-private; coalesced DOM checks plus a bounded observed-canvas check on the existing heartbeat keep live CSSOM changes and detachments truthful without scanning the document.
+- `dream-reliability-v3` treats stale heartbeat age as suspicion rather than proof. It performs one bounded authenticated probe, permits at most one short retry only when heartbeat evidence advances, and still rolls back deterministically when both heartbeat and probe remain unresponsive. Fatal events bypass this confirmation.
 - Reliability stages can update a visible generation job only when the harness carries that job's exact captured job/trace owner and it still matches the active executing job. Saved reopen, Featured, retest, and recovery harnesses remain diagnostic-only.
 - Model search derives ephemeral normalized tokens from displayed name, exact ID, and provider. It ignores punctuation/spacing differences without rewriting catalog objects, selected IDs, cache data, or provider requests.
 - Desired pause state is stored independently of iframe readiness and injected at bootstrap, so an intentionally paused load cannot render frames before its private bridge connects. Clearing a retired/standby slot resets that intent, and candidate preflight explicitly runs unpaused before the selected global pause state is applied for presentation.
@@ -238,7 +260,7 @@ The transparency additions are:
 - `modelTestMatrix()` returns the sanitized matrix object; `copyModelTestMatrix()` copies the framed matrix block.
 - `theoreticalModelCeilings()` returns developer-only catalog-ceiling diagnostics, never an expected-cost estimate.
 - `playback()` and `setPaused(value)` inspect/control trusted visual playback for local testing.
-- `audioAnalysis()` exposes only the latest normalized scalar analysis summary for local testing; it omits waveform/spectrum arrays, filenames, queue entries, URLs, File objects, and bytes.
+- `audioAnalysis()` exposes only the latest normalized scalar analysis summary for local testing; when developer mode is active it also includes the current bounded expressive snapshot. It never retains history and omits waveform/spectrum arrays, filenames, source identity, queue entries, URLs, File objects, and bytes.
 - `quality()` and `setQuality(mode)` inspect/control the persisted local render profile; `immersive()` reports hidden state and any legitimate blocker.
 - `probeActive(label)` requests a sanitized trusted probe from the active sandbox.
 - `exportFeatured(generationId)` downloads a local candidate package marked pending operator review.
@@ -282,6 +304,16 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ```
 
 This fixture campaign is no-cost because Playwright intercepts `https://openrouter.ai/**`; it is contract evidence, not live-provider acceptance.
+
+## Later Better Ears A/B campaign
+
+This is a plan only and requires explicit operator authorization because it spends the connected user's provider credits:
+
+1. Pin one exact live model ID, provider routing, reasoning choice, generation envelope, and the identical `pulse-spice-v1` creative brief.
+2. Generate one V1-contract instrument from the exact pre-milestone implementation or another reproducible V1 request path, and one V2-contract instrument from the milestone head. Do not relabel a V2 request as V1.
+3. Exercise both locally with the same deterministic silence, low/mid/high impact, regular/irregular rhythm, and full-spectrum entrance corpus plus the same arbitrary full-mix listening material.
+4. Blind the visual review to contract arm. Review musical causality, quiet-state behavior, impact specificity, sustained spectral balance, clarity, and overall artistic quality separately from technical event/band/phase evidence.
+5. Preserve failures and costs truthfully, make no automatic Featured admission, and accept generated artistic improvement only after central product review of both the blinded review and technical evidence.
 
 ## Manual 20-30 Dream campaign
 
@@ -335,6 +367,12 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --test --test-concurrency=1 tests/audio-sensitivity.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+node --test --test-concurrency=1 tests/audio-api-v1.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+node --test --test-concurrency=1 tests/expressive-audio.contract.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 node --test --test-concurrency=1 tests/audio-engine.contract.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -381,6 +419,17 @@ npx.cmd playwright test tests/first-session.spec.mjs tests/local-player.spec.mjs
 ```
 
 Every OpenRouter route in that campaign is intercepted. It performs no provider inference and spends no provider credits.
+
+The Better Ears focused Chromium campaign is:
+
+```powershell
+npm.cmd run build
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+npx.cmd playwright test tests/expressive-audio.spec.mjs tests/visualizer-reliability.spec.mjs tests/product-shell.spec.mjs tests/dream-transparency.spec.mjs --config=playwright.config.mjs
+```
+
+The expressive spec uses generated PCM only, native browser media decoding/Web Audio, and local intercepted fixture URLs. It blocks `https://openrouter.ai/**`. Reference screenshots and sanitized numeric summaries are test artifacts; no raw audio or historical production feature frames are retained.
 
 ## Safe Git workflow
 

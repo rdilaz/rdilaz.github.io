@@ -324,6 +324,35 @@ test('new trace has the required version and rich empty summary', () => {
   assert.deepEqual(trace.attempts, []);
 });
 
+test('generation and repair capture cannot cross a trace audio-contract boundary', () => {
+  const dependencies = traceDependencies();
+  let trace = createDreamTrace({
+    id: 'trace-audio-v2',
+    selectedModel: MODEL,
+    startedAt: 1,
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+  }, dependencies);
+  trace = appendDreamAttempt(trace, { id: 'attempt-v2-generation', kind: 'generation' }, dependencies);
+  trace = patchDreamAttempt(trace, 'attempt-v2-generation', {
+    request: { policy: { prompt: { version: 'visualizer-prompt-v3', audioApiVersion: 'visualizer-audio-v2' } } },
+  }, dependencies);
+  trace = closeDreamAttempt(trace, 'attempt-v2-generation', { outcome: 'repair-required' }, dependencies);
+  trace = appendDreamAttempt(trace, { id: 'attempt-v2-repair', kind: 'repair' }, dependencies);
+
+  assert.throws(() => patchDreamAttempt(trace, 'attempt-v2-repair', {
+    request: { policy: { prompt: { version: 'visualizer-prompt-v3', audioApiVersion: 'visualizer-audio-v1' } } },
+  }, dependencies), /audio contract does not match/i);
+  assert.throws(() => patchDreamAttempt(trace, 'attempt-v2-repair', {
+    request: { policy: { prompt: { version: 'visualizer-prompt-v2', audioApiVersion: 'visualizer-audio-v2' } } },
+  }, dependencies), /prompt version does not match/i);
+  const repaired = patchDreamAttempt(trace, 'attempt-v2-repair', {
+    request: { policy: { prompt: { version: 'visualizer-prompt-v3', audioApiVersion: 'visualizer-audio-v2' } } },
+  }, dependencies);
+  assert.equal(repaired.audioApiVersion, 'visualizer-audio-v2');
+  assert.equal(repaired.attempts[1].request.policy.prompt.audioApiVersion, 'visualizer-audio-v2');
+});
+
 test('generation request retains exact ordered system and user messages', () => {
   const { trace, dependencies } = generationTrace();
   const patched = capturedGeneration(trace, dependencies);
@@ -543,6 +572,18 @@ test('recursive sanitizer preserves harmless audio API version metadata', () => 
   const safe = sanitizeTraceValue({ audioApiVersion: 'visualizer-audio-v1', audio: { waveform: [1, 2] } });
   assert.equal(safe.audioApiVersion, 'visualizer-audio-v1');
   assert.equal(Object.hasOwn(safe, 'audio'), false);
+});
+
+test('recursive exports remove expressive values and source identity while retaining contract identity', () => {
+  const safe = sanitizeTraceValue({
+    audioApiVersion: 'visualizer-audio-v2',
+    expressive: { dynamics: { fast: 0.8 }, events: { lowImpact: { strength: 0.7 } } },
+    logBands: Array(24).fill(0.5),
+    bandAttack: Array(24).fill(0.4),
+    sourceKind: 'microphone',
+    filename: 'private-track.wav',
+  });
+  assert.deepEqual(safe, { audioApiVersion: 'visualizer-audio-v2' });
 });
 
 test('recursive sanitizer redacts Bearer, OpenRouter, and sentinel secrets in strings', () => {

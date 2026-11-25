@@ -1,3 +1,5 @@
+import { ExpressiveAudioProcessor } from './expressive-audio.js';
+
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 const PROCESSING_CONSTRAINTS = ['echoCancellation', 'noiseSuppression', 'autoGainControl'];
 
@@ -115,7 +117,8 @@ function createAnalysisGraph(context, source, { trueStereo = false, audible = fa
   try {
     const analyser = context.createAnalyser();
     const detailAnalyser = context.createAnalyser();
-    nodes.push(analyser, detailAnalyser);
+    const expressiveAnalyser = context.createAnalyser();
+    nodes.push(analyser, detailAnalyser, expressiveAnalyser);
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = .08;
     analyser.minDecibels = -96;
@@ -124,8 +127,13 @@ function createAnalysisGraph(context, source, { trueStereo = false, audible = fa
     detailAnalyser.smoothingTimeConstant = .12;
     detailAnalyser.minDecibels = -96;
     detailAnalyser.maxDecibels = -18;
+    expressiveAnalyser.fftSize = 4096;
+    expressiveAnalyser.smoothingTimeConstant = 0;
+    expressiveAnalyser.minDecibels = -100;
+    expressiveAnalyser.maxDecibels = -12;
     source.connect(analyser);
     source.connect(detailAnalyser);
+    source.connect(expressiveAnalyser);
 
     // Media elements are the only source the host owns and may monitor audibly.
     // Routing the primary analyser to the destination creates one output path.
@@ -150,11 +158,14 @@ function createAnalysisGraph(context, source, { trueStereo = false, audible = fa
       nodes,
       analyser,
       detailAnalyser,
+      expressiveAnalyser,
       splitter,
       leftAnalyser,
       rightAnalyser,
       frequency: new Uint8Array(analyser.frequencyBinCount),
       detailFrequency: new Uint8Array(detailAnalyser.frequencyBinCount),
+      expressiveFrequency: new Float32Array(expressiveAnalyser.frequencyBinCount),
+      expressiveFrequencyBytes: new Uint8Array(expressiveAnalyser.frequencyBinCount),
       waveform: new Float32Array(analyser.fftSize),
       leftWave: leftAnalyser ? new Float32Array(leftAnalyser.fftSize) : null,
       rightWave: rightAnalyser ? new Float32Array(rightAnalyser.fftSize) : null,
@@ -192,11 +203,14 @@ export class AudioEngine {
     this.source = null;
     this.analyser = null;
     this.detailAnalyser = null;
+    this.expressiveAnalyser = null;
     this.leftAnalyser = null;
     this.rightAnalyser = null;
     this.splitter = null;
     this.frequency = null;
     this.detailFrequency = null;
+    this.expressiveFrequency = null;
+    this.expressiveFrequencyBytes = null;
     this.waveform = null;
     this.leftWave = null;
     this.rightWave = null;
@@ -207,6 +221,7 @@ export class AudioEngine {
     this.trueStereo = false;
     this.connectionRevision = 0;
     this.audioDiagnostics = emptyDiagnostics();
+    this.expressiveProcessor = new ExpressiveAudioProcessor();
     this.resetAdaptiveState();
   }
 
@@ -253,6 +268,12 @@ export class AudioEngine {
       ['volume', 'peak', 'subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble', 'flux']
         .map(name => [name, new AdaptiveSignal()]),
     );
+    this.resetExpressiveState();
+  }
+
+  resetExpressiveState(reason = 'discontinuity', timestamp = performance.now()) {
+    this.lastExpressiveResetReason = String(reason || 'discontinuity').slice(0, 48);
+    this.expressiveProcessor.reset(Math.max(0, Number(timestamp) || 0) / 1000);
   }
 
   diagnostics() {
@@ -400,11 +421,14 @@ export class AudioEngine {
     let source;
     let analyser;
     let detailAnalyser;
+    let expressiveAnalyser;
     let splitter;
     let leftAnalyser;
     let rightAnalyser;
     let frequency;
     let detailFrequency;
+    let expressiveFrequency;
+    let expressiveFrequencyBytes;
     let waveform;
     let leftWave;
     let rightWave;
@@ -417,11 +441,14 @@ export class AudioEngine {
       ({
         analyser,
         detailAnalyser,
+        expressiveAnalyser,
         splitter,
         leftAnalyser,
         rightAnalyser,
         frequency,
         detailFrequency,
+        expressiveFrequency,
+        expressiveFrequencyBytes,
         waveform,
         leftWave,
         rightWave,
@@ -449,11 +476,14 @@ export class AudioEngine {
     this.source = source;
     this.analyser = analyser;
     this.detailAnalyser = detailAnalyser;
+    this.expressiveAnalyser = expressiveAnalyser;
     this.splitter = splitter;
     this.leftAnalyser = leftAnalyser;
     this.rightAnalyser = rightAnalyser;
     this.frequency = frequency;
     this.detailFrequency = detailFrequency;
+    this.expressiveFrequency = expressiveFrequency;
+    this.expressiveFrequencyBytes = expressiveFrequencyBytes;
     this.waveform = waveform;
     this.leftWave = leftWave;
     this.rightWave = rightWave;
@@ -538,11 +568,14 @@ export class AudioEngine {
       this.source = source;
       this.analyser = graph.analyser;
       this.detailAnalyser = graph.detailAnalyser;
+      this.expressiveAnalyser = graph.expressiveAnalyser;
       this.splitter = null;
       this.leftAnalyser = null;
       this.rightAnalyser = null;
       this.frequency = graph.frequency;
       this.detailFrequency = graph.detailFrequency;
+      this.expressiveFrequency = graph.expressiveFrequency;
+      this.expressiveFrequencyBytes = graph.expressiveFrequencyBytes;
       this.waveform = graph.waveform;
       this.leftWave = null;
       this.rightWave = null;
@@ -654,6 +687,10 @@ export class AudioEngine {
     const deltaTime = clamp((timestamp - this.lastSampleTime) / 1000, 0, .12);
     this.lastSampleTime = timestamp;
     if (!this.connected || !this.analyser) {
+      const expressive = this.expressiveProcessor.process({
+        timestampSeconds: nowSeconds,
+        connected: false,
+      });
       return {
         connected: false,
         silence: true,
@@ -669,6 +706,7 @@ export class AudioEngine {
         stereo: { balance: 0, width: 0 },
         waveform: Array(128).fill(0),
         spectrum: Array(96).fill(0),
+        expressive,
         time: nowSeconds,
         deltaTime,
       };
@@ -676,6 +714,13 @@ export class AudioEngine {
 
     this.analyser.getByteFrequencyData(this.frequency);
     this.detailAnalyser.getByteFrequencyData(this.detailFrequency);
+    let expressiveFrequencyKind = 'decibels';
+    if (typeof this.expressiveAnalyser?.getFloatFrequencyData === 'function') {
+      this.expressiveAnalyser.getFloatFrequencyData(this.expressiveFrequency);
+    } else {
+      this.expressiveAnalyser?.getByteFrequencyData?.(this.expressiveFrequencyBytes);
+      expressiveFrequencyKind = 'bytes';
+    }
     this.analyser.getFloatTimeDomainData(this.waveform);
     if (this.trueStereo) {
       this.leftAnalyser.getFloatTimeDomainData(this.leftWave);
@@ -720,6 +765,20 @@ export class AudioEngine {
     const transient = Math.max(amplitudeAttack, spectralTransient);
     const tempo = this.estimateTempo(nowSeconds, transient);
     const stereo = this.trueStereo ? this.sampleStereo() : { balance: 0, width: 0 };
+    const expressive = this.expressiveProcessor.process({
+      timestampSeconds: nowSeconds,
+      connected: true,
+      rawVolume,
+      rawPeak,
+      frequencyData: expressiveFrequencyKind === 'decibels'
+        ? this.expressiveFrequency
+        : this.expressiveFrequencyBytes,
+      frequencyKind: expressiveFrequencyKind,
+      frequencyMinDecibels: this.expressiveAnalyser?.minDecibels || -100,
+      frequencyMaxDecibels: this.expressiveAnalyser?.maxDecibels || -12,
+      sampleRate: this.context.sampleRate,
+      fftSize: this.expressiveAnalyser?.fftSize || 4096,
+    });
 
     return {
       connected: true,
@@ -743,6 +802,7 @@ export class AudioEngine {
       stereo,
       waveform: downsample(this.waveform, 128),
       spectrum,
+      expressive,
       time: nowSeconds,
       deltaTime,
     };
@@ -773,15 +833,17 @@ export class AudioEngine {
     const mediaElement = this.mediaElement;
     const track = this.track;
     const trackEndedHandler = this.trackEndedHandler;
-    const nodes = [this.source, this.splitter, this.analyser, this.detailAnalyser, this.leftAnalyser, this.rightAnalyser];
+    const nodes = [this.source, this.splitter, this.analyser, this.detailAnalyser, this.expressiveAnalyser, this.leftAnalyser, this.rightAnalyser];
     this.connected = false;
-    this.stream = this.context = this.source = this.analyser = this.detailAnalyser = null;
+    this.stream = this.context = this.source = this.analyser = this.detailAnalyser = this.expressiveAnalyser = null;
     this.splitter = this.leftAnalyser = this.rightAnalyser = null;
-    this.frequency = this.detailFrequency = this.waveform = this.leftWave = this.rightWave = null;
+    this.frequency = this.detailFrequency = this.expressiveFrequency = this.expressiveFrequencyBytes = null;
+    this.waveform = this.leftWave = this.rightWave = null;
     this.track = this.trackEndedHandler = null;
     this.mediaElement = null;
     this.trueStereo = false;
     this.audioDiagnostics = { ...this.audioDiagnostics, connectionReason: reason };
+    this.resetExpressiveState(reason);
 
     try { mediaElement?.pause?.(); } catch { /* Graph cleanup remains authoritative. */ }
     if (track && trackEndedHandler) {

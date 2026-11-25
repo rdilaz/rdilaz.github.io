@@ -401,6 +401,7 @@ export class LocalPlayer {
     try {
       this.element.currentTime = target;
       this.currentTime = target;
+      this.audioEngine.resetExpressiveState?.('seek');
       this.publish();
       return true;
     } catch {
@@ -420,6 +421,7 @@ export class LocalPlayer {
     this.loading = true;
     this.playIntent = Boolean(continuePlayback);
     try { element.pause(); } catch { /* Loading the requested source remains authoritative. */ }
+    this.audioEngine.resetExpressiveState?.('source-replacement');
     this.currentIndex = target;
     this.currentTime = 0;
     this.duration = entry.duration || 0;

@@ -26,6 +26,9 @@ export function createDiagnosticRecord({
   kind = 'generation',
   liveSnapshot = null,
   nextSnapshot = null,
+  promptVersion = '',
+  promptProfile = null,
+  audioApiVersion = '',
 } = {}) {
   const timestamp = Date.now();
   const id = crypto.randomUUID();
@@ -40,6 +43,9 @@ export function createDiagnosticRecord({
     },
     liveAtStart: liveSnapshot,
     nextAtStart: nextSnapshot,
+    promptVersion,
+    promptProfile,
+    audioApiVersion,
     startedAt: timestamp,
   });
   return {
@@ -57,8 +63,9 @@ export function createDiagnosticRecord({
     upstreamProvider: model?.provider || '',
     resolvedModel: '',
     requestId: '',
-    promptVersion: '',
-    audioApiVersion: '',
+    promptVersion: String(promptVersion || ''),
+    promptProfile: sanitizeTraceValue(promptProfile),
+    audioApiVersion: String(audioApiVersion || ''),
     usage: null,
     outputBytes: 0,
     rawOutput: '',

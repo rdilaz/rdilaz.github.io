@@ -9,15 +9,18 @@
 </head>
 <body>
   <iframe id="fixture" class="preflight-frame" sandbox="allow-scripts" aria-hidden="true"></iframe>
+  <button id="audioFixtureStart" type="button" style="position:fixed;right:4px;bottom:4px;z-index:20">Run audio fixture</button>
   <script type="module">
     import { VisualizerSandbox } from './sandbox.js';
     import { DreamReliabilityHarness, createSyntheticFrame, latestCurrentVisualReport } from './reliability.js';
+    import { AudioEngine } from './audio-engine.js';
+    import { createInitialVisualizerFrame } from './audio-contract.js';
 
     const iframe = document.getElementById('fixture');
     const sandbox = new VisualizerSandbox(iframe);
 
-    window.runReliabilityFixture = async html => {
-      const harness = new DreamReliabilityHarness({ sandbox });
+    window.runReliabilityFixture = async (html, audioApiVersion = 'visualizer-audio-v1') => {
+      const harness = new DreamReliabilityHarness({ sandbox, audioApiVersion });
       const result = await harness.preflight(html, {
         viewport: { width: 800, height: 450, dpr: 1 },
         fastViewport: { width: 640, height: 360, dpr: 1 },
@@ -147,6 +150,30 @@
       };
       sandbox.clear();
       return result;
+    };
+
+    window.runAudioContractFixture = async (html, requestedVersion) => {
+      const viewport = { width: 640, height: 360, dpr: 1 };
+      const boot = await sandbox.load(html, { viewport, audioApiVersion: requestedVersion });
+      sandbox.sendFrame(createSyntheticFrame(12, 430, viewport, 30, 'visualizer-audio-v2'));
+      await sandbox.waitForFrameDelivery({ label: 'audio contract projection' });
+      const report = await sandbox.probe('audio-contract-projection');
+      const result = {
+        boot,
+        requestedVersion: requestedVersion ?? null,
+        effectiveVersion: sandbox.audioApiVersion,
+        report,
+      };
+      sandbox.clear();
+      return result;
+    };
+
+    window.runAudioContractReplacementFixture = async html => {
+      const results = [];
+      for (const requestedVersion of ['visualizer-audio-v2', 'unknown-audio-contract', null, 'visualizer-audio-v1']) {
+        results.push(await window.runAudioContractFixture(html, requestedVersion));
+      }
+      return results;
     };
 
     window.runPreBridgePauseFixture = async html => {
@@ -517,6 +544,232 @@
       };
       sandbox.clear();
       return result;
+    };
+
+    window.showExpressiveReferenceStimulus = async (html, stimulus) => {
+      const viewport = { width: 800, height: 450, dpr: 1 };
+      sandbox.clear();
+      sandbox.setPresentation('active');
+      const boot = await sandbox.load(html, { viewport, audioApiVersion: 'visualizer-audio-v2' });
+      const frame = createInitialVisualizerFrame('visualizer-audio-v2', viewport);
+      frame.time = 1;
+      frame.deltaTime = 1 / 30;
+      frame.audio.connected = true;
+      frame.audio.silence = false;
+      frame.audio.expressive.dynamics.quietness = 0;
+      if (stimulus === 'quietness') {
+        frame.audio.silence = true;
+        frame.audio.expressive.dynamics.quietness = 1;
+        frame.audio.expressive.dynamics.silenceSeconds = 3.4;
+      } else if (stimulus === 'lowImpact') {
+        frame.audio.expressive.events.lowImpact = { pulse: 0.92, strength: 0.82, ageSeconds: 0 };
+      } else if (stimulus === 'midHit') {
+        frame.audio.expressive.events.midHit = { pulse: 0.86, strength: 0.76, ageSeconds: 0 };
+      } else if (stimulus === 'highSpark') {
+        frame.audio.expressive.events.highSpark = { pulse: 0.9, strength: 0.8, ageSeconds: 0 };
+      } else if (stimulus === 'logBands') {
+        frame.audio.expressive.frequency.logBands = Array.from({ length: 24 }, (_unused, index) => (
+          0.12 + 0.72 * Math.abs(Math.sin((index + 2) * 0.31))
+        ));
+      } else if (stimulus === 'beatPhase') {
+        frame.audio.expressive.rhythm = { pulse: 0.55, phase: 0.68, tempo: 125, confidence: 0.88 };
+      } else {
+        throw new Error(`Unknown reference stimulus: ${stimulus}`);
+      }
+      sandbox.sendFrame(frame);
+      await sandbox.waitForFrameDelivery({ label: 'expressive reference stimulus' });
+      const report = await sandbox.probe(`expressive-reference-${stimulus}`);
+      return { boot, stimulus, report };
+    };
+
+    window.clearExpressiveReference = () => {
+      sandbox.clear();
+      sandbox.setPresentation('standby');
+    };
+
+    let preparedAudioFixture = null;
+    let audioFixturePromise = null;
+
+    async function releasePreparedAudioFixture() {
+      const prepared = preparedAudioFixture;
+      preparedAudioFixture = null;
+      if (!prepared) return;
+      try { prepared.element?.pause(); } catch { /* Continue deterministic cleanup. */ }
+      try { await prepared.engine?.stop('test-complete'); } catch { /* Test cleanup is best effort. */ }
+      try { prepared.source?.stop(); } catch { /* A completed source is already stopped. */ }
+      try { await prepared.sourceContext?.close(); } catch { /* Test cleanup is best effort. */ }
+      prepared.element?.remove();
+    }
+
+    function emptyAudioSummary(mode) {
+      return {
+        mode,
+        samples: 0,
+        finite: true,
+        shapeValid: true,
+        maxDynamics: {
+          fast: 0,
+          slow: 0,
+          attack: 0,
+          release: 0,
+          quietness: 0,
+          silenceSeconds: 0,
+          crest: 0,
+          surge: 0,
+        },
+        maxEvents: {
+          onset: { pulse: 0, strength: 0 },
+          lowImpact: { pulse: 0, strength: 0 },
+          midHit: { pulse: 0, strength: 0 },
+          highSpark: { pulse: 0, strength: 0 },
+        },
+        eventTriggerCounts: { onset: 0, lowImpact: 0, midHit: 0, highSpark: 0 },
+        lastEventTriggerAt: { onset: null, lowImpact: null, midHit: null, highSpark: null },
+        maxLogBands: Array(24).fill(0),
+        maxBandAttack: Array(24).fill(0),
+        bestRhythm: { pulse: 0, phase: 0, tempo: 0, confidence: 0 },
+        maxRhythmOnsets: 0,
+        rhythmOnsets: [],
+        maxSampleGapMs: 0,
+        final: null,
+      };
+    }
+
+    function finiteExpressive(value, key = '') {
+      if (Array.isArray(value)) return value.length === 24 && value.every(entry => finiteExpressive(entry, key));
+      if (value && typeof value === 'object') {
+        return Object.entries(value).every(([nestedKey, entry]) => nestedKey === 'version' || finiteExpressive(entry, nestedKey));
+      }
+      if (typeof value !== 'number') return false;
+      if (!Number.isFinite(value) || value < 0) return false;
+      if (key === 'tempo') return value <= 300;
+      if (key === 'silenceSeconds') return value <= 300;
+      if (key === 'ageSeconds') return value <= 30;
+      return value <= 1;
+    }
+
+    function expressiveShapeValid(value) {
+      const keys = (object, expected) => JSON.stringify(Object.keys(object || {})) === JSON.stringify(expected);
+      return value?.version === 'visualizer-expressive-audio-v1'
+        && keys(value, ['version', 'dynamics', 'events', 'rhythm', 'frequency'])
+        && keys(value?.dynamics, ['fast', 'slow', 'attack', 'release', 'quietness', 'silenceSeconds', 'crest', 'surge'])
+        && keys(value?.events, ['onset', 'lowImpact', 'midHit', 'highSpark'])
+        && Object.values(value?.events || {}).every(event => keys(event, ['pulse', 'strength', 'ageSeconds']))
+        && keys(value?.rhythm, ['pulse', 'phase', 'tempo', 'confidence'])
+        && keys(value?.frequency, ['logBands', 'bandAttack'])
+        && Array.isArray(value?.frequency?.logBands)
+        && value.frequency.logBands.length === 24
+        && Array.isArray(value?.frequency?.bandAttack)
+        && value.frequency.bandAttack.length === 24;
+    }
+
+    function recordAudioSample(summary, sample) {
+      const expressive = sample?.expressive;
+      if (!expressive) return;
+      summary.samples += 1;
+      summary.finite = summary.finite && finiteExpressive(expressive);
+      summary.shapeValid = summary.shapeValid && expressiveShapeValid(expressive);
+      for (const field of Object.keys(summary.maxDynamics)) {
+        summary.maxDynamics[field] = Math.max(summary.maxDynamics[field], Number(expressive.dynamics[field]) || 0);
+      }
+      for (const field of Object.keys(summary.maxEvents)) {
+        summary.maxEvents[field].pulse = Math.max(summary.maxEvents[field].pulse, Number(expressive.events[field].pulse) || 0);
+        summary.maxEvents[field].strength = Math.max(summary.maxEvents[field].strength, Number(expressive.events[field].strength) || 0);
+      }
+      for (let index = 0; index < 24; index += 1) {
+        summary.maxLogBands[index] = Math.max(summary.maxLogBands[index], Number(expressive.frequency.logBands[index]) || 0);
+        summary.maxBandAttack[index] = Math.max(summary.maxBandAttack[index], Number(expressive.frequency.bandAttack[index]) || 0);
+      }
+      if (expressive.rhythm.confidence >= summary.bestRhythm.confidence) {
+        summary.bestRhythm = { ...expressive.rhythm };
+      }
+      summary.final = structuredClone(expressive);
+    }
+
+    async function runPreparedAudioFixture() {
+      const prepared = preparedAudioFixture;
+      if (!prepared) throw new Error('Prepare an audio fixture before running it.');
+      const summary = emptyAudioSummary(prepared.mode);
+      if (prepared.mode === 'local') {
+        await prepared.engine.resumeMediaElement(prepared.element);
+        await prepared.element.play();
+      } else {
+        await prepared.sourceContext.resume();
+        await prepared.engine.attachStream(prepared.destination.stream, prepared.mode, {});
+        prepared.source.start();
+      }
+      const started = performance.now();
+      const durationMs = prepared.durationSeconds * 1000 + 260;
+      let lastSampleAt = started;
+      while (performance.now() - started <= durationMs) {
+        const sampledAt = performance.now();
+        summary.maxSampleGapMs = Math.max(summary.maxSampleGapMs, sampledAt - lastSampleAt);
+        lastSampleAt = sampledAt;
+        recordAudioSample(summary, prepared.engine.sample(sampledAt));
+        for (const eventName of Object.keys(summary.eventTriggerCounts)) {
+          const triggeredAt = prepared.engine.expressiveProcessor?.events?.[eventName]?.lastTriggeredAt;
+          if (!Number.isFinite(triggeredAt) || triggeredAt === summary.lastEventTriggerAt[eventName]) continue;
+          summary.lastEventTriggerAt[eventName] = triggeredAt;
+          summary.eventTriggerCounts[eventName] += 1;
+        }
+        const rhythmOnsets = prepared.engine.expressiveProcessor?.rhythmOnsets || [];
+        if (rhythmOnsets.length >= summary.maxRhythmOnsets) {
+          summary.maxRhythmOnsets = rhythmOnsets.length;
+          summary.rhythmOnsets = [...rhythmOnsets];
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000 / 60));
+      }
+      summary.analysisDurationMs = performance.now() - started;
+      await releasePreparedAudioFixture();
+      return summary;
+    }
+
+    window.prepareDecodedAudioFixture = async (url, mode = 'local') => {
+      await releasePreparedAudioFixture();
+      audioFixturePromise = null;
+      const engine = new AudioEngine();
+      if (mode === 'local') {
+        const element = document.createElement('audio');
+        element.preload = 'auto';
+        element.src = url;
+        document.body.appendChild(element);
+        element.load();
+        await new Promise((resolve, reject) => {
+          if (Number.isFinite(element.duration) && element.duration > 0) resolve();
+          else {
+            element.addEventListener('loadedmetadata', resolve, { once: true });
+            element.addEventListener('error', () => reject(new Error('Synthetic fixture did not decode.')), { once: true });
+          }
+        });
+        await engine.connectMediaElement(element);
+        preparedAudioFixture = { mode, engine, element, durationSeconds: element.duration };
+      } else {
+        const sourceContext = new AudioContext();
+        const encoded = await (await fetch(url)).arrayBuffer();
+        const buffer = await sourceContext.decodeAudioData(encoded.slice(0));
+        const source = sourceContext.createBufferSource();
+        const destination = sourceContext.createMediaStreamDestination();
+        source.buffer = buffer;
+        source.connect(destination);
+        preparedAudioFixture = {
+          mode: mode === 'display' ? 'display' : 'microphone',
+          engine,
+          sourceContext,
+          source,
+          destination,
+          durationSeconds: buffer.duration,
+        };
+      }
+      return { mode: preparedAudioFixture.mode, durationSeconds: preparedAudioFixture.durationSeconds };
+    };
+
+    document.getElementById('audioFixtureStart').addEventListener('click', () => {
+      if (!audioFixturePromise) audioFixturePromise = runPreparedAudioFixture();
+    });
+
+    window.audioFixtureResult = () => {
+      if (!audioFixturePromise) throw new Error('Start the prepared audio fixture first.');
+      return audioFixturePromise;
     };
 
     window.__reliabilityHarnessReady = true;

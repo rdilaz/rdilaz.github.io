@@ -22,8 +22,8 @@ No terminal, localhost service, browser extension, unsigned helper, desktop comp
 
 ## Creative freedom
 
-- Every model receives the same canonical generation prompt version.
-- Every model receives the same Visualizer Audio API version.
+- Every new generation receives the same current canonical generation prompt version and Visualizer Audio API version.
+- Existing Dreams execute against the exact declared compatibility contract; absent or unknown audio-contract provenance fails safely to V1.
 - Models do not receive the current song, genre, reference art, competitor output, or aesthetic examples.
 - The prompt does not prescribe particles, 3D, colors, darkness, futurism, geometry, or any other visual metaphor.
 - Models may use any allowed browser-native visual technique.
@@ -64,6 +64,25 @@ V0 is real only when a user can:
 - distinguish the visualizer currently LIVE from the model selected for the NEXT Dream;
 - favorite, reopen, delete, and battle saved Dreams;
 - inspect versioned local Dream traces through a hidden developer mode when troubleshooting.
+
+## Music Reactivity v2: Better Ears
+
+**Implementation status:** Implemented with deterministic host-side and Chromium evidence. Production listening, model-generation A/B acceptance, and real-iPhone/WebKit evidence remain pending.
+
+New generations use `visualizer-prompt-v3` and `visualizer-audio-v2`. V2 retains every V1 field and adds `audio.expressive` under `visualizer-expressive-audio-v1`:
+
+- `dynamics.fast` and `slow` are short- and long-timescale energy; `attack` and `release` are positive and negative energy motion; `quietness` and capped `silenceSeconds` describe the quiet state; `crest` describes peakiness; and `surge` is a sudden short-versus-long energy increase, not a claimed musical drop.
+- `events.onset` is a broad attack. `lowImpact`, `midHit`, and `highSpark` are retained frequency-region attack gestures with bounded `pulse`, ordered `strength`, and capped `ageSeconds`; they do not classify instruments.
+- `rhythm.pulse`, `phase`, `tempo`, and `confidence` expose conservative rhythm evidence. Tempo is zero when unavailable and phase remains neutral until confidence is sufficient.
+- `frequency.logBands` contains 24 current logarithmic bands across the useful audible range, giving low frequencies more detail than V1's linear spectrum. The matching 24 `bandAttack` values describe positive recent change.
+
+All expressive values other than tempo and capped seconds are finite `0..1`. Analysis remains browser-local at an independent 60 Hz target, while Full/Balanced/Saver continue to alter only generated delivery and render cost. Event envelopes are time-based and retain short attacks across a 30 FPS delivery interval.
+
+Existing Featured Dreams, saved V1 Dreams, and unknown-provenance records continue to receive the exact V1 enumerable frame shape. Contract identity is pinned per sandbox session through preflight, Open, retest, repair, promotion, rollback, and recovery. The model/provider still receives no song, audio bytes, waveform or spectrum history, source identity, metadata, or live feature values.
+
+`Pulse + Spice` (`pulse-spice-v1`) is an optional creative preset that asks for stronger musical causality and distinct quiet/impact/spectral roles. Neutral remains the default and unchanged creative choice. The host-authored V2 reference instrument under `tests/fixtures` is test evidence only, is never model output, and cannot enter Featured.
+
+Known limitations: local media retains neutral stereo because the current media-element path cannot prove mono versus stereo truthfully; capture support and processing differ by browser/operating system; tempo and phase intentionally remain unavailable for weak or irregular evidence; no AudioWorklet is used. Artistic improvement from generated Dreams is not accepted until a later operator-authorized same-model V1/V2 campaign or equivalent live evidence is reviewed.
 
 ## Product Shell / Core UX v1
 

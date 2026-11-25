@@ -2,14 +2,18 @@
 
 Authoritative implementation: `public/visualizer/prompt.js`.
 
-Current version: `visualizer-prompt-v1`.
+Current version: `visualizer-prompt-v3`.
 
-The prompt is intentionally sparse aesthetically. It tells models to create the most extraordinary real-time visual interpretation of music they can; they do not know what music will be played; arbitrary audio must work; there are no aesthetic requirements; no genre, song, reference image, or competitor output is supplied; every model receives the same creative brief and audio contract; the goal is wow factor and a meaningful relationship between sound and image; output is one self-contained HTML document; browser-native visual technologies are available; external network/assets are not; and `window.VIZ` is the standardized sensory interface.
+The current default is the unchanged `neutral-v1` creative brief: create a real-time visual interpretation of arbitrary music, with complete artistic freedom. The fixed technical contract is appended separately. It describes one self-contained HTML document, the opaque network-denied sandbox, and `visualizer-audio-v2` without prescribing renderer, composition, color, dimensionality, or metaphor. The model never receives the song or live analysis.
+
+`pulse-spice-v1` / Pulse + Spice is one optional built-in creative preset for stronger musical causality, distinct quiet/impact/spectral roles, precise recovery, clarity, and restrained haze/blur. It is not the default. The preserved legacy canonical prompt remains historical V1 evidence and is not used for new generation; even the Original baseline creative brief receives the current prompt/runtime contract when selected for a new Dream.
 
 ## Fairness policy
 
 Changes to the canonical prompt require a version bump. Old generations retain the prompt version used to create them. Aesthetic examples are not added to the prompt because examples become style anchors and undermine the point of the experiment.
 
+Prompt, audio contract, creative profile ID/hash, generation envelope, reliability, and runtime remain separate model-fit identity dimensions. A V1 and V2 observation cannot share a compatibility bucket.
+
 ## Repair policy
 
-A malformed or immediately broken generation receives at most one automatic repair attempt in V0. The repair is sent back to the same selected model with the same canonical creative brief plus the concrete validation/runtime error. Repair should preserve the model's original visual idea when possible.
+A malformed or immediately broken generation receives at most one automatic repair attempt in V0. The repair is sent back to the same selected model with the same prompt profile, prompt version, and exact audio-contract identity plus the concrete validation/runtime error. Repair should preserve the model's original visual idea when possible.

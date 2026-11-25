@@ -1,8 +1,8 @@
 # Dream Reliability Harness
 
-Version: `dream-reliability-v2`
+Version: `dream-reliability-v3`
 
-Runtime compatibility: `visualizer-runtime-v2`
+Runtime compatibility: `visualizer-runtime-v3`
 
 ## Product rule
 
@@ -31,7 +31,7 @@ The previous slot remains warm throughout the post-launch watchdog. Fatal runtim
 
 After the watchdog passes, high-frequency instrumentation is removed from the promoted iframe so the verification system does not become a permanent rendering tax.
 
-Stored artifacts with current v2 ready/verified evidence use the shorter safe-reopen probe instead of repeating the full generation preflight. Historical v1 artifacts remain stored and reopenable, but receive a full v2 preflight before promotion. They still execute only in the opaque-origin sandbox and still pass the visible launch watchdog. A failed Open preserves the prior LIVE Dream and keeps the ready artifact/evidence with `failed-to-open` state for later inspection.
+Stored artifacts with current v3 ready/verified evidence use the shorter safe-reopen probe instead of repeating the full generation preflight when that evidence also matches the artifact's effective audio contract. Historical reliability evidence remains stored and reopenable, but receives a full v3 preflight before promotion. They still execute only in the opaque-origin sandbox and still pass the visible launch watchdog. A failed Open preserves the prior LIVE Dream and keeps the ready artifact/evidence with `failed-to-open` state for later inspection.
 
 The host inserts CSP and the trusted bridge structurally into the actual parsed document head. Host commands and sandbox evidence travel over a closure-private `MessageChannel`; generated code cannot read probe IDs or impersonate readiness, pause, or resume through window messages. All hidden candidate work, including developer retests, shares one serialized standby-slot lease. Active failures during Open/recovery are latched and processed afterward if that failed session is still LIVE.
 
@@ -65,7 +65,7 @@ The host injects the recorder before generated code. It records only engineering
 - sparse, downsampled canvas fingerprints used only inside the browser.
 - CSS geometry and backing dimensions for canvas surfaces, including whether the v2 root-viewport compatibility guard was applied.
 
-It never records captured waveform or spectrum arrays, song names, audio content, OpenRouter credentials, authorization headers, cookies, or browser storage from generated code.
+It never records captured waveform or spectrum arrays, expressive feature values, song names, audio content, source identity, OpenRouter credentials, authorization headers, cookies, or browser storage from generated code.
 
 ## Medium-agnostic visible-output proof
 
@@ -75,11 +75,11 @@ Canvas/WebGL/WebGPU candidates can prove life through current pixel evidence or 
 
 A dominant full-screen canvas must prove itself; a tiny HUD cannot hide a failed renderer. Conversely, an intentionally black renderer is not automatically rejected when its graphics pipeline demonstrably compiled, linked, and drew. Lack of a large visual delta under synthetic music is a warning, not a failure, because subtle interpretations are valid.
 
-`visualizer-runtime-v2` also separates backing resolution from layout for the narrow class of generated canvases that are demonstrably fixed to all four viewport edges while retaining authored `auto` CSS width and height. Only those verified root surfaces receive a closure-owned host marker that pins their CSS box to the viewport; explicit, nested, partial, transformed, and offscreen canvases remain untouched. Authored DOM/style changes trigger coalesced requalification, while the existing one-second runtime heartbeat rechecks only already observed canvases to cover direct CSSOM/adopted-style changes and prune detached nodes.
+`visualizer-runtime-v3` also separates backing resolution from layout for the narrow class of generated canvases that are demonstrably fixed to all four viewport edges while retaining authored `auto` CSS width and height. Only those verified root surfaces receive a closure-owned host marker that pins their CSS box to the viewport; explicit, nested, partial, transformed, and offscreen canvases remain untouched. Authored DOM/style changes trigger coalesced requalification, while the existing one-second runtime heartbeat rechecks only already observed canvases to cover direct CSSOM/adopted-style changes and prune detached nodes.
 
 ## Deterministic music stimulation
 
-Preflight never uses or stores the user's song. It supplies the same local synthetic sequence to every candidate:
+Preflight never uses or stores the user's song. Each sandbox is pinned explicitly to the artifact's declared audio contract before boot; missing or unknown provenance resolves to V1. It supplies the same local synthetic sequence through that declared shape:
 
 - silence/near-silence;
 - bass-heavy impact;
@@ -89,6 +89,12 @@ Preflight never uses or stores the user's song. It supplies the same local synth
 - a mixed settling frame.
 
 The sequence verifies that generated code remains healthy and consumes `VIZ`. It is not an aesthetic target and is not visible to the model during generation.
+
+V1 candidates receive exactly the pre-milestone V1 enumerable frame, with no `audio.expressive` field. V2 candidates receive meaningful quietness, low/mid/high event, logarithmic-band, surge, tempo, and phase values under `visualizer-expressive-audio-v1`. Authenticated in-browser probes verify the bounded field shape; persisted reliability retains the contract identity while recursive audio-key redaction removes the nested shape and every feature value. Active and candidate sandboxes may therefore use different versions safely during one transactional Open.
+
+The pure corpus tests digital silence, low noise, sustained low/mid/high tones, soft/hard low impacts, mid/high bursts, regular approximately 125 BPM and irregular trains, silence-to-full entrance, phase offsets, suspension, pause, seek, source replacement, and resume. Chromium decodes generated PCM and runs the production Web Audio path for local media plus equivalent shared/microphone stream graphs. No provider endpoint may complete.
+
+`tests/fixtures/expressive-audio-reference.html` is a host-authored test-only V2 instrument. Six quietness/low/mid/high/log-band/beat-phase stimuli must produce distinct bounded pixel hashes and attached screenshots. This is research evidence only: it is not model output, cannot enter Featured, and does not create an aesthetic admission gate.
 
 ## Repair boundary
 

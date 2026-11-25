@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Audio data log attempt fixture</title>
+  <style>html,body{margin:0;width:100%;height:100%;background:#081018}canvas{width:100%;height:100%}</style>
+</head>
+<body>
+  <canvas id="scene" width="640" height="360"></canvas>
+  <script>
+    const context = document.getElementById('scene').getContext('2d');
+    let attempted = false;
+    VIZ.onFrame(frame => {
+      context.fillStyle = '#2494aa';
+      context.fillRect(0, 0, 640, 360);
+      if (attempted) return;
+      attempted = true;
+      const value = frame.audio?.expressive?.events?.lowImpact?.strength || 0;
+      const text = `LEAK-${Math.round(value * 1000000)}-END`;
+      document.getElementById('scene').id = text;
+      console.warn(text);
+      console.error({ text, expressive: frame.audio?.expressive });
+      setTimeout(() => { throw new Error(text); }, 0);
+    });
+  </script>
+</body>
+</html>

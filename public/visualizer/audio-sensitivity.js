@@ -8,6 +8,8 @@ export const AUDIO_SENSITIVITY_STEP_PERCENT = 10;
 
 const INTENSITY_FIELDS = Object.freeze(['volume', 'peak', 'transient', 'beat', 'spectralFlux']);
 const BAND_FIELDS = Object.freeze(['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble']);
+const EXPRESSIVE_DYNAMICS_FIELDS = Object.freeze(['fast', 'slow', 'attack', 'release', 'crest', 'surge']);
+const EXPRESSIVE_EVENT_FIELDS = Object.freeze(['onset', 'lowImpact', 'midHit', 'highSpark']);
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 
@@ -159,6 +161,44 @@ export function applyAudioSensitivity(sample, sensitivityPercent = DEFAULT_AUDIO
   }
   if (hasOwn(sample, 'waveform')) {
     transformed.waveform = mapValues(sample.waveform, value => scaleWaveform(value, scale), 'Waveform');
+  }
+
+  if (sample.expressive && typeof sample.expressive === 'object' && !Array.isArray(sample.expressive)) {
+    const expressive = { ...sample.expressive };
+    if (sample.expressive.dynamics && typeof sample.expressive.dynamics === 'object') {
+      expressive.dynamics = { ...sample.expressive.dynamics };
+      for (const field of EXPRESSIVE_DYNAMICS_FIELDS) {
+        if (hasOwn(sample.expressive.dynamics, field)) {
+          expressive.dynamics[field] = scaleIntensity(sample.expressive.dynamics[field], scale);
+        }
+      }
+    }
+    if (sample.expressive.events && typeof sample.expressive.events === 'object') {
+      expressive.events = { ...sample.expressive.events };
+      for (const field of EXPRESSIVE_EVENT_FIELDS) {
+        const sourceEvent = sample.expressive.events[field];
+        if (!sourceEvent || typeof sourceEvent !== 'object') continue;
+        expressive.events[field] = {
+          ...sourceEvent,
+          pulse: scaleIntensity(sourceEvent.pulse, scale),
+          strength: scaleIntensity(sourceEvent.strength, scale),
+        };
+      }
+    }
+    if (sample.expressive.rhythm && typeof sample.expressive.rhythm === 'object') {
+      expressive.rhythm = {
+        ...sample.expressive.rhythm,
+        pulse: scaleIntensity(sample.expressive.rhythm.pulse, scale),
+      };
+    }
+    if (sample.expressive.frequency && typeof sample.expressive.frequency === 'object') {
+      expressive.frequency = {
+        ...sample.expressive.frequency,
+        logBands: mapValues(sample.expressive.frequency.logBands, value => scaleIntensity(value, scale), 'Expressive log bands'),
+        bandAttack: mapValues(sample.expressive.frequency.bandAttack, value => scaleIntensity(value, scale), 'Expressive band attacks'),
+      };
+    }
+    transformed.expressive = expressive;
   }
 
   return transformed;

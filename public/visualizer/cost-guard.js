@@ -25,12 +25,12 @@ import {
   createReasoningSelectionStore,
 } from './reasoning-settings.js';
 import {
-  AUDIO_API_VERSION,
   PROMPT_STORAGE_KEY,
   PROMPT_VERSION,
   buildGenerationMessages,
   loadPromptProfile,
 } from './prompt.js';
+import { AUDIO_API_VERSION, resolveAudioApiVersion } from './audio-contract.js';
 import { RELIABILITY_SCHEMA } from './reliability.js';
 import { filterLiveDreamModels } from './model-eligibility.js';
 
@@ -382,7 +382,7 @@ function empiricalPreviewForRequest(model, reasoningSelection, requestPolicy) {
       promptVersion: prompt.version,
       promptHash: prompt.hash,
       generationEnvelopeVersion: requestPolicy.generationEnvelopeVersion || GENERATION_ENVELOPE_VERSION,
-      audioApiVersion: prompt.audioApiVersion || AUDIO_API_VERSION,
+      audioApiVersion: resolveAudioApiVersion(prompt.audioApiVersion),
       reliabilityVersion: RELIABILITY_SCHEMA,
       runtimeVersion: VISUALIZER_RUNTIME_VERSION,
     });

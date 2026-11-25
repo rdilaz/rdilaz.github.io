@@ -1,6 +1,8 @@
-export const PROMPT_VERSION = 'visualizer-prompt-v2';
+import { AUDIO_API_VERSION } from './audio-contract.js';
+
+export const PROMPT_VERSION = 'visualizer-prompt-v3';
 export const LEGACY_PROMPT_VERSION = 'visualizer-prompt-v1';
-export const AUDIO_API_VERSION = 'visualizer-audio-v1';
+export { AUDIO_API_VERSION };
 export const PROMPT_PROFILE_SCHEMA = 'visualizer-prompt-profile-v1';
 export const PROMPT_STORAGE_KEY = 'ai-visualizer.prompt-profile.v1';
 export const DEFAULT_PROMPT_PRESET_ID = 'neutral-v1';
@@ -69,6 +71,12 @@ export const NEUTRAL_CLEAN_CREATIVE_BRIEF = `Create a real-time visual interpret
 
 You have complete artistic freedom. Decide what the music looks like. Avoid washed-out brightness, bloom-heavy haze, and overly blurry imagery.`;
 
+export const PULSE_SPICE_CREATIVE_BRIEF = `Create a real-time visual instrument for arbitrary music. Make the supplied audio state the primary cause of visible change rather than placing generic autonomous animation behind a light audio reaction.
+
+Give quietness and silence, sharp low-frequency impacts, and sustained spectral balance visibly different roles. Use fast attack and intentional recovery so impacts feel precise. Autonomous motion may support the artwork but must not overpower musical causality.
+
+Favor visual clarity, depth, and distinct structure. Avoid washed-out brightness, bloom-heavy haze, excessive blur, and constant motion that conceals musical events. Retain complete artistic freedom over the visual metaphor and all other aesthetic choices.`;
+
 export const FIXED_RUNTIME_CONTRACT = `RUNTIME CONTRACT — technical reference, not artistic direction:
 - Return exactly one complete self-contained HTML document and nothing else. Do not wrap it in Markdown.
 - The document runs in a sandboxed browser iframe. External network access and external assets are unavailable. Everything required by the result must exist in the returned HTML.
@@ -78,14 +86,14 @@ export const FIXED_RUNTIME_CONTRACT = `RUNTIME CONTRACT — technical reference,
 - The result must respond meaningfully to the read-only music state supplied by window.VIZ. How you interpret that state is entirely up to you.
 
 window.VIZ:
-- VIZ.version -> "visualizer-audio-v1"
+- VIZ.version -> "visualizer-audio-v2"
 - VIZ.frame -> the most recent host frame
 - VIZ.viewport -> { width, height, dpr }
 - VIZ.onFrame(callback) -> subscribe to new host frames; returns an unsubscribe function
 
 Each host frame contains:
 {
-  version: "visualizer-audio-v1",
+  version: "visualizer-audio-v2",
   time: number,
   deltaTime: number,
   audio: {
@@ -93,13 +101,30 @@ Each host frame contains:
     tempo: number, tempoConfidence: number, spectralFlux: number, spectralCentroid: number,
     bands: { subBass: number, bass: number, lowMid: number, mid: number, highMid: number, treble: number },
     stereo: { balance: number, width: number },
-    waveform: number[], spectrum: number[]
+    waveform: number[], spectrum: number[],
+    expressive: {
+      version: "visualizer-expressive-audio-v1",
+      dynamics: {
+        fast: number, slow: number, attack: number, release: number,
+        quietness: number, silenceSeconds: number, crest: number, surge: number
+      },
+      events: {
+        onset: { pulse: number, strength: number, ageSeconds: number },
+        lowImpact: { pulse: number, strength: number, ageSeconds: number },
+        midHit: { pulse: number, strength: number, ageSeconds: number },
+        highSpark: { pulse: number, strength: number, ageSeconds: number }
+      },
+      rhythm: { pulse: number, phase: number, tempo: number, confidence: number },
+      frequency: { logBands: number[24], bandAttack: number[24] }
+    }
   },
   pointer: { x: number, y: number, active: boolean, down: boolean },
   viewport: { width: number, height: number, dpr: number }
 }
 
-The easy audio features are normalized adaptively. waveform and spectrum remain available for any interpretation you choose. Tempo may be unavailable and music may have no regular beat.`;
+Except for tempo and nonnegative capped second values, expressive values are finite and normalized to 0..1. fast and slow are short- and long-timescale energy. attack and release describe positive and negative energy motion; quietness and silenceSeconds describe the quiet state; crest describes peakiness; surge is a sudden short-versus-long energy increase, not a song-section or drop classifier. Event pulses are time-retained attack gestures; strength preserves relative impact and ageSeconds reports recency. lowImpact, midHit, and highSpark are frequency-region gestures, not instrument classifiers. rhythm phase is neutral until confidence is sufficient, and tempo is zero when unavailable. logBands span the useful audible range logarithmically; bandAttack is positive recent change in each matching band.
+
+The V1 fields remain normalized adaptively. waveform and spectrum remain available for any interpretation you choose. Tempo or regular rhythm may be unavailable.`;
 
 export const PROMPT_PRESETS = Object.freeze([
   Object.freeze({
@@ -117,11 +142,18 @@ export const PROMPT_PRESETS = Object.freeze([
     legacy: false,
   }),
   Object.freeze({
+    id: 'pulse-spice-v1',
+    name: 'Pulse + Spice',
+    description: 'Audio-led direction with distinct quiet, impact, and spectral roles.',
+    creativeBrief: PULSE_SPICE_CREATIVE_BRIEF,
+    legacy: false,
+  }),
+  Object.freeze({
     id: 'baseline-v1',
     name: 'Original baseline',
-    description: 'The exact prompt used for the first successful Grok experiment and earlier runs.',
+    description: 'The original artistic brief paired with the current runtime contract.',
     creativeBrief: BASELINE_CREATIVE_BRIEF,
-    legacy: true,
+    legacy: false,
   }),
 ]);
 

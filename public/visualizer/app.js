@@ -11,7 +11,13 @@ import {
   isOpenRouterConnected,
   repairVisualizer,
 } from './openrouter.js';
-import { PROMPT_VERSION, AUDIO_API_VERSION, loadPromptProfile } from './prompt.js';
+import { PROMPT_VERSION, loadPromptProfile } from './prompt.js';
+import {
+  AUDIO_API_V1,
+  AUDIO_API_VERSION,
+  isKnownAudioApiVersion,
+  resolveAudioApiVersion,
+} from './audio-contract.js';
 import { VisualizerSandbox, validateVisualizerHtml } from './sandbox.js';
 import {
   confirmSandboxLiveness,
@@ -311,6 +317,7 @@ let latestAudioSample = null;
 let lastDeliveredFrameAt = 0;
 let audioAnalysisSamples = 0;
 let vizFrameDeliveries = 0;
+let lastVisualPausedForAnalysis = null;
 activeSlot.sandbox.setRenderQuality(renderQuality);
 standbySlot.sandbox.setRenderQuality(renderQuality);
 
@@ -479,7 +486,14 @@ function updateConnectionUi() {
 }
 
 function renderPlayback(snapshot = playbackController.snapshot()) {
+  const analysisBoundary = lastVisualPausedForAnalysis !== null
+    && lastVisualPausedForAnalysis !== Boolean(snapshot.paused);
+  lastVisualPausedForAnalysis = Boolean(snapshot.paused);
   visualPaused = snapshot.paused;
+  if (analysisBoundary) {
+    audio.resetExpressiveState(visualPaused ? 'pause' : 'resume');
+    latestAudioSample = null;
+  }
   audioAnalysisGate.reset();
   vizDeliveryGate.reset();
   if (!visualPaused) lastDeliveredFrameAt = 0;
@@ -1047,6 +1061,12 @@ function startTraceAttempt(diagnostic, kind, model, {
           userReasoningSelection: reasoningSelection,
           modelFitConfiguration: generationConfiguration,
           generationEnvelopeVersion: GENERATION_ENVELOPE_VERSION,
+          prompt: {
+            profileId: diagnostic.promptProfile?.id || generationConfiguration?.promptProfileId || '',
+            version: diagnostic.promptVersion || generationConfiguration?.promptVersion || '',
+            hash: diagnostic.promptProfile?.briefHash || generationConfiguration?.promptHash || '',
+            audioApiVersion: diagnostic.audioApiVersion || generationConfiguration?.audioApiVersion || AUDIO_API_V1,
+          },
         },
       },
     });
@@ -1144,6 +1164,8 @@ function reliabilityEvidence(report) {
 function traceForDiagnostic(record) {
   if (!record) return null;
   const trace = dreamTraceForExport(record.trace || legacyDiagnosticToTrace(record));
+  trace.audioApiVersion = resolveAudioApiVersion(trace.audioApiVersion || record.audioApiVersion);
+  if (!trace.promptVersion && record.promptVersion) trace.promptVersion = record.promptVersion;
   if (record.status === 'rolled-back' && trace.status !== 'rolled-back') {
     trace.originalOutcome = trace.outcome;
     trace.status = 'rolled-back';
@@ -1181,6 +1203,23 @@ function attemptFor(trace, attemptNumber) {
   return attempts.find(attempt => Number(attempt.number) === Number(attemptNumber)) || null;
 }
 
+function audioApiVersionForTraceAttempt(attempt, fallback = AUDIO_API_V1) {
+  return resolveAudioApiVersion(
+    attempt?.request?.policy?.prompt?.audioApiVersion
+      || attempt?.request?.policy?.modelFitConfiguration?.audioApiVersion
+      || fallback,
+  );
+}
+
+function preflightMatchesAudioContract(generation, effectiveVersion) {
+  const declaredVersion = generation?.audioApiVersion;
+  const evidenceVersion = generation?.preflightEvidence?.audioApiVersion;
+  return isKnownAudioApiVersion(declaredVersion)
+    && isKnownAudioApiVersion(evidenceVersion)
+    && declaredVersion === evidenceVersion
+    && declaredVersion === effectiveVersion;
+}
+
 async function openTraceById(id) {
   const record = await findTraceRecord(id);
   if (!record) throw new Error('That local Dream Trace is no longer available.');
@@ -1196,7 +1235,11 @@ const dreamTraceViewer = new DreamTraceViewer({
   content: els.traceViewerContent,
   onCopy: text => copyText(text),
   onExport: trace => downloadJson(`dream-trace-${trace.id || Date.now()}.json`, dreamTraceForExport(trace)),
-  onRetest: (html, attempt) => testDiagnosticHtml(html, `trace attempt ${attempt?.number || '?'}`),
+  onRetest: (html, attempt, trace, diagnostic) => testDiagnosticHtml(
+    html,
+    `trace attempt ${attempt?.number || '?'}`,
+    audioApiVersionForTraceAttempt(attempt, trace?.audioApiVersion || diagnostic?.audioApiVersion),
+  ),
   onOpenGeneration: async generationId => {
     const generation = await store.get(generationId);
     if (!generation) throw new Error('That saved Dream is no longer in the Library.');
@@ -1233,9 +1276,10 @@ async function runTransparencySelfTest() {
   };
 }
 
-function createHarness(sandbox, diagnostic, traceAttempt = null, jobOwner = null) {
+function createHarness(sandbox, diagnostic, traceAttempt = null, jobOwner = null, audioApiVersion = AUDIO_API_V1) {
   return new DreamReliabilityHarness({
     sandbox,
+    audioApiVersion,
     onStage: event => {
       const job = dreamJobController.snapshot();
       if (dreamJobOwnsReliabilityStage({
@@ -1264,9 +1308,10 @@ function createHarness(sandbox, diagnostic, traceAttempt = null, jobOwner = null
   });
 }
 
-function staticFailure(problems) {
+function staticFailure(problems, audioApiVersion = AUDIO_API_V1) {
   return {
     schema: RELIABILITY_SCHEMA,
+    audioApiVersion: resolveAudioApiVersion(audioApiVersion),
     passed: false,
     failure: {
       code: FAILURE_CODES.INVALID_HTML,
@@ -1294,6 +1339,7 @@ async function withCandidateSlot(operation) {
 async function evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt = null, {
   quickReopen = false,
   jobOwner = null,
+  audioApiVersion = AUDIO_API_V1,
 } = {}) {
   const validationStartedAt = Date.now();
   if (traceAttempt) patchTraceAttempt(diagnostic, traceAttempt, { timing: { artifactValidationStartedAt: validationStartedAt } });
@@ -1324,7 +1370,7 @@ async function evaluateCandidate(result, diagnostic, attemptNumber, signal, trac
   }
   await persistDiagnostic(diagnostic);
   if (problems.length) {
-    const failure = staticFailure(problems);
+    const failure = staticFailure(problems, audioApiVersion);
     attempt.reliability = failure;
     attempt.finishedAt = Date.now();
     if (traceAttempt) patchTraceAttempt(diagnostic, traceAttempt, { artifact: reliabilityEvidence(failure) });
@@ -1333,7 +1379,7 @@ async function evaluateCandidate(result, diagnostic, attemptNumber, signal, trac
 
   const candidateSandbox = standbySlot.sandbox;
   candidateSandbox.setPaused(false);
-  const harness = createHarness(candidateSandbox, diagnostic, traceAttempt, jobOwner);
+  const harness = createHarness(candidateSandbox, diagnostic, traceAttempt, jobOwner, audioApiVersion);
   const health = await (quickReopen ? harness.reopen(result.html, {
     viewport: currentViewport(),
     signal,
@@ -1558,6 +1604,7 @@ function recordOpenModelFit(generation, diagnostic, { succeeded, failureCode = '
   try {
     const configuration = createModelFitConfigurationIdentity({
       ...originalConfiguration,
+      audioApiVersion: resolveAudioApiVersion(generation?.audioApiVersion),
       reliabilityVersion: RELIABILITY_SCHEMA,
       runtimeVersion: VISUALIZER_RUNTIME_VERSION,
     });
@@ -1677,6 +1724,9 @@ async function dream() {
     providerId: 'openrouter',
     liveSnapshot: identityAtStart,
     nextSnapshot: identityAtStart.next,
+    promptVersion: PROMPT_VERSION,
+    promptProfile,
+    audioApiVersion: AUDIO_API_VERSION,
   });
   activeDreamTraceId = diagnostic.trace.id;
   const reliabilityOwner = Object.freeze({ jobId: job.id, traceId: diagnostic.trace.id });
@@ -1735,6 +1785,7 @@ async function dream() {
         try {
           return await evaluateCandidate(result, diagnostic, attemptNumber, signal, traceAttempt, {
             jobOwner: reliabilityOwner,
+            audioApiVersion: AUDIO_API_VERSION,
           });
         } finally {
           if (standbySlot.sandbox === candidateSandbox) {
@@ -1787,6 +1838,7 @@ async function dream() {
           healthSummary: candidate.health.summary,
           preflightEvidence: {
             schema: candidate.health.schema,
+            audioApiVersion: candidate.health.audioApiVersion,
             passed: true,
             summary: candidate.health.summary,
             warnings: candidate.health.warnings || [],
@@ -1912,6 +1964,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     jobId = visibleJob.id;
   }
   reopening = true;
+  const audioApiVersion = resolveAudioApiVersion(generation?.audioApiVersion);
   const openingRevision = beginOpeningStatus(generation);
   const model = models.find(candidate => candidate.id === generation.modelId) || {
     id: generation.modelId,
@@ -1925,11 +1978,14 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     kind: source === 'featured' ? 'featured-open' : 'library-reopen',
     liveSnapshot: identityAtStart,
     nextSnapshot: identityAtStart.next,
+    promptVersion: generation.promptVersion || '',
+    promptProfile: generation.promptProfile || null,
+    audioApiVersion,
   });
   let identityToken = '';
   diagnostic.promptVersion = generation.promptVersion || '';
   diagnostic.promptProfile = generation.promptProfile || null;
-  diagnostic.audioApiVersion = generation.audioApiVersion || '';
+  diagnostic.audioApiVersion = audioApiVersion;
   diagnostic.html = generation.html;
   diagnostic.outputBytes = new TextEncoder().encode(String(generation.html || '')).byteLength;
   diagnostic.attempts = [];
@@ -1959,7 +2015,8 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
     };
     const quickReopen = ['ready', 'verified'].includes(generation.healthStatus)
       && generation.preflightEvidence?.passed === true
-      && generation.preflightEvidence?.schema === RELIABILITY_SCHEMA;
+      && generation.preflightEvidence?.schema === RELIABILITY_SCHEMA
+      && preflightMatchesAudioContract(generation, audioApiVersion);
     const candidate = await withCandidateSlot(async () => {
       const candidateSandbox = standbySlot.sandbox;
       identityToken = stageLiveCandidate(liveIdentityForGeneration(generation, {
@@ -1967,7 +2024,10 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
         diagnosticId: diagnostic.id,
       }));
       try {
-        const checked = await evaluateCandidate(result, diagnostic, 1, null, null, { quickReopen });
+        const checked = await evaluateCandidate(result, diagnostic, 1, null, null, {
+          quickReopen,
+          audioApiVersion,
+        });
         if (!checked.passed) throw new DreamReliabilityError(checked.health.failure, checked.health);
         const watchdog = await promoteCandidate({
           harness: checked.harness,
@@ -2003,6 +2063,7 @@ async function openGeneration(generation, { close = true, jobId = '', source = '
           healthSummary: candidate.health.summary,
           preflightEvidence: {
             schema: RELIABILITY_SCHEMA,
+            audioApiVersion,
             passed: true,
             checkedAt: Date.now(),
             source: quickReopen ? 'safe-reopen' : 'full-revalidation',
@@ -2109,6 +2170,7 @@ function featuredArtifact(featured) {
     preflightEvidence: {
       passed: true,
       schema: featured.reliability?.contract || 'dream-reliability-v1',
+      audioApiVersion: resolveAudioApiVersion(featured.audioApiVersion),
       source: 'featured-manifest',
     },
   };
@@ -2233,7 +2295,11 @@ async function renderLibrary() {
           fallbackHtml = DEFAULT_VISUALIZER_HTML;
         }
         if (currentGeneration?.id === generation.id) {
-          await activeSlot.sandbox.load(DEFAULT_VISUALIZER_HTML, { viewport: currentViewport(), readyTimeoutMs: 1800 });
+          await activeSlot.sandbox.load(DEFAULT_VISUALIZER_HTML, {
+            viewport: currentViewport(),
+            readyTimeoutMs: 1800,
+            audioApiVersion: AUDIO_API_V1,
+          });
           activeSlot.sandbox.setPaused(visualPaused);
           await activeSlot.sandbox.waitForPlayback(visualPaused);
           activeSlot.sandbox.setPresentation('active');
@@ -2574,6 +2640,7 @@ function composeHostFrame(timestamp, sample) {
       stereo: sample.stereo,
       waveform: sample.waveform,
       spectrum: sample.spectrum,
+      expressive: sample.expressive,
     },
     pointer: { ...pointer },
     viewport: currentViewport(),
@@ -2665,13 +2732,19 @@ function chooseCheapDiagnosticModel() {
   return model;
 }
 
-async function testDiagnosticHtml(html, label = 'manual HTML') {
+async function testDiagnosticHtml(html, label = 'manual HTML', audioApiVersion = AUDIO_API_V1) {
   if (generating || recovering || reopening || deletingGeneration || promotion) throw new Error('Wait for the current operation to finish.');
   const model = { id: 'developer/manual-html', name: label, provider: 'developer' };
   const identityAtStart = identityController.snapshot();
-  const diagnostic = createDiagnosticRecord({ model, providerId: 'developer', kind: 'manual-html-test', liveSnapshot: identityAtStart, nextSnapshot: identityAtStart.next });
-  diagnostic.promptVersion = PROMPT_VERSION;
-  diagnostic.audioApiVersion = AUDIO_API_VERSION;
+  const diagnostic = createDiagnosticRecord({
+    model,
+    providerId: 'developer',
+    kind: 'manual-html-test',
+    liveSnapshot: identityAtStart,
+    nextSnapshot: identityAtStart.next,
+    audioApiVersion: resolveAudioApiVersion(audioApiVersion),
+  });
+  diagnostic.audioApiVersion = resolveAudioApiVersion(audioApiVersion);
   diagnostic.html = String(html || '');
   diagnostic.rawOutput = diagnostic.html;
   diagnostic.outputBytes = new TextEncoder().encode(diagnostic.html).byteLength;
@@ -2684,7 +2757,9 @@ async function testDiagnosticHtml(html, label = 'manual HTML') {
     const candidate = await withCandidateSlot(async () => {
       const candidateSandbox = standbySlot.sandbox;
       try {
-        return await evaluateCandidate(result, diagnostic, 1, null);
+        return await evaluateCandidate(result, diagnostic, 1, null, null, {
+          audioApiVersion: diagnostic.audioApiVersion,
+        });
       } finally {
         if (standbySlot.sandbox === candidateSandbox) candidateSandbox.clear();
       }
@@ -2766,6 +2841,7 @@ function runtimeSummary() {
     playback: playbackController.snapshot(),
     job: dreamJobController.snapshot(),
     activeSessionId: activeSlot.sandbox.sessionId,
+    activeAudioApiVersion: activeSlot.sandbox.audioApiVersion,
     sandboxRenderQuality: activeSlot.sandbox.appliedRenderQuality,
     frameDelivery: activeSlot.sandbox.frameDeliverySnapshot(),
     activeEvents: activeSlot.sandbox.events.slice(-10),
@@ -2809,7 +2885,11 @@ async function renderDiagnostics(focusId = '') {
     });
     article.querySelector('[data-action="retest-html"]').addEventListener('click', async () => {
       if (!record.html) return;
-      await testDiagnosticHtml(record.html, `${record.modelName || record.modelId} replay`);
+      await testDiagnosticHtml(
+        record.html,
+        `${record.modelName || record.modelId} replay`,
+        resolveAudioApiVersion(record.audioApiVersion),
+      );
     });
     article.querySelector('[data-action="delete"]').addEventListener('click', async () => {
       fixtureDiagnostics.delete(record.id);
@@ -2859,32 +2939,45 @@ async function retestCurrentVisualizer() {
     showToast('Wait for the current operation to finish.');
     return null;
   }
-  const model = currentGeneration
-    ? { id: currentGeneration.modelId, name: currentGeneration.modelName, provider: currentGeneration.provider }
+  const generation = currentGeneration ? structuredClone(currentGeneration) : null;
+  const html = currentHtml;
+  const generationId = generation?.id || '';
+  const audioApiVersion = resolveAudioApiVersion(generation?.audioApiVersion);
+  const model = generation
+    ? { id: generation.modelId, name: generation.modelName, provider: generation.provider }
     : { id: 'built-in/calibration-bloom', name: 'Calibration Bloom', provider: 'built-in' };
   const identityAtStart = identityController.snapshot();
-  const diagnostic = createDiagnosticRecord({ model, providerId: currentGeneration?.providerId || 'built-in', kind: 'manual-retest', liveSnapshot: identityAtStart, nextSnapshot: identityAtStart.next });
-  diagnostic.promptVersion = currentGeneration?.promptVersion || '';
-  diagnostic.audioApiVersion = currentGeneration?.audioApiVersion || '';
-  diagnostic.html = currentHtml;
-  diagnostic.outputBytes = new TextEncoder().encode(currentHtml).byteLength;
+  const diagnostic = createDiagnosticRecord({
+    model,
+    providerId: generation?.providerId || 'built-in',
+    kind: 'manual-retest',
+    liveSnapshot: identityAtStart,
+    nextSnapshot: identityAtStart.next,
+    promptVersion: generation?.promptVersion || '',
+    promptProfile: generation?.promptProfile || null,
+    audioApiVersion,
+  });
+  diagnostic.html = html;
+  diagnostic.outputBytes = new TextEncoder().encode(html).byteLength;
   diagnostic.attempts = [];
   addDiagnosticTimeline(diagnostic, 'manual-retest:started');
   await persistDiagnostic(diagnostic);
   showCenter('Retesting the active visualizer…', 'This runs in the hidden candidate slot and does not interrupt the live artwork.');
   try {
-    const result = { html: currentHtml, raw: currentHtml, attempt: 1 };
+    const result = { html, raw: html, attempt: 1 };
     const candidate = await withCandidateSlot(async () => {
       const candidateSandbox = standbySlot.sandbox;
       try {
-        return await evaluateCandidate(result, diagnostic, 1, null);
+        return await evaluateCandidate(result, diagnostic, 1, null, null, {
+          audioApiVersion,
+        });
       } finally {
         if (standbySlot.sandbox === candidateSandbox) candidateSandbox.clear();
       }
     });
     if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
-    finalizeDiagnosticTrace(diagnostic, 'succeeded', { generationId: currentGeneration?.id || '' });
-    finishDiagnostic(diagnostic, { status: 'succeeded', generationId: currentGeneration?.id || '' });
+    finalizeDiagnosticTrace(diagnostic, 'succeeded', { generationId });
+    finishDiagnostic(diagnostic, { status: 'succeeded', generationId });
     await persistDiagnostic(diagnostic);
     hideCenter();
     showToast(`Retest passed. Diagnostic ${shortDiagnosticId(diagnostic.id)}.`);
@@ -2899,7 +2992,7 @@ async function retestCurrentVisualizer() {
       status: 'failed',
       failureCode: failure.code,
       failureMessage: failure.message,
-      generationId: currentGeneration?.id || '',
+      generationId,
     });
     await persistDiagnostic(diagnostic);
     hideCenter();
@@ -2965,6 +3058,7 @@ async function recoverFromRuntimeFailure(event) {
   const failedDiagnosticId = currentDiagnosticId;
   const targetHtml = fallbackHtml || DEFAULT_VISUALIZER_HTML;
   const targetGeneration = fallbackGeneration;
+  const targetAudioApiVersion = resolveAudioApiVersion(targetGeneration?.audioApiVersion);
   let recoveryIdentityToken = '';
   let recoveryDiagnostic = null;
   let failedDiagnosticRecord = null;
@@ -3007,7 +3101,12 @@ async function recoverFromRuntimeFailure(event) {
       kind: 'automatic-recovery',
       liveSnapshot: identityAtStart,
       nextSnapshot: identityAtStart.next,
+      promptVersion: targetGeneration?.promptVersion || '',
+      promptProfile: targetGeneration?.promptProfile || null,
+      audioApiVersion: targetAudioApiVersion,
     });
+    recoveryDiagnostic.promptVersion = targetGeneration?.promptVersion || '';
+    recoveryDiagnostic.audioApiVersion = targetAudioApiVersion;
     recoveryDiagnostic.html = targetHtml;
     recoveryDiagnostic.outputBytes = new TextEncoder().encode(targetHtml).byteLength;
     recoveryDiagnostic.attempts = [];
@@ -3020,11 +3119,13 @@ async function recoverFromRuntimeFailure(event) {
           })
         : { kind: 'built-in' });
       const candidate = await evaluateCandidate(result, recoveryDiagnostic, 1, null, null, {
+        audioApiVersion: targetAudioApiVersion,
         quickReopen: Boolean(
           targetGeneration
           && ['ready', 'verified'].includes(targetGeneration.healthStatus)
           && targetGeneration.preflightEvidence?.passed === true
           && targetGeneration.preflightEvidence?.schema === RELIABILITY_SCHEMA
+          && preflightMatchesAudioContract(targetGeneration, targetAudioApiVersion)
         ),
       });
       if (!candidate.passed) throw new DreamReliabilityError(candidate.health.failure, candidate.health);
@@ -3074,7 +3175,11 @@ async function recoverFromRuntimeFailure(event) {
     }
     console.warn('Automatic rollback target also failed; restoring built-in visualizer.', recoveryError);
     await withCandidateSlot(async () => {
-      await standbySlot.sandbox.load(DEFAULT_VISUALIZER_HTML, { viewport: currentViewport(), readyTimeoutMs: 2000 });
+      await standbySlot.sandbox.load(DEFAULT_VISUALIZER_HTML, {
+        viewport: currentViewport(),
+        readyTimeoutMs: 2000,
+        audioApiVersion: AUDIO_API_V1,
+      });
       standbySlot.sandbox.setPaused(visualPaused);
       await standbySlot.sandbox.waitForPlayback(visualPaused);
       standbySlot.sandbox.setPresentation('promoting');
@@ -3148,13 +3253,17 @@ function installDevApi() {
     async retestCurrent() {
       return retestCurrentVisualizer();
     },
-    async testHtml(html, label = 'manual HTML') {
-      return testDiagnosticHtml(html, label);
+    async testHtml(html, label = 'manual HTML', audioApiVersion = AUDIO_API_V1) {
+      return testDiagnosticHtml(html, label, audioApiVersion);
     },
     async replay(id) {
       const record = await getDiagnosticRecord(id);
       if (!record?.html) throw new Error('That diagnostic has no stored HTML.');
-      return testDiagnosticHtml(record.html, `${record.modelName || record.modelId} replay`);
+      return testDiagnosticHtml(
+        record.html,
+        `${record.modelName || record.modelId} replay`,
+        resolveAudioApiVersion(record.audioApiVersion),
+      );
     },
     async exportAll() {
       const records = await listDiagnosticRecords();
@@ -3206,6 +3315,7 @@ function installDevApi() {
         peak: Number(sample.peak) || 0,
         transient: Number(sample.transient) || 0,
         bands: sample.bands,
+        ...(devMode ? { expressive: sample.expressive } : {}),
       });
     },
     quality() {
@@ -3278,9 +3388,14 @@ function installDevApi() {
     },
     async retestTrace(id, attemptNumber) {
       const record = await findTraceRecord(id);
-      const attempt = attemptFor(traceForDiagnostic(record), attemptNumber);
+      const trace = traceForDiagnostic(record);
+      const attempt = attemptFor(trace, attemptNumber);
       if (!attempt?.response?.extractedHtml) throw new Error('That trace attempt has no captured HTML.');
-      return testDiagnosticHtml(attempt.response.extractedHtml, `trace attempt ${attempt.number}`);
+      return testDiagnosticHtml(
+        attempt.response.extractedHtml,
+        `trace attempt ${attempt.number}`,
+        audioApiVersionForTraceAttempt(attempt, trace?.audioApiVersion || record?.audioApiVersion),
+      );
     },
     runTransparencySelfTest,
   };
@@ -3573,6 +3688,7 @@ async function initialize() {
     const startupBoot = await activeSlot.sandbox.load(currentHtml, {
       viewport: currentViewport(),
       readyTimeoutMs: 2200,
+      audioApiVersion: resolveAudioApiVersion(startupFeatured?.audioApiVersion),
     });
     if (!startupBoot.ready || startupBoot.fatalEvents.length) throw new Error('Featured startup did not become ready.');
   } catch {
@@ -3582,6 +3698,7 @@ async function initialize() {
     await activeSlot.sandbox.load(currentHtml, {
       viewport: currentViewport(),
       readyTimeoutMs: 2200,
+      audioApiVersion: AUDIO_API_V1,
     });
   }
   if (startupFeatured) {

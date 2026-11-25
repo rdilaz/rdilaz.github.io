@@ -186,3 +186,47 @@ test('100% remains value-neutral while still returning independent transformed c
   assert.notStrictEqual(transformed.spectrum, source.spectrum);
   assert.notStrictEqual(transformed.waveform, source.waveform);
 });
+
+test('V2 sensitivity scales expressive intensity without changing timing or rhythm truth', () => {
+  const source = sampleFixture();
+  source.expressive = {
+    version: 'visualizer-expressive-audio-v1',
+    dynamics: {
+      fast: 0.3,
+      slow: 0.4,
+      attack: 0.5,
+      release: 0.2,
+      quietness: 0.75,
+      silenceSeconds: 2.5,
+      crest: 0.35,
+      surge: 0.45,
+    },
+    events: Object.fromEntries(['onset', 'lowImpact', 'midHit', 'highSpark'].map(name => [name, {
+      pulse: 0.3,
+      strength: 0.4,
+      ageSeconds: 0.15,
+    }])),
+    rhythm: { pulse: 0.3, phase: 0.6, tempo: 125, confidence: 0.72 },
+    frequency: { logBands: Array(24).fill(0.3), bandAttack: Array(24).fill(0.4) },
+  };
+  const before = structuredClone(source);
+  const transformed = applyAudioSensitivity(source, 200);
+
+  assert.deepEqual(transformed.expressive.dynamics, {
+    fast: 0.6,
+    slow: 0.8,
+    attack: 1,
+    release: 0.4,
+    quietness: 0.75,
+    silenceSeconds: 2.5,
+    crest: 0.7,
+    surge: 0.9,
+  });
+  assert.deepEqual(transformed.expressive.events.onset, { pulse: 0.6, strength: 0.8, ageSeconds: 0.15 });
+  assert.deepEqual(transformed.expressive.rhythm, { pulse: 0.6, phase: 0.6, tempo: 125, confidence: 0.72 });
+  assert.deepEqual(transformed.expressive.frequency.logBands, Array(24).fill(0.6));
+  assert.deepEqual(transformed.expressive.frequency.bandAttack, Array(24).fill(0.8));
+  assert.notStrictEqual(transformed.expressive, source.expressive);
+  assert.notStrictEqual(transformed.expressive.events.onset, source.expressive.events.onset);
+  assert.deepEqual(source, before);
+});

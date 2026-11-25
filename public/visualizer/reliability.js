@@ -1,3 +1,11 @@
+import {
+  AUDIO_API_V1,
+  AUDIO_API_V2,
+  EXPRESSIVE_AUDIO_VERSION,
+  projectVisualizerFrame,
+  resolveAudioApiVersion,
+} from './audio-contract.js';
+
 export const RELIABILITY_SCHEMA = 'dream-reliability-v3';
 export const HEARTBEAT_STALE_MS = 4200;
 export const STALL_CONFIRM_TIMEOUT_MS = 2600;
@@ -211,12 +219,93 @@ function probeProfile(progress) {
   return { volume: 0.34, peak: 0.42, transient: 0.08, beat: 0, subBass: 0.28, bass: 0.38, lowMid: 0.44, mid: 0.4, highMid: 0.34, treble: 0.28, flux: 0.18, centroid: 0.46, balance: 0.2 * Math.sin(progress * 18), width: 0.7, tempo: 112, confidence: 0.56 };
 }
 
-export function createSyntheticFrame(frameIndex, elapsedMs, viewport, frameRate = 60) {
+function syntheticExpressiveFrame(profile, progress, elapsedMs) {
+  const cycleMs = 1200;
+  const cycleElapsedMs = elapsedMs % cycleMs;
+  const lowPhase = progress >= 0.16 && progress < 0.36;
+  const midPhase = progress >= 0.36 && progress < 0.58;
+  const highPhase = progress >= 0.58 && progress < 0.78;
+  const quiet = progress < 0.16;
+  const eventAt = (startMs, strength) => {
+    if (elapsedMs < startMs) return { pulse: 0, strength: 0, ageSeconds: 30 };
+    const ageSeconds = (cycleElapsedMs >= startMs
+      ? cycleElapsedMs - startMs
+      : cycleElapsedMs + cycleMs - startMs) / 1000;
+    return {
+      pulse: clamp(strength * Math.exp(-ageSeconds / 0.085)),
+      strength: clamp(strength * Math.exp(-ageSeconds / 0.28)),
+      ageSeconds,
+    };
+  };
+  const lowEvent = eventAt(192, 0.9);
+  const midEvent = eventAt(432, 0.78);
+  const highEvent = eventAt(696, 0.86);
+  const rhythmStarts = [200, 500, 800, 1100];
+  const completedCycles = Math.floor(elapsedMs / cycleMs);
+  const startsThisCycle = rhythmStarts.filter(startMs => startMs <= cycleElapsedMs);
+  const latestRhythmStart = startsThisCycle.at(-1)
+    ?? (completedCycles > 0 ? rhythmStarts.at(-1) : null);
+  const rhythmAgeSeconds = latestRhythmStart === null
+    ? 30
+    : (startsThisCycle.length
+      ? cycleElapsedMs - latestRhythmStart
+      : cycleElapsedMs + cycleMs - latestRhythmStart) / 1000;
+  const rhythmEvent = latestRhythmStart === null ? { pulse: 0, strength: 0, ageSeconds: 30 } : {
+    pulse: clamp(0.72 * Math.exp(-rhythmAgeSeconds / 0.085)),
+    strength: clamp(0.72 * Math.exp(-rhythmAgeSeconds / 0.28)),
+    ageSeconds: rhythmAgeSeconds,
+  };
+  const onset = [lowEvent, midEvent, highEvent, rhythmEvent].sort((left, right) => right.pulse - left.pulse)[0];
+  const logBands = Array.from({ length: 24 }, (_unused, index) => {
+    const normalized = index / 23;
+    const low = Math.exp(-Math.pow((normalized - 0.16) * 10, 2)) * profile.bass;
+    const mid = Math.exp(-Math.pow((normalized - 0.53) * 8, 2)) * profile.mid;
+    const high = Math.exp(-Math.pow((normalized - 0.84) * 10, 2)) * profile.treble;
+    return quiet ? 0 : clamp(low + mid + high);
+  });
+  const bandAttack = logBands.map((value, index) => {
+    const relevant = lowPhase ? index < 8 : midPhase ? index >= 7 && index < 17 : highPhase ? index >= 16 : false;
+    const phaseStartMs = lowPhase ? 192 : midPhase ? 432 : highPhase ? 696 : 0;
+    const ageSeconds = relevant ? Math.max(0, cycleElapsedMs - phaseStartMs) / 1000 : 0;
+    return relevant ? clamp(value * 0.9 * Math.exp(-ageSeconds / 0.085)) : 0;
+  });
+  const rhythmPeriodSeconds = 0.3;
+  const rhythmEvidence = completedCycles * rhythmStarts.length + startsThisCycle.length;
+  const confidence = rhythmEvidence >= 4 ? 0.65 : 0;
+  return {
+    version: EXPRESSIVE_AUDIO_VERSION,
+    dynamics: {
+      fast: quiet ? 0 : profile.volume,
+      slow: quiet ? 0 : clamp(profile.volume * 0.72),
+      attack: quiet ? 0 : profile.transient,
+      release: quiet ? 0 : progress >= 0.78 ? 0.45 : 0.08,
+      quietness: quiet ? 1 : clamp(1 - profile.volume),
+      silenceSeconds: quiet ? cycleElapsedMs / 1000 : 0,
+      crest: quiet ? 0 : clamp(profile.peak - profile.volume),
+      surge: quiet ? 0 : lowPhase ? 0.82 : 0.12,
+    },
+    events: {
+      onset,
+      lowImpact: lowEvent,
+      midHit: midEvent,
+      highSpark: highEvent,
+    },
+    rhythm: {
+      pulse: confidence ? clamp(confidence * Math.exp(-rhythmAgeSeconds / 0.085)) : 0,
+      phase: confidence ? rhythmAgeSeconds / rhythmPeriodSeconds : 0,
+      tempo: confidence ? 200 : 0,
+      confidence,
+    },
+    frequency: { logBands, bandAttack },
+  };
+}
+
+export function createSyntheticFrame(frameIndex, elapsedMs, viewport, frameRate = 60, audioApiVersion = AUDIO_API_V1) {
   const cycleMs = 1200;
   const progress = (elapsedMs % cycleMs) / cycleMs;
   const profile = probeProfile(progress);
-  return {
-    version: 'visualizer-audio-v1',
+  const frame = {
+    version: resolveAudioApiVersion(audioApiVersion),
     time: elapsedMs / 1000,
     deltaTime: 1 / Math.min(60, Math.max(1, Number(frameRate) || 60)),
     audio: {
@@ -254,12 +343,28 @@ export function createSyntheticFrame(frameIndex, elapsedMs, viewport, frameRate 
       dpr: Math.max(1, Number(viewport.dpr) || 1),
     },
   };
+  if (resolveAudioApiVersion(audioApiVersion) === AUDIO_API_V2) {
+    if (progress < 0.16) {
+      frame.audio.silence = true;
+      frame.audio.volume = 0;
+      frame.audio.peak = 0;
+      frame.audio.transient = 0;
+      frame.audio.beat = 0;
+      frame.audio.spectralFlux = 0;
+      frame.audio.bands = { subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0 };
+      frame.audio.waveform = Array(128).fill(0);
+      frame.audio.spectrum = Array(96).fill(0);
+    }
+    frame.audio.expressive = syntheticExpressiveFrame(profile, progress, elapsedMs);
+  }
+  return projectVisualizerFrame(frame, audioApiVersion);
 }
 
 async function stimulate(sandbox, viewport, {
   durationMs = 1200,
   signal,
   onFrame,
+  audioApiVersion = AUDIO_API_V1,
 } = {}) {
   const started = performance.now();
   const targetFps = Math.min(60, Math.max(1, Number(sandbox.renderQuality?.maxFps) || 60));
@@ -270,7 +375,7 @@ async function stimulate(sandbox, viewport, {
     if (signal?.aborted) throw abortError();
     if (sandbox.fatalEvents?.().length) break;
     const elapsed = performance.now() - started;
-    const frame = createSyntheticFrame(frameIndex, elapsed, viewport, targetFps);
+    const frame = createSyntheticFrame(frameIndex, elapsed, viewport, targetFps, audioApiVersion);
     attemptedFrames += 1;
     if (sandbox.sendFrame(frame)) {
       onFrame?.(frameIndex, frame);
@@ -541,9 +646,10 @@ function repairMessage(failure, report) {
   return lines.join('\n').slice(0, 7000);
 }
 
-function failedReport({ startedAt, stages, failure, warnings = [], report = null }) {
+function failedReport({ startedAt, stages, failure, warnings = [], report = null, audioApiVersion = AUDIO_API_V1 }) {
   return {
     schema: RELIABILITY_SCHEMA,
+    audioApiVersion: resolveAudioApiVersion(audioApiVersion),
     passed: false,
     startedAt,
     finishedAt: nowIso(),
@@ -557,10 +663,15 @@ function failedReport({ startedAt, stages, failure, warnings = [], report = null
 }
 
 export class DreamReliabilityHarness {
-  constructor({ sandbox, onStage = () => {} } = {}) {
+  constructor({ sandbox, onStage = () => {}, audioApiVersion = AUDIO_API_V1 } = {}) {
     if (!sandbox) throw new TypeError('DreamReliabilityHarness requires a VisualizerSandbox.');
     this.sandbox = sandbox;
     this.onStage = onStage;
+    this.audioApiVersion = resolveAudioApiVersion(audioApiVersion);
+  }
+
+  failedReport(options) {
+    return failedReport({ ...options, audioApiVersion: this.audioApiVersion });
   }
 
   stage(name, detail = {}) {
@@ -588,14 +699,18 @@ export class DreamReliabilityHarness {
 
     this.sandbox.setPresentation('standby');
     this.stage('booting', { viewport: qualificationViewport });
-    const boot = await this.sandbox.load(html, { viewport: qualificationViewport, signal });
+    const boot = await this.sandbox.load(html, {
+      viewport: qualificationViewport,
+      signal,
+      audioApiVersion: this.audioApiVersion,
+    });
     stages.push({ name: 'boot', ...boot });
     if (!boot.ready) {
       const fatal = boot.fatalEvents?.[0];
       const failure = fatal
         ? makeFailure(FAILURE_CODES[fatal.code] || fatal.code || FAILURE_CODES.RUNTIME_ERROR, fatal.message, fatal)
         : makeFailure(FAILURE_CODES.BOOT_TIMEOUT, 'The visualizer did not finish booting inside the isolated sandbox.', { durationMs: boot.durationMs });
-      return failedReport({ startedAt, stages, failure, report: null });
+      return this.failedReport({ startedAt, stages, failure, report: null });
     }
 
     this.stage('probing-baseline');
@@ -606,11 +721,15 @@ export class DreamReliabilityHarness {
       stages.push({ name: 'baseline', report: baseline });
     } catch (error) {
       const failure = makeFailure(FAILURE_CODES.PROBE_FAILED, error.message || 'The baseline visual probe failed.');
-      return failedReport({ startedAt, stages, failure, report: null });
+      return this.failedReport({ startedAt, stages, failure, report: null });
     }
 
     this.stage('stimulating', { viewport: qualificationViewport });
-    const stimulation = await stimulate(this.sandbox, qualificationViewport, { durationMs: 1250, signal });
+    const stimulation = await stimulate(this.sandbox, qualificationViewport, {
+      durationMs: 1250,
+      signal,
+      audioApiVersion: this.audioApiVersion,
+    });
     const stimulationDelivery = await this.sandbox.waitForFrameDelivery({ timeoutMs: 2200, signal, label: 'synthetic stimulation drain' });
     stages.push({ name: 'stimulation', ...stimulation, delivery: stimulationDelivery });
 
@@ -620,7 +739,7 @@ export class DreamReliabilityHarness {
     stages.push({ name: 'synthetic-proof', report: stimulated, evaluation: stimulatedEvaluation });
     allWarnings.push(...stimulatedEvaluation.warnings);
     if (!stimulatedEvaluation.passed) {
-      return failedReport({
+      return this.failedReport({
         startedAt,
         stages,
         failure: stimulatedEvaluation.failure,
@@ -631,7 +750,11 @@ export class DreamReliabilityHarness {
 
     this.stage('canary-viewport', { viewport: actualViewport });
     this.sandbox.setViewport(actualViewport);
-    const viewportStimulation = await stimulate(this.sandbox, actualViewport, { durationMs: 720, signal });
+    const viewportStimulation = await stimulate(this.sandbox, actualViewport, {
+      durationMs: 720,
+      signal,
+      audioApiVersion: this.audioApiVersion,
+    });
     const viewportDelivery = await this.sandbox.waitForFrameDelivery({ timeoutMs: 2800, signal, label: 'actual-viewport drain' });
     stages.push({ name: 'viewport-stimulation', ...viewportStimulation, delivery: viewportDelivery });
     const canary = await this.sandbox.probe('actual-viewport-canary', { signal, timeoutMs: 2800 });
@@ -639,7 +762,7 @@ export class DreamReliabilityHarness {
     stages.push({ name: 'viewport-canary', report: canary, evaluation: canaryEvaluation });
     allWarnings.push(...canaryEvaluation.warnings);
     if (!canaryEvaluation.passed) {
-      return failedReport({
+      return this.failedReport({
         startedAt,
         stages,
         failure: canaryEvaluation.failure,
@@ -650,6 +773,7 @@ export class DreamReliabilityHarness {
 
     return {
       schema: RELIABILITY_SCHEMA,
+      audioApiVersion: this.audioApiVersion,
       passed: true,
       startedAt,
       finishedAt: nowIso(),
@@ -684,27 +808,35 @@ export class DreamReliabilityHarness {
     };
     this.sandbox.setPresentation('standby');
     this.stage('reopening', { viewport: actualViewport });
-    const boot = await this.sandbox.load(html, { viewport: actualViewport, signal });
+    const boot = await this.sandbox.load(html, {
+      viewport: actualViewport,
+      signal,
+      audioApiVersion: this.audioApiVersion,
+    });
     stages.push({ name: 'reopen-boot', ...boot });
     if (!boot.ready) {
       const fatal = boot.fatalEvents?.[0];
       const failure = fatal
         ? makeFailure(FAILURE_CODES[fatal.code] || fatal.code || FAILURE_CODES.RUNTIME_ERROR, fatal.message, fatal)
         : makeFailure(FAILURE_CODES.BOOT_TIMEOUT, 'The saved Dream did not finish booting inside the isolated sandbox.', { durationMs: boot.durationMs });
-      return failedReport({ startedAt, stages, failure, report: null });
+      return this.failedReport({ startedAt, stages, failure, report: null });
     }
 
     await wait(90, signal);
     const baseline = await this.sandbox.probe('reopen-baseline', { signal, timeoutMs: 2200 });
     stages.push({ name: 'reopen-baseline', report: baseline });
-    const stimulation = await stimulate(this.sandbox, actualViewport, { durationMs: stimulationMs, signal });
+    const stimulation = await stimulate(this.sandbox, actualViewport, {
+      durationMs: stimulationMs,
+      signal,
+      audioApiVersion: this.audioApiVersion,
+    });
     const stimulationDelivery = await this.sandbox.waitForFrameDelivery({ timeoutMs: 2400, signal, label: 'reopen stimulation drain' });
     stages.push({ name: 'reopen-stimulation', ...stimulation, delivery: stimulationDelivery });
     const report = await this.sandbox.probe('reopen-proof', { signal, timeoutMs: 2400 });
     const evaluation = evaluateProbe(report, { requireViz: true, previous: baseline, stage: 'safe-reopen' });
     stages.push({ name: 'reopen-proof', report, evaluation });
     if (!evaluation.passed) {
-      return failedReport({
+      return this.failedReport({
         startedAt,
         stages,
         failure: evaluation.failure,
@@ -715,6 +847,7 @@ export class DreamReliabilityHarness {
 
     return {
       schema: RELIABILITY_SCHEMA,
+      audioApiVersion: this.audioApiVersion,
       passed: true,
       startedAt,
       finishedAt: nowIso(),
@@ -752,7 +885,7 @@ export class DreamReliabilityHarness {
     const newFatal = this.sandbox.fatalEvents(eventStart)[0];
     if (newFatal) {
       const failure = makeFailure(FAILURE_CODES[newFatal.code] || newFatal.code || FAILURE_CODES.RUNTIME_ERROR, newFatal.message, newFatal);
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, event: newFatal }], failure, report: before });
+      return this.failedReport({ startedAt, stages: [{ name: 'watchdog', before, event: newFatal }], failure, report: before });
     }
 
     const liveness = await confirmSandboxLiveness(this.sandbox, {
@@ -769,16 +902,16 @@ export class DreamReliabilityHarness {
     if (liveness.status === 'fatal') {
       const fatal = liveness.fatal;
       const failure = makeFailure(FAILURE_CODES[fatal.code] || fatal.code || FAILURE_CODES.RUNTIME_ERROR, fatal.message, fatal);
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence, event: fatal }], failure, report: before });
+      return this.failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence, event: fatal }], failure, report: before });
     }
     if (liveness.status === 'stalled') {
       this.stage('runtime-stall-confirmed', liveness.evidence);
       const failure = makeFailure(FAILURE_CODES.RUNTIME_STALLED, 'The promoted visualizer stopped responding to its heartbeat and bounded confirmation probe.', liveness.evidence);
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence }], failure, report: before });
+      return this.failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence }], failure, report: before });
     }
     if (liveness.status === 'probe-failed') {
       const failure = makeFailure(FAILURE_CODES.PROBE_FAILED, liveness.evidence.probe.error?.message || 'The promoted visualizer did not complete its bounded confirmation probe.', liveness.evidence);
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence }], failure, report: before });
+      return this.failedReport({ startedAt, stages: [{ name: 'watchdog', before, liveness: liveness.evidence }], failure, report: before });
     }
     let after = liveness.report;
 
@@ -792,7 +925,7 @@ export class DreamReliabilityHarness {
           'The candidate rendered during preflight, then lost its visible output after promotion.',
           { qualification: previousReport?.visual || null, before: before?.visual || null, after: after.visual, confirmation: confirmation.visual },
         );
-        return failedReport({
+        return this.failedReport({
           startedAt,
           stages: [{ name: 'watchdog', before, after, confirmation }],
           failure,
@@ -804,11 +937,12 @@ export class DreamReliabilityHarness {
 
     const evaluation = evaluateProbe(after, { requireViz: true, previous: before, stage: 'post-launch' });
     if (!evaluation.passed) {
-      return failedReport({ startedAt, stages: [{ name: 'watchdog', before, after, evaluation }], failure: evaluation.failure, warnings: evaluation.warnings, report: after });
+      return this.failedReport({ startedAt, stages: [{ name: 'watchdog', before, after, evaluation }], failure: evaluation.failure, warnings: evaluation.warnings, report: after });
     }
 
     return {
       schema: RELIABILITY_SCHEMA,
+      audioApiVersion: this.audioApiVersion,
       passed: true,
       startedAt,
       finishedAt: nowIso(),

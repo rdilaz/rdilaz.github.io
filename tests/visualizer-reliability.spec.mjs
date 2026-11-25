@@ -29,6 +29,90 @@ async function runWithArgs(page, method, ...args) {
   return page.evaluate(({ method, args }) => window[method](...args), { method, args });
 }
 
+const v1FrameShape = {
+  frame: ['version', 'time', 'deltaTime', 'audio', 'pointer', 'viewport'],
+  audio: [
+    'connected', 'silence', 'volume', 'peak', 'transient', 'beat', 'tempo', 'tempoConfidence',
+    'spectralFlux', 'spectralCentroid', 'bands', 'stereo', 'waveform', 'spectrum',
+  ],
+  bands: ['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble'],
+  stereo: ['balance', 'width'],
+  waveformLength: 128,
+  spectrumLength: 96,
+  pointer: ['x', 'y', 'active', 'down'],
+  viewport: ['width', 'height', 'dpr'],
+  expressive: null,
+};
+
+test('sandbox sessions expose exact V1, nested V2, and fail-safe unknown compatibility', async ({ page }) => {
+  const html = await fixture('valid-canvas2d.html');
+  const v1 = await runWithArgs(page, 'runAudioContractFixture', html, 'visualizer-audio-v1');
+  expect(v1.boot.readyDetail.audioApiVersion).toBe('visualizer-audio-v1');
+  expect(v1.effectiveVersion).toBe('visualizer-audio-v1');
+  expect(v1.report.viz.latestFrame.version).toBe('visualizer-audio-v1');
+  expect(v1.report.viz.latestFrame.shape).toEqual(v1FrameShape);
+
+  const v2 = await runWithArgs(page, 'runAudioContractFixture', html, 'visualizer-audio-v2');
+  expect(v2.boot.readyDetail.audioApiVersion).toBe('visualizer-audio-v2');
+  expect(v2.effectiveVersion).toBe('visualizer-audio-v2');
+  expect(v2.report.viz.latestFrame.version).toBe('visualizer-audio-v2');
+  expect(v2.report.viz.latestFrame.shape).toMatchObject({
+    ...v1FrameShape,
+    audio: [...v1FrameShape.audio, 'expressive'],
+    expressive: {
+      root: ['version', 'dynamics', 'events', 'rhythm', 'frequency'],
+      dynamics: ['fast', 'slow', 'attack', 'release', 'quietness', 'silenceSeconds', 'crest', 'surge'],
+      events: ['onset', 'lowImpact', 'midHit', 'highSpark'],
+      event: ['pulse', 'strength', 'ageSeconds'],
+      rhythm: ['pulse', 'phase', 'tempo', 'confidence'],
+      frequency: ['logBands', 'bandAttack'],
+      logBandsLength: 24,
+      bandAttackLength: 24,
+    },
+  });
+
+  const replacements = await runWithArgs(page, 'runAudioContractReplacementFixture', html);
+  expect(replacements.map(result => result.effectiveVersion)).toEqual([
+    'visualizer-audio-v2',
+    'visualizer-audio-v1',
+    'visualizer-audio-v1',
+    'visualizer-audio-v1',
+  ]);
+  for (const result of replacements.slice(1)) {
+    expect(result.report.viz.latestFrame.shape).toEqual(v1FrameShape);
+  }
+});
+
+test('V2 reliability stimulation is meaningful and identity-pinned', async ({ page }) => {
+  const result = await runWithArgs(
+    page,
+    'runReliabilityFixture',
+    await fixture('valid-canvas2d.html'),
+    'visualizer-audio-v2',
+  );
+  expect(result.passed).toBe(true);
+  expect(result.audioApiVersion).toBe('visualizer-audio-v2');
+  for (const name of ['synthetic-proof', 'viewport-canary']) {
+    const report = result.stages.find(stage => stage.name === name).report;
+    expect(report.viz.latestFrame.version).toBe('visualizer-audio-v2');
+    expect(report.viz.latestFrame.shape.expressive.logBandsLength).toBe(24);
+  }
+});
+
+test('generated diagnostics cannot persist or export delivered expressive values as text', async ({ page }) => {
+  const result = await runWithArgs(
+    page,
+    'runAudioContractFixture',
+    await fixture('audio-data-log-attempt.html'),
+    'visualizer-audio-v2',
+  );
+  const serialized = JSON.stringify(result.report);
+  expect(serialized).not.toContain('LEAK-');
+  expect(result.report.logs.consoleWarnings).toContain('Generated code called console.warn after audio delivery; arguments omitted.');
+  expect(result.report.logs.consoleErrors).toContain('Generated code called console.error after audio delivery; arguments omitted.');
+  expect(result.report.logs.runtimeErrors).toContain('Generated code raised an uncaught runtime error after audio delivery; text omitted.');
+});
+
 test('Canvas2D art renders, consumes VIZ, and passes without aesthetic assumptions', async ({ page }) => {
   const result = await run(page, await fixture('valid-canvas2d.html'));
   expect(result.passed).toBe(true);

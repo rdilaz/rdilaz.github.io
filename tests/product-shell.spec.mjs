@@ -83,6 +83,10 @@ async function seedReadyDream(page, html, {
   artifactTitle = '',
   promptProfileId = 'neutral-v1',
   promptProfileName = 'Neutral blank canvas',
+  promptVersion = 'visualizer-prompt-v2',
+  audioApiVersion = 'visualizer-audio-v1',
+  omitAudioApiVersion = false,
+  reliabilitySchema = 'dream-reliability-v1',
 } = {}) {
   await page.evaluate(async ({
     visualizerHtml,
@@ -92,6 +96,10 @@ async function seedReadyDream(page, html, {
     generationArtifactTitle,
     generationPromptProfileId,
     generationPromptProfileName,
+    generationPromptVersion,
+    generationAudioApiVersion,
+    generationOmitsAudioApiVersion,
+    generationReliabilitySchema,
   }) => {
     const request = indexedDB.open('ai-visualizer-v0', 2);
     const db = await new Promise((resolve, reject) => {
@@ -99,7 +107,7 @@ async function seedReadyDream(page, html, {
       request.onerror = () => reject(request.error);
     });
     const transaction = db.transaction('generations', 'readwrite');
-    transaction.objectStore('generations').put({
+    const generation = {
       schema: 'visualizer-generation-v1',
       id: generationId,
       source: 'local',
@@ -108,7 +116,7 @@ async function seedReadyDream(page, html, {
       provider: 'fixture',
       providerId: 'openrouter',
       resolvedModel: 'fixture/saved',
-      promptVersion: 'visualizer-prompt-v2',
+      promptVersion: generationPromptVersion,
       promptProfileId: generationPromptProfileId,
       promptProfileName: generationPromptProfileName,
       promptProfile: {
@@ -116,7 +124,6 @@ async function seedReadyDream(page, html, {
         name: generationPromptProfileName,
         briefHash: generationPromptProfileId.replace(/^custom-/, '') || 'fixture-prompt-hash',
       },
-      audioApiVersion: 'visualizer-audio-v1',
       createdAt: generationCreatedAt,
       readyAt: generationCreatedAt,
       favorite: false,
@@ -125,19 +132,27 @@ async function seedReadyDream(page, html, {
       traceId: `trace-${generationId}`,
       healthStatus: 'ready',
       openStatus: 'ready-to-open',
-      preflightEvidence: { passed: true, schema: 'dream-reliability-v1' },
+      preflightEvidence: {
+        passed: true,
+        schema: generationReliabilitySchema,
+        ...(generationReliabilitySchema === 'dream-reliability-v3' && !generationOmitsAudioApiVersion
+          ? { audioApiVersion: generationAudioApiVersion }
+          : {}),
+      },
       modelFitConfiguration: {
         modelId: 'fixture/saved',
         reasoningChoice: 'default',
         promptProfileId: 'neutral-v1',
-        promptVersion: 'visualizer-prompt-v2',
+        promptVersion: generationPromptVersion,
         promptHash: 'fixture-historical-prompt-hash',
         generationEnvelopeMajorVersion: 1,
-        audioApiVersion: 'visualizer-audio-v1',
+        audioApiVersion: generationOmitsAudioApiVersion ? 'visualizer-audio-v1' : generationAudioApiVersion,
         reliabilityVersion: 'dream-reliability-v1',
         runtimeVersion: 'visualizer-runtime-v1',
       },
-    });
+    };
+    if (!generationOmitsAudioApiVersion) generation.audioApiVersion = generationAudioApiVersion;
+    transaction.objectStore('generations').put(generation);
     await new Promise((resolve, reject) => {
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error);
@@ -152,6 +167,10 @@ async function seedReadyDream(page, html, {
     generationArtifactTitle: artifactTitle,
     generationPromptProfileId: promptProfileId,
     generationPromptProfileName: promptProfileName,
+    generationPromptVersion: promptVersion,
+    generationAudioApiVersion: audioApiVersion,
+    generationOmitsAudioApiVersion: omitAudioApiVersion,
+    generationReliabilitySchema: reliabilitySchema,
   });
 }
 
@@ -170,6 +189,91 @@ async function storedGeneration(page, id) {
     };
   }), id);
 }
+
+async function openLibraryDream(page, id) {
+  await page.locator('#switcherButton').click();
+  await page.locator('#libraryButton').click();
+  await page.locator(`[data-generation-id="${id}"] [data-action="open"]`).click();
+  await expect.poll(() => page.evaluate(() => window.VIZ_DEV.state().reopening), { timeout: 30000 }).toBe(false);
+  return page.evaluate(async () => ({
+    state: window.VIZ_DEV.state(),
+    probe: await window.VIZ_DEV.probeActive('artifact-audio-contract'),
+  }));
+}
+
+test('saved V1, V2, unknown, and absent provenance stay session-pinned across Open', async ({ page }) => {
+  test.setTimeout(90000);
+  const providerCompletions = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/v1/chat/completions') providerCompletions.push(request.url());
+  });
+  await routeOpenRouter(page);
+  await page.goto('/visualizer/index.html?dev=1');
+  await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV)).toBe('object');
+  const now = Date.now();
+  await seedReadyDream(page, validHtml, {
+    id: 'contract-v1',
+    modelName: 'Contract V1',
+    createdAt: now - 4000,
+    reliabilitySchema: 'dream-reliability-v3',
+  });
+  await seedReadyDream(page, validHtml, {
+    id: 'contract-v2',
+    modelName: 'Contract V2',
+    createdAt: now - 3000,
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+    reliabilitySchema: 'dream-reliability-v3',
+  });
+  await seedReadyDream(page, validHtml, {
+    id: 'contract-unknown',
+    modelName: 'Contract Unknown',
+    createdAt: now - 2000,
+    audioApiVersion: 'visualizer-audio-v99',
+    reliabilitySchema: 'dream-reliability-v3',
+  });
+  await seedReadyDream(page, validHtml, {
+    id: 'contract-absent',
+    modelName: 'Contract Absent',
+    createdAt: now - 1000,
+    omitAudioApiVersion: true,
+    reliabilitySchema: 'dream-reliability-v3',
+  });
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => typeof window.VIZ_DEV)).toBe('object');
+
+  const v1 = await openLibraryDream(page, 'contract-v1');
+  expect(v1.state.activeAudioApiVersion).toBe('visualizer-audio-v1');
+  expect(v1.probe.viz.latestFrame.version).toBe('visualizer-audio-v1');
+  expect(v1.probe.viz.latestFrame.shape.expressive).toBeNull();
+
+  const v2 = await openLibraryDream(page, 'contract-v2');
+  expect(v2.state.activeAudioApiVersion).toBe('visualizer-audio-v2');
+  expect(v2.probe.viz.latestFrame.version).toBe('visualizer-audio-v2');
+  expect(v2.probe.viz.latestFrame.shape.expressive.logBandsLength).toBe(24);
+
+  const unknown = await openLibraryDream(page, 'contract-unknown');
+  expect(unknown.state.activeAudioApiVersion).toBe('visualizer-audio-v1');
+  expect(unknown.probe.viz.latestFrame.shape.expressive).toBeNull();
+
+  const absent = await openLibraryDream(page, 'contract-absent');
+  expect(absent.state.activeAudioApiVersion).toBe('visualizer-audio-v1');
+  expect(absent.probe.viz.latestFrame.shape.expressive).toBeNull();
+
+  const storedUnknown = await storedGeneration(page, 'contract-unknown');
+  const storedAbsent = await storedGeneration(page, 'contract-absent');
+  expect(storedUnknown.audioApiVersion).toBe('visualizer-audio-v99');
+  expect(storedUnknown.preflightEvidence).toMatchObject({
+    source: 'full-revalidation',
+    audioApiVersion: 'visualizer-audio-v1',
+  });
+  expect(Object.hasOwn(storedAbsent, 'audioApiVersion')).toBe(false);
+  expect(storedAbsent.preflightEvidence).toMatchObject({
+    source: 'full-revalidation',
+    audioApiVersion: 'visualizer-audio-v1',
+  });
+  expect(providerCompletions).toEqual([]);
+});
 
 test('first visit is useful and trusted visual pause preserves LIVE and iframe state', async ({ page }) => {
   await routeOpenRouter(page);
@@ -429,6 +533,46 @@ test('slow background job collapses, survives pause and switching, persists Read
   releaseCompletion();
   await expect(page.locator('#dreamJobPillPhase')).toHaveText('Checking');
   await expect(page.locator('#dreamJobPillPhase')).toHaveText('Dream ready', { timeout: 35000 });
+  const v2ReadyEvidence = await page.evaluate(async modelId => {
+    const request = indexedDB.open('ai-visualizer-v0', 2);
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const getAll = db.transaction('generations', 'readonly').objectStore('generations').getAll();
+    const generations = await new Promise((resolve, reject) => {
+      getAll.onsuccess = () => resolve(getAll.result);
+      getAll.onerror = () => reject(getAll.error);
+    });
+    db.close();
+    const diagnostics = await window.VIZ_DEV.list();
+    return {
+      generation: generations.find(item => item.modelId === modelId),
+      diagnostic: diagnostics.records.find(item => item.modelId === modelId && item.status === 'ready'),
+    };
+  }, MODEL_ID);
+  expect(v2ReadyEvidence.generation).toMatchObject({
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+    preflightEvidence: {
+      schema: 'dream-reliability-v3',
+      audioApiVersion: 'visualizer-audio-v2',
+      passed: true,
+    },
+    modelFitConfiguration: {
+      promptVersion: 'visualizer-prompt-v3',
+      audioApiVersion: 'visualizer-audio-v2',
+    },
+  });
+  expect(v2ReadyEvidence.diagnostic).toMatchObject({
+    promptVersion: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+    trace: { promptVersion: 'visualizer-prompt-v3', audioApiVersion: 'visualizer-audio-v2' },
+  });
+  expect(v2ReadyEvidence.diagnostic.trace.attempts[0].request.policy.prompt).toMatchObject({
+    version: 'visualizer-prompt-v3',
+    audioApiVersion: 'visualizer-audio-v2',
+  });
   await expect(page.locator('#liveIdentityName')).toContainText('Saved While Working');
   await page.locator('#playbackButton').click();
   await page.reload();

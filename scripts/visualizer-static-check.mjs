@@ -171,6 +171,28 @@ const [
   read('tests/dream-toolbar.spec.mjs'),
 ]);
 
+const [
+  audioContract,
+  expressiveAudio,
+  audioV1Contract,
+  expressiveAudioContract,
+  expressiveAudioBrowser,
+  expressiveReference,
+  reliabilityTestHarness,
+  visualizerReliabilityBrowser,
+  diagnosticLeakFixture,
+] = await Promise.all([
+  read('public/visualizer/audio-contract.js'),
+  read('public/visualizer/expressive-audio.js'),
+  read('tests/audio-api-v1.contract.mjs'),
+  read('tests/expressive-audio.contract.mjs'),
+  read('tests/expressive-audio.spec.mjs'),
+  read('tests/fixtures/expressive-audio-reference.html'),
+  read('public/visualizer/reliability-test.html'),
+  read('tests/visualizer-reliability.spec.mjs'),
+  read('tests/fixtures/audio-data-log-attempt.html'),
+]);
+
 const failures = [];
 let assertionCount = 0;
 const expect = (condition, message) => {
@@ -310,12 +332,76 @@ expect(
     && syntheticAudioFixture.includes('Test-only deterministic PCM fixture'),
   'First-session and local-player contracts must remain on the configured deterministic test path.',
 );
-expect(prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v2'") && prompt.includes('There are no aesthetic requirements.'), 'Versioned legacy baseline prompt must remain aesthetically unconstrained.');
+expect(
+  prompt.includes("PROMPT_VERSION = 'visualizer-prompt-v3'")
+    && prompt.includes('LEGACY_CANONICAL_VISUALIZER_PROMPT')
+    && prompt.includes('There are no aesthetic requirements.'),
+  'Versioned legacy baseline prompt must remain aesthetically unconstrained.',
+);
 expect(
   prompt.includes("DEFAULT_PROMPT_PRESET_ID = 'neutral-v1'")
     && /export const NEUTRAL_CREATIVE_BRIEF = `Create a real-time visual interpretation of arbitrary music\.\r?\n\r?\nYou have complete artistic freedom\. Decide what music looks like\.`;/.test(prompt)
     && prompt.includes('creativeBrief: NEUTRAL_CREATIVE_BRIEF'),
   'Neutral must remain the unchanged minimal default creative brief.',
+);
+expect(
+  prompt.includes("id: 'pulse-spice-v1'")
+    && prompt.includes("name: 'Pulse + Spice'")
+    && prompt.includes('Retain complete artistic freedom over the visual metaphor'),
+  'Pulse + Spice must remain optional creative direction rather than a runtime aesthetic rule.',
+);
+expect(
+  audioContract.includes("AUDIO_API_V1 = 'visualizer-audio-v1'")
+    && audioContract.includes("AUDIO_API_V2 = 'visualizer-audio-v2'")
+    && audioContract.includes('return value === AUDIO_API_V2 ? AUDIO_API_V2 : AUDIO_API_V1')
+    && audioContract.includes('if (version === AUDIO_API_V2) audio.expressive')
+    && audioV1Contract.includes('exact pre-milestone recursive shape'),
+  'Audio contract routing must pin V2 explicitly and fail absent or unknown provenance to exact V1.',
+);
+expect(
+  audio.includes('expressiveAnalyser.fftSize = 4096')
+    && audio.includes('expressiveAnalyser.smoothingTimeConstant = 0')
+    && audio.includes('new ExpressiveAudioProcessor()')
+    && expressiveAudio.includes('MAX_RHYTHM_ONSETS = 16')
+    && expressiveAudio.includes('EXPRESSIVE_LOG_BAND_COUNT'),
+  'Expressive analysis must use a sharp bounded host-owned path with reusable state.',
+);
+expect(
+  sandbox.includes('audioApiVersion = AUDIO_API_V1')
+    && sandbox.includes('projectVisualizerFrame')
+    && reliability.includes('audioApiVersion: this.audioApiVersion')
+    && reliabilityTestHarness.includes('runAudioContractReplacementFixture'),
+  'Sandbox and reliability sessions must remain explicitly pinned to a resolved audio contract.',
+);
+expect(
+  featuredDreams.includes('isKnownAudioApiVersion(entry.audioApiVersion)')
+    && featuredDreams.includes('generation.preflightEvidence.audioApiVersion === generation.audioApiVersion')
+    && featuredDreams.includes('entry.audioApiVersion === AUDIO_API_V2')
+    && app.includes('preflightMatchesAudioContract(generation, audioApiVersion)'),
+  'Featured export and short reopen must require exact known audio-contract evidence.',
+);
+expect(
+  expressiveAudioContract.includes('every tested sampling and 30 FPS delivery phase')
+    && expressiveAudioContract.includes('30, 60, and 120 Hz analysis cadence')
+    && expressiveAudioContract.includes('prime sustained audio without manufacturing an impact')
+    && expressiveAudioBrowser.includes('native local decoding proves quiet, regional, strength, frequency, attack, and surge distinctions')
+    && expressiveAudioBrowser.includes("['local', 'display', 'microphone']")
+    && expressiveReference.includes('HOST-AUTHORED V2 TEST REFERENCE')
+    && !featuredManifest.includes('expressive-audio-reference'),
+  'Expressive DSP, native decoding, source parity, and test-only reference evidence must stay on the configured test path.',
+);
+expect(
+  sandbox.includes('after audio delivery; arguments omitted')
+    && sandbox.includes("elementId: state.hostFrames === 0 ? String(canvas.id || '').slice(0, 120) : ''")
+    && visualizerReliabilityBrowser.includes('cannot persist or export delivered expressive values as text')
+    && diagnosticLeakFixture.includes('LEAK-'),
+  'Generated diagnostic text after audio delivery must not persist live expressive values.',
+);
+expect(
+  workflow.includes('tests/audio-api-v1.contract.mjs')
+    && workflow.includes('tests/expressive-audio.contract.mjs')
+    && workflow.includes('expressive-reference-evidence'),
+  'CI must run pure audio contracts and retain reference screenshot evidence.',
 );
 expect(prompt.includes('WebGL/WebGL2') && prompt.includes('WebGPU when available') && prompt.includes('SVG'), 'Prompt must preserve broad browser-native creative capability.');
 expect(
