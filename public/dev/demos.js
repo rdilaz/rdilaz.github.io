@@ -337,7 +337,7 @@ const renderers = {
     ];
     host.innerHTML = `<div class="st">
       <div class="st-energy">3</div>
-      <p class="st-rule">rule: <b data-rule>lethal check</b></p>
+      <p class="st-rule">DQN: <b data-rule>scoring each card</b></p>
       <div class="st-enemy"><span class="st-blob"></span><span class="st-hp"><i></i></span><span class="st-tag" data-tag>Intent: attack</span></div>
       <div class="st-hand">${cards
         .map(([n, c, cost, tx, r]) => `<div class="st-card ${c}" style="--tx:${tx}em;--r:${r}deg"><span class="cost">${cost}</span><span>${n}<br><small>${c === 'atk' ? 'attack' : 'skill'}</small></span></div>`)
@@ -349,13 +349,13 @@ const renderers = {
     const rule = host.querySelector('[data-rule]');
     const tag = host.querySelector('[data-tag]');
     const energy = host.querySelector('.st-energy');
-    // [lifted card, flown cards, hp %, rule text, energy, tag]
+    // [lifted card, flown cards, hp %, policy text, energy, tag]
     const frames = [
-      [-1, [], 100, 'lethal check', 3, 'Intent: attack'],
-      [0, [], 100, 'vulnerable first', 3, 'Intent: attack'],
-      [-1, [0], 78, 'vulnerable first', 1, 'Vulnerable'],
-      [1, [0], 78, 'spend on damage', 1, 'Vulnerable'],
-      [-1, [0, 1], 52, 'spend on damage', 0, 'Vulnerable'],
+      [-1, [], 100, 'scoring each card', 3, 'Intent: attack'],
+      [0, [], 100, 'highest Q: Bash', 3, 'Intent: attack'],
+      [-1, [0], 78, 'scoring each card', 1, 'Vulnerable'],
+      [1, [0], 78, 'highest Q: Strike', 1, 'Vulnerable'],
+      [-1, [0, 1], 52, 'learning from the reward', 0, 'Vulnerable'],
       [-1, [0, 1], 52, 'out of energy', 0, 'End turn'],
     ];
     return stepper(host, [900, 800, 900, 800, 900, 1800], (k) => {
