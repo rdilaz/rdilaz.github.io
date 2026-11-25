@@ -376,6 +376,20 @@ const renderers = {
     }, 1);
   },
 
+  autoalt(host) {
+    // An image goes in, the decoder writes its caption a word at a time.
+    const words = ['a', 'dog', 'runs', 'through', 'the', 'grass'];
+    host.innerHTML = `<div class="aa">
+      <div class="aa-img" aria-hidden="true"><span class="aa-sun"></span><span class="aa-hill"></span><span class="aa-dog"></span></div>
+      <p class="aa-cap"><span class="aa-k">alt=</span>"<span data-cap></span>"</p>
+    </div>`;
+    const cap = host.querySelector('[data-cap]');
+    const steps = words.length + 2;
+    return stepper(host, [...Array(steps - 1).fill(420), 1800], (k) => {
+      cap.textContent = words.slice(0, k).join(' ');
+    }, steps - 1);
+  },
+
   kensa(host) {
     host.innerHTML = `<div class="ks">
       <p class="ks-h"><b>PR</b><span>agent/retry-fetch · written by an agent</span></p>

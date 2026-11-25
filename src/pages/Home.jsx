@@ -46,6 +46,7 @@ const BUILDS = [
   'DreamField',
   'Flowers',
   'SpamShredder',
+  'Auto-Alt',
   'Slay the Spire RL agent',
   'Kensa',
 ];

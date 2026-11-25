@@ -933,6 +933,15 @@ dialog[data-closing]::backdrop { animation: fade-out 200ms ease forwards; }
 @keyframes fw-stem { 0% { transform: scaleY(0); } 22%, 86% { transform: scaleY(1); } 100% { transform: scaleY(0); } }
 @keyframes fw-bloom { 0%, 18% { scale: 0; } 34%, 84% { scale: 1; } 100% { scale: 0; } }
 
+/* Auto-Alt: picture in, caption out */
+.aa { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: .8em; padding: 1em; }
+.aa-img { position: relative; width: min(52cqi, 13em); aspect-ratio: 4 / 3; border-radius: .7em; overflow: hidden; background: #1b1b1f; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
+.aa-sun { position: absolute; right: 16%; top: 14%; width: 18%; aspect-ratio: 1; border-radius: 50%; background: rgba(255, 255, 255, .8); }
+.aa-hill { position: absolute; left: -10%; right: -10%; bottom: -38%; height: 70%; border-radius: 50%; background: rgba(255, 255, 255, .16); }
+.aa-dog { position: absolute; left: 30%; bottom: 22%; width: 22%; height: 14%; border-radius: 40% 40% 30% 30%; background: rgba(255, 255, 255, .7); }
+.aa-cap { margin: 0; min-height: 1.4em; font-family: var(--mono, ui-monospace, monospace); font-size: .78em; color: var(--copy); text-align: center; }
+.aa-k { color: var(--muted); }
+
 /* SpamShredder */
 .ss { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; justify-content: safe center; gap: .5em; padding: 1em 1.1em 1.2em; }
 .ss-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: .2em; font-size: .7em; font-weight: 760; line-height: 1; text-transform: uppercase; letter-spacing: .16em; color: var(--muted); }

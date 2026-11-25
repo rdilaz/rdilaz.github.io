@@ -162,6 +162,20 @@ export const projects = [
     demo: 'spamshredder',
   },
   {
+    id: 'auto-alt',
+    name: 'Auto-Alt',
+    tagline: 'A captioning model that writes alt text for any image.',
+    blurb:
+      'A course project for a machine-learning class: an image-captioning model trained on Flickr8k (8,091 images, about 40,000 captions). A ResNet50 encoder turns each image into a 2,048-number feature vector and a merged CNN and LSTM decoder writes the caption, decoded with beam search.',
+    status: 'Experiment',
+    year: 2025,
+    tags: ['Python', 'TensorFlow', 'ResNet50', 'LSTM', 'Colab'],
+    links: [],
+    facts: ['Trained on 8,091 images', '8,831-word vocabulary', 'Beam search, width 5'],
+    accent: 'info',
+    demo: 'autoalt',
+  },
+  {
     id: 'sts-bot',
     name: 'Slay the Spire RL agent',
     tagline: 'A reinforcement-learning agent that learns to fight in Slay the Spire.',
