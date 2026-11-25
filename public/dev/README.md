@@ -4,7 +4,7 @@ A self-contained, static showcase of Ryo's projects. No build step, no framework
 no third-party requests. Every path is relative, so the folder works unchanged at
 any mount point: `ryo-nd.com/dev/`, `ryo.is/dev/`, `dev.ryo.is/`, and so on.
 
-It deploys to `ryo-nd.com/dev/`, which is currently behind a sign-in (Vite copies `public/dev/` verbatim into `dist/dev/`).
+It deploys to `ryo-nd.com/dev/`, which is public (Vite copies `public/dev/` verbatim into `dist/dev/`).
 
 ## Files
 
@@ -48,12 +48,12 @@ shape, never colour alone. The `accent` field in `projects.js` is not used by th
 `<dev-center-url>#p=<project id>` opens that project's sheet on load, for example
 `https://ryo-nd.com/dev/#p=riff`. The ids are the `id` fields in `projects.js`.
 
-## Putting it behind ryo.is
+## Linking it from another site
 
-Pick one:
+To reach it from ryo.is or anywhere else, pick one:
 
-1. **Link to it (simplest).** Point the "Dev Center" button on ryo.is at
-   `https://ryo-nd.com/dev/`. Nothing else to maintain.
+1. **Link to it (simplest).** Point a link at `https://ryo-nd.com/dev/`.
+   Nothing else to maintain.
 2. **Cloudflare redirect rule.** In the ryo.is zone: Rules → Redirect Rules → create a
    rule matching `http.request.uri.path wildcard "/dev*"` with a static target of
    `https://ryo-nd.com/dev/` (302 while testing, 301 once happy). Browsers keep the
@@ -69,7 +69,7 @@ Pick one:
 
 ## Privacy
 
-No cookies, analytics or network calls. "Explored N/12" progress and the
+No cookies, analytics or network calls. "Explored N of M" progress and the
 "Continue" chip use one `localStorage` key (`ryo-dev-center:v1`) on the visitor's
 device. If storage is blocked, the page works the same without remembering.
 
